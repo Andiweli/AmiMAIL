@@ -40,7 +40,7 @@ AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a
 - Native **ReAction Iconify** support with background mail checks and an embedded Workbench AppIcon
 - Window position and size are restored between program starts
 - Built-in asynchronous **GitHub update check and release download to `RAM:`**
-- Live mail status through the AmigaOS **ENV/ENVARC** status variable
+- Live mail status through the AmigaOS **ENV/ENVARC** `AmiMAILStatus` variable
 - German UI on German AmigaOS systems, English UI otherwise
 - **No local email cache:** messages are read directly from the IMAP server
 
