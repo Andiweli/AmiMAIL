@@ -1,4 +1,4 @@
-# ![Logo](https://github.com/Andiweli/AmiGmail/blob/main/images/amimail-icon.jpg) AmiMAIL
+# ![Logo](https://github.com/Andiweli/AmiMAIL/blob/main/images/amimail-icon.png) AmiMAIL
 
 **A native Mail client for AmigaOS 3.2+ — built with ReAction, IMAP, SMTP and AmiSSL.**
 
