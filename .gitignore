@@ -1,0 +1,6 @@
+/build/
+/bin/AmiMail
+/dist/*.zip
+/dist/*.tar.gz
+/dist/AmiMail-*/
+include/oauth_client_config.local.h

@@ -1,0 +1,9 @@
+#ifndef AMIGMAIL_OAUTH_CLIENT_CONFIG_H
+#define AMIGMAIL_OAUTH_CLIENT_CONFIG_H
+
+/* Google Cloud Console -> OAuth client -> Desktop application. */
+#define AMIGMAIL_OAUTH_CLIENT_ID "YOUR_CLIENT_ID.apps.googleusercontent.com"
+#define AMIGMAIL_OAUTH_CLIENT_SECRET ""
+#define AMIGMAIL_OAUTH_SCOPE "https://mail.google.com/"
+
+#endif
