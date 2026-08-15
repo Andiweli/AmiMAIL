@@ -2,7 +2,7 @@
 
 **A native Mail client for AmigaOS 3.2+ — built with ReAction, IMAP, SMTP and AmiSSL.**
 
-![Version](https://img.shields.io/badge/version-1.0-RC-blue)
+![Version](https://img.shields.io/badge/version-1.0RC-blue)
 ![AmigaOS](https://img.shields.io/badge/AmigaOS-3.2%2B-orange)
 ![Mail](https://img.shields.io/badge/Gmail-IMAP%20%2F%20SMTP-red)
 ![ReAction](https://img.shields.io/badge/GUI-ReAction-green)
