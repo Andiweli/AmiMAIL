@@ -18,31 +18,31 @@ AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a
 ## 📧 Features
 
 - Native **AmigaOS 3.2+ / ReAction** interface
-- Single Gmail account with Gmail's **Inbox, Sent, All Mail, Trash, Spam and Drafts**
-- Gmail labels displayed as an expandable folder tree with [+] and [-] icons
-- Nested labels can be expanded and collapsed; the folder view state is remembered
-- Optional automatic Inbox fetch when AmiGmail starts
-- Optional automatic Inbox check every 5 minutes
-- Compose new mail and reply to messages
-- Move messages between Gmail folders/labels and back to the Inbox
-- Delete Spam and empty Gmail Trash
-- Mark messages as read or unread
-- Multi-selection for supported mail operations
-- Open, edit and save Gmail drafts
-- MIME messages and file attachments
-- Send attachments **up to 8 files and 10 MB**
+- **Single-account IMAP/SMTP client** with freely configurable server names, ports and usernames
+- Secure connections using **direct SSL/TLS or STARTTLS** through AmiSSL
+- Automatic detection of standard IMAP folders such as **Inbox, Sent, Drafts, Spam/Junk and Trash**, with manual folder assignment when required
+- Additional and nested IMAP folders displayed as an expandable folder tree with remembered expand/collapse state
+- Optional automatic Inbox fetch when AmiMAIL starts
+- Optional automatic Inbox check every 5 minutes, including while AmiMAIL is iconified
+- Compose new messages and reply to received mail
+- Move and delete messages, empty Trash and Spam, and mark messages as read/unread or flagged/unflagged
+- Multi-selection for supported message operations
+- Create, save, reopen, edit and send **IMAP drafts**
+- MIME messages with Base64, Quoted-Printable and RFC 2047 handling
+- Send up to **8 attachments with a combined maximum of 10 MB**
 - Save attachments from received messages
 - Sort messages by sender, subject, date or message size
-- Clickable URLs via OpenURL or IBrowse `mailto:%h`
-- MIME, Base64, Quoted-Printable and RFC 2047 handling
-- Version 1.4 introduced an update notification
-- Version 1.4 saves the window position and size upon closing
-- Version 1.5 allows AmiGmail to be iconified
-- Version 1.5 allows notifications to play when new email(s) arrive
-- Version 1.6 introduced an Address book/Contacts with CSV/VCF import
-- Secure IMAP/SMTP connections through **AmiSSL**
-- German UI on German AmigaOS systems, English fallback otherwise
-- **No local email cache:** messages are read directly from Gmail via IMAP
+- Clickable URLs and **`mailto:` integration with single-instance hand-off**
+- Local **Contacts / Address Book** with add, edit and multi-selection delete
+- Import contacts from **CSV and VCF/vCard**, including duplicate detection
+- Select one or multiple contacts for **To, CC and BCC** while composing mail
+- Optional configurable **new-mail notification sound** using AmigaOS DataTypes
+- Native **ReAction Iconify** support with background mail checks and an embedded Workbench AppIcon
+- Window position and size are restored between program starts
+- Built-in asynchronous **GitHub update check and release download to `RAM:`**
+- Live mail status through the AmigaOS **ENV/ENVARC** status variable
+- German UI on German AmigaOS systems, English UI otherwise
+- **No local email cache:** messages are read directly from the IMAP server
 
 ## 🔐 Account Security
 
