@@ -322,7 +322,7 @@ static void format_mail_date(const char *header, char *local, size_t capacity)
                 payload, length, &position, &record)) > 0) {
         if (record.deleted) continue;
         if (record.uid > maximum) maximum = record.uid;
-        if (baseline && record.uid > baseline) ++newer;
+        if (record.uid > baseline) ++newer;
     }
     if (result < 0 && parse_error) *parse_error = result;
     if (max_uid) *max_uid = maximum;

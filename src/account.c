@@ -15,6 +15,7 @@ void amg_account_init(AmgAccount *account)
     account->smtp_port = 465;
     account->imap_starttls = 0;
     account->smtp_starttls = 0;
+    account->smtp_same_credentials = 1;
     account->save_sent_copy = 1;
     account->fetch_on_start = 0;
     account->periodic_fetch = 0;
@@ -69,12 +70,16 @@ const char *amg_account_imap_user(const AmgAccount *account)
 const char *amg_account_smtp_user(const AmgAccount *account)
 {
     if (!account) return "";
+    if (account->smtp_same_credentials)
+        return amg_account_imap_user(account);
     return account->smtp_username[0] ? account->smtp_username : account->email;
 }
 
 const char *amg_account_smtp_password(const AmgAccount *account)
 {
     if (!account) return NULL;
+    if (account->smtp_same_credentials)
+        return account->imap_password;
     return account->smtp_password && account->smtp_password[0]
         ? account->smtp_password : account->imap_password;
 }

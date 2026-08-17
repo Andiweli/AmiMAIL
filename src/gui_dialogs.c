@@ -39,7 +39,7 @@
 #define GUI_RAWKEY_RETURN 0x44UL
 #define GUI_RAWKEY_ESCAPE 0x45UL
 #define T(de,en) amg_tr((de),(en))
-enum AccountGadgetId { GID_ACCOUNT_NAME=100,GID_ACCOUNT_EMAIL,GID_ACCOUNT_IMAP_HOST,GID_ACCOUNT_IMAP_PORT,GID_ACCOUNT_IMAP_STARTTLS,GID_ACCOUNT_IMAP_USERNAME,GID_ACCOUNT_IMAP_PASSWORD,GID_ACCOUNT_SMTP_HOST,GID_ACCOUNT_SMTP_PORT,GID_ACCOUNT_SMTP_STARTTLS,GID_ACCOUNT_SMTP_USERNAME,GID_ACCOUNT_SMTP_PASSWORD,GID_ACCOUNT_FOLDER_MAPPING,GID_ACCOUNT_MASTER_PASSWORD,GID_ACCOUNT_FETCH_DAYS,GID_ACCOUNT_FETCH_ON_START,GID_ACCOUNT_PERIODIC_FETCH,GID_ACCOUNT_NOTIFICATION_SOUND,GID_ACCOUNT_NOTIFICATION_PATH,GID_ACCOUNT_NOTIFICATION_CHOOSE,GID_ACCOUNT_STATUS,GID_ACCOUNT_UNLOCK,GID_ACCOUNT_SAVE,GID_ACCOUNT_CANCEL };
+enum AccountGadgetId { GID_ACCOUNT_NAME=100,GID_ACCOUNT_EMAIL,GID_ACCOUNT_IMAP_HOST,GID_ACCOUNT_IMAP_PORT,GID_ACCOUNT_IMAP_STARTTLS,GID_ACCOUNT_IMAP_USERNAME,GID_ACCOUNT_IMAP_PASSWORD,GID_ACCOUNT_SMTP_HOST,GID_ACCOUNT_SMTP_PORT,GID_ACCOUNT_SMTP_STARTTLS,GID_ACCOUNT_SMTP_SAME_CREDENTIALS,GID_ACCOUNT_SMTP_USERNAME,GID_ACCOUNT_SMTP_PASSWORD,GID_ACCOUNT_FOLDER_MAPPING,GID_ACCOUNT_MASTER_PASSWORD,GID_ACCOUNT_FETCH_DAYS,GID_ACCOUNT_FETCH_ON_START,GID_ACCOUNT_PERIODIC_FETCH,GID_ACCOUNT_NOTIFICATION_SOUND,GID_ACCOUNT_NOTIFICATION_PATH,GID_ACCOUNT_NOTIFICATION_CHOOSE,GID_ACCOUNT_STATUS,GID_ACCOUNT_UNLOCK,GID_ACCOUNT_SAVE,GID_ACCOUNT_CANCEL };
 enum FolderMappingGadgetId { GID_FOLDER_SENT=140,GID_FOLDER_DRAFTS,GID_FOLDER_ALL,GID_FOLDER_SPAM,GID_FOLDER_TRASH,GID_FOLDER_SAVE_SENT,GID_FOLDER_OK,GID_FOLDER_CANCEL };
 enum ConfirmGadgetId { GID_CONFIRM_YES=300,GID_CONFIRM_NO };
 enum AboutGadgetId { GID_ABOUT_OK=400 };
@@ -177,6 +177,7 @@ static int account_network_settings_equal(const AmgAccount *left,
            !strcmp(left->smtp_host, right->smtp_host) &&
            left->smtp_port == right->smtp_port &&
            left->smtp_starttls == right->smtp_starttls &&
+           left->smtp_same_credentials == right->smtp_same_credentials &&
            !strcmp(left->smtp_username, right->smtp_username) &&
            !strcmp(left->sent_mailbox, right->sent_mailbox) &&
            !strcmp(left->drafts_mailbox, right->drafts_mailbox) &&
@@ -689,7 +690,7 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
     struct Gadget *imap_starttls_gadget;
     struct Gadget *imap_username_gadget, *imap_password_gadget;
     struct Gadget *smtp_host_gadget, *smtp_port_gadget;
-    struct Gadget *smtp_starttls_gadget;
+    struct Gadget *smtp_starttls_gadget, *smtp_same_credentials_gadget;
     struct Gadget *smtp_username_gadget, *smtp_password_gadget;
     struct Gadget *master_password_gadget, *fetch_days_gadget;
     struct Gadget *fetch_on_start_gadget, *periodic_fetch_gadget;
@@ -720,6 +721,7 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
     smtp_host_gadget = NULL;
     smtp_port_gadget = NULL;
     smtp_starttls_gadget = NULL;
+    smtp_same_credentials_gadget = NULL;
     smtp_username_gadget = NULL;
     smtp_password_gadget = NULL;
     master_password_gadget = NULL;
@@ -773,19 +775,11 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
             LAYOUT_SpaceOuter, TRUE,
             LAYOUT_SpaceInner, FALSE,
 
-            /* Alle Dialoginhalte liegen in EINER ShrinkWrap-Gruppe.
-             * So landet ueberschuessige Fensterhoehe am Aussenrand und
-             * nicht als zwei Zeilen Leerraum ueber/unter dem Hinweistext. */
             LAYOUT_AddChild, VGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, FALSE,
                 LAYOUT_ShrinkWrap, TRUE,
 
-            /* Die Kontofelder bilden eine eigene ShrinkWrap-Gruppe.
-             * layout.gadget verteilt freie Fensterhoehe sonst gleichmaessig
-             * zwischen festen Kindern. Dadurch entstanden die grossen
-             * vertikalen Luecken zwischen den Eingabezeilen. In dieser
-             * Gruppe bleiben nur die expliziten 1-Pixel-Abstaende erhalten. */
             LAYOUT_AddChild, VGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, FALSE,
@@ -1034,6 +1028,41 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
 
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
+                    LAYOUT_AddChild, HGroupObject,
+                        LAYOUT_SpaceOuter, FALSE,
+                        LAYOUT_SpaceInner, FALSE,
+                    EndObject,
+                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_WeightedWidth, 0,
+                    LAYOUT_AddChild,
+                        smtp_same_credentials_gadget =
+                            (struct Gadget *)ButtonObject,
+                            GA_ID, GID_ACCOUNT_SMTP_SAME_CREDENTIALS,
+                            GA_RelVerify, TRUE,
+                            GA_Selected,
+                                gui->account->smtp_same_credentials ? TRUE : FALSE,
+                            BUTTON_AutoButton, BAG_CHECKBOX,
+                            BUTTON_PushButton, TRUE,
+                        EndObject,
+                    CHILD_MinWidth, 24,
+                    CHILD_MaxWidth, 24,
+                    CHILD_WeightedWidth, 0,
+                    LAYOUT_AddChild, static_text_label(
+                        T("SMTP nutzt den gleichen Login",
+                          "SMTP uses same credentials")),
+                EndObject,
+                CHILD_WeightedHeight, 0,
+
+                LAYOUT_AddChild, HGroupObject,
+                    LAYOUT_SpaceOuter, FALSE,
+                    LAYOUT_SpaceInner, FALSE,
+                EndObject,
+                CHILD_MinHeight, GUI_ACCOUNT_FIELD_GAP,
+                CHILD_MaxHeight, GUI_ACCOUNT_FIELD_GAP,
+                CHILD_WeightedHeight, 0,
+
+                LAYOUT_AddChild, HGroupObject,
+                    LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T("SMTP-Benutzer:", "SMTP user:")),
                     CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
                     CHILD_WeightedWidth, 0,
@@ -1042,6 +1071,8 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                             GA_ID, GID_ACCOUNT_SMTP_USERNAME,
                             GA_RelVerify, TRUE,
                             GA_TabCycle, TRUE,
+                            GA_Disabled,
+                                gui->account->smtp_same_credentials ? TRUE : FALSE,
                             STRINGA_MaxChars, 255,
                             STRINGA_TextVal, gui->account->smtp_username,
                         EndObject,
@@ -1066,6 +1097,8 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                             GA_ID, GID_ACCOUNT_SMTP_PASSWORD,
                             GA_RelVerify, TRUE,
                             GA_TabCycle, TRUE,
+                            GA_Disabled,
+                                gui->account->smtp_same_credentials ? TRUE : FALSE,
                             STRINGA_MaxChars, 255,
                             STRINGA_HookType, SHK_PASSWORD,
                             STRINGA_TextVal,
@@ -1285,8 +1318,6 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
             EndObject,
             CHILD_WeightedHeight, 0,
 
-            /* Der Hinweis bekommt bewusst genau eine halbe Textzeile
-             * Luft nach oben und unten. */
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, FALSE,
@@ -1350,9 +1381,6 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                       T("Kontodialog konnte nicht ge\303\266ffnet werden.", "Account dialog could not be opened."));
         return 0;
     }
-    /* WPOS_CENTERWINDOW is only the initial placement.  The account dialog
-     * has a large dynamic layout whose final size is known only now.  Use the
-     * real Intuition geometry for the definitive centre over AmiMail. */
     center_window_over_window(window, gui->window);
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
 
@@ -1378,7 +1406,6 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                                 result & WMHI_KEYMASK))
                             break;
                         result = WMHI_GADGETUP | GID_ACCOUNT_SAVE;
-                        /* fall through: Return/Enter activates Save */
 
                     case WMHI_GADGETUP:
                         if (account_string_id(result & WMHI_GADGETMASK) &&
@@ -1431,6 +1458,23 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                                 break;
                             }
 
+                            case GID_ACCOUNT_SMTP_SAME_CREDENTIALS:
+                            {
+                                ULONG same_credentials = 0;
+                                GetAttr(GA_Selected,
+                                        (Object *)smtp_same_credentials_gadget,
+                                        &same_credentials);
+                                SetGadgetAttrs(smtp_username_gadget, window,
+                                               NULL, GA_Disabled,
+                                               same_credentials ? TRUE : FALSE,
+                                               TAG_DONE);
+                                SetGadgetAttrs(smtp_password_gadget, window,
+                                               NULL, GA_Disabled,
+                                               same_credentials ? TRUE : FALSE,
+                                               TAG_DONE);
+                                break;
+                            }
+
                             case GID_ACCOUNT_FOLDER_MAPPING:
                                 system_folder_mapping_dialog(
                                     gui, window, sent_mailbox, drafts_mailbox,
@@ -1458,6 +1502,7 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                                 ULONG notification_sound = 0;
                                 ULONG imap_starttls = 0;
                                 ULONG smtp_starttls = 0;
+                                ULONG smtp_same_credentials = 0;
                                 const char *master =
                                     string_text(master_password_gadget);
                                 if (!*master) {
@@ -1573,10 +1618,15 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                                 GetAttr(GA_Selected,
                                         (Object *)smtp_starttls_gadget,
                                         &smtp_starttls);
+                                GetAttr(GA_Selected,
+                                        (Object *)smtp_same_credentials_gadget,
+                                        &smtp_same_credentials);
                                 candidate.imap_starttls =
                                     imap_starttls ? 1 : 0;
                                 candidate.smtp_starttls =
                                     smtp_starttls ? 1 : 0;
+                                candidate.smtp_same_credentials =
+                                    smtp_same_credentials ? 1 : 0;
                                 candidate.auth_mode = AMG_AUTH_PASSWORD;
                                 candidate.fetch_days =
                                     (unsigned int)fetch_days;
@@ -1747,10 +1797,6 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
     EndObject;
     if (!banner_slot) return;
 
-    /* Eigenes ReAction-Fenster statt EasyRequestArgs(): WINDOW_RefWindow in
-     * Kombination mit WPOS_CENTERWINDOW bestimmt die Position bereits vor
-     * RA_OpenWindow(). Dadurch erscheint der About-Requester sofort sauber
-     * zentriert ueber dem AmiMail-Hauptfenster und springt nicht nachtraeglich. */
     dialog = WindowObject,
         WA_Title, T("\334ber AmiMail", "About AmiMail"),
         WA_PubScreen, gui->screen,
@@ -1941,9 +1987,6 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
     text_height = question_height + (note && *note ? note_height : 0L);
     button_height = font_height + 8L;
 
-    /* Positionierung relativ zum Hauptfenster wird bereits vor RA_OpenWindow()
-     * festgelegt. Dadurch gibt es keinen sichtbaren Sprung von einer
-     * Standardposition in die Fenstermitte. */
     dialog = WindowObject,
         WA_Title, "AmiMail",
         WA_Width, width,
@@ -1957,11 +2000,7 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
         WINDOW_Position, WPOS_CENTERWINDOW,
         WINDOW_ParentGroup, VGroupObject,
             LAYOUT_SpaceOuter, TRUE,
-            /* Den Abstand zwischen Fragetext und Buttons nicht vom Layout
-             * verteilen lassen. Die Warnzeile bekommt nur noch minimale
-             * Innenhoehe und schliesst direkt an die Buttonzeile an. */
             LAYOUT_SpaceInner, FALSE,
-            /* Frage + optionale Warnzeile bilden EIN Layout-Kind. */
             LAYOUT_AddChild, VGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, FALSE,
@@ -1988,10 +2027,6 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
             CHILD_MaxHeight, text_height,
             CHILD_WeightedHeight, 0,
 
-            /* Genau eine Leerzeile zwischen Textblock und Ja/Nein.
-             * Die Fensterhoehe wird vom Layout selbst bestimmt, damit hier
-             * keine zusaetzlichen Leerzeilen durch eine feste WA_Height
-             * entstehen. Das gilt fuer Loeschen und Papierkorb leeren. */
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, FALSE,

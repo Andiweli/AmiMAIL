@@ -14,6 +14,7 @@ typedef struct AmgAccount {
     char smtp_host[256];
     unsigned short smtp_port;
     int smtp_starttls;
+    int smtp_same_credentials;
     char smtp_username[256];
     char sent_mailbox[512];
     char drafts_mailbox[512];

@@ -242,8 +242,8 @@ int amg_storage_save_account(const char *path,const AmgAccount *account,const ch
        write_hex_line(file,"folder_all",(const unsigned char*)account->all_mailbox,strlen(account->all_mailbox))!=AMG_OK||
        write_hex_line(file,"folder_spam",(const unsigned char*)account->spam_mailbox,strlen(account->spam_mailbox))!=AMG_OK||
        write_hex_line(file,"folder_trash",(const unsigned char*)account->trash_mailbox,strlen(account->trash_mailbox))!=AMG_OK||
-       fprintf(file,"auth_mode=%d\nimap_host=%s\nimap_port=%u\nimap_starttls=%d\nsmtp_host=%s\nsmtp_port=%u\nsmtp_starttls=%d\nsave_sent_copy=%d\nfetch_on_start=%d\nperiodic_fetch=%d\nfetch_days=%u\nnotification_sound=%d\n",
-       (int)account->auth_mode,account->imap_host,(unsigned)account->imap_port,account->imap_starttls,account->smtp_host,(unsigned)account->smtp_port,account->smtp_starttls,account->save_sent_copy?1:0,account->fetch_on_start?1:0,account->periodic_fetch?1:0,account->fetch_days?account->fetch_days:180U,account->notification_sound?1:0)<0 ||
+       fprintf(file,"auth_mode=%d\nimap_host=%s\nimap_port=%u\nimap_starttls=%d\nsmtp_host=%s\nsmtp_port=%u\nsmtp_starttls=%d\nsmtp_same_credentials=%d\nsave_sent_copy=%d\nfetch_on_start=%d\nperiodic_fetch=%d\nfetch_days=%u\nnotification_sound=%d\n",
+       (int)account->auth_mode,account->imap_host,(unsigned)account->imap_port,account->imap_starttls,account->smtp_host,(unsigned)account->smtp_port,account->smtp_starttls,account->smtp_same_credentials?1:0,account->save_sent_copy?1:0,account->fetch_on_start?1:0,account->periodic_fetch?1:0,account->fetch_days?account->fetch_days:180U,account->notification_sound?1:0)<0 ||
        write_hex_line(file,"notification_sound_path",(const unsigned char*)account->notification_sound_path,strlen(account->notification_sound_path))!=AMG_OK)result=AMG_ERR_IO;
     if(result==AMG_OK&&master_password&&*master_password){
         amg_buffer_append_cstr(&plain,"imap_password=");if(account->imap_password)hex_encode((unsigned char*)account->imap_password,strlen(account->imap_password),&plain);
@@ -417,6 +417,7 @@ static int load_account_internal(const char *path, const char *master_password,
     char value[2048];
     AmgBuffer decoded;
     int result = AMG_OK;
+    int has_smtp_same_credentials = 0;
     amg_error_set(error, AMG_OK, "");
     if (!path || !account) return AMG_ERR_ARGUMENT;
     data = read_all(path, &length);
@@ -434,6 +435,9 @@ static int load_account_internal(const char *path, const char *master_password,
         return AMG_ERR_PARSE;
     }
     amg_account_init(account);
+    /* Existing ACCOUNT-1/2 files predate this option. Keep their previous
+     * separate-SMTP behaviour unless the new field is explicitly present. */
+    account->smtp_same_credentials = 0;
     amg_buffer_init(&decoded);
 #define LOAD_HEX_STRING(field_name, destination) do { \
     decoded.length = 0; \
@@ -471,6 +475,10 @@ static int load_account_internal(const char *path, const char *master_password,
         account->smtp_port = (unsigned short)atoi(value);
     if (field(data, "smtp_starttls", value, sizeof(value)))
         account->smtp_starttls = atoi(value) ? 1 : 0;
+    if (field(data, "smtp_same_credentials", value, sizeof(value))) {
+        account->smtp_same_credentials = atoi(value) ? 1 : 0;
+        has_smtp_same_credentials = 1;
+    }
     if (field(data, "save_sent_copy", value, sizeof(value)))
         account->save_sent_copy = atoi(value) ? 1 : 0;
     if (field(data, "fetch_on_start", value, sizeof(value)))
@@ -556,7 +564,22 @@ static int load_account_internal(const char *path, const char *master_password,
         amg_buffer_free(&salt); amg_buffer_free(&iv); amg_buffer_free(&tag);
         amg_buffer_free(&cipher); amg_buffer_free(&plain);
     }
-    if (result == AMG_OK) amg_account_normalize(account);
+    if (result == AMG_OK) {
+        amg_account_normalize(account);
+        /* Migrate old account files without changing their effective SMTP
+         * login. If both effective credentials were already identical, the
+         * new checkbox can safely start enabled; otherwise it stays off. */
+        if (!has_smtp_same_credentials) {
+            const char *imap_password = account->imap_password ?
+                account->imap_password : "";
+            const char *smtp_password = amg_account_smtp_password(account);
+            if (!smtp_password) smtp_password = "";
+            if (!strcmp(amg_account_imap_user(account),
+                        amg_account_smtp_user(account)) &&
+                !strcmp(imap_password, smtp_password))
+                account->smtp_same_credentials = 1;
+        }
+    }
     amg_secure_clear(decoded.data, decoded.capacity);
     amg_buffer_free(&decoded);
     amg_secure_clear(data, strlen(data));

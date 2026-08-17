@@ -1,5 +1,17 @@
 # Changelog
 
+## AmiMail 1.0 - 2026-08-17 - Final release
+
+- promote the tested AmiMail 1.0 RC2 code base to the final AmiMail 1.0 release
+- fix startup new-mail detection when the persisted Inbox baseline is UID 0, so the first mail received while AmiMail was not running now triggers the configured notification sound after launch
+- add `SMTP nutzt den gleichen Login` / `SMTP uses same credentials` to the account settings
+- when enabled, SMTP uses the effective IMAP username and IMAP password while the separate SMTP login fields are disabled
+- preserve separate SMTP credentials when the shared-login option is enabled, so they are available again when the option is disabled
+- persist the shared SMTP-login setting in the backward-compatible `AMIMAIL-ACCOUNT-2` account format
+- increase the Workbench program icon stack size to 100000 for reliable operation on the tested AmigaOS setup
+- update the embedded program identification, `$VER:` string, Makefile package version and visible header/About version to 1.0
+
+
 ## AmiMail 1.0 RC2 - 2026-08-15 - Public release candidate 2
 
 - promote the field-tested AmiGmail-1.6 alignment P2 code to AmiMail 1.0 RC2
