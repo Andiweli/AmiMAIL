@@ -8,7 +8,7 @@
 ![ReAction](https://img.shields.io/badge/GUI-ReAction-green)
 ![AmiSSL](https://img.shields.io/badge/TLS-AmiSSL-lightgrey)
 ![AI](https://img.shields.io/badge/AI-assisted%20coding-6e7781)
-[![PayPal](https://img.shields.io/badge/PayPal-Support%20this%20project-0070BA?logo=paypal&logoColor=white)](https://paypal.me/andiweli)
+[![Support via PayPal](https://img.shields.io/badge/Support%20via-PayPal-0070BA?logo=paypal&logoColor=white)](https://paypal.me/andiweli)
 
 ## 🌐 About
 
@@ -96,9 +96,17 @@ Additional interface languages are not planned.
 
 - [AmiSSL project](https://github.com/jens-maus/amissl)
 
-## 📧 Legal
+## ❤️ Support
 
-[![PayPal](https://img.shields.io/badge/PayPal-Support%20this%20project-0070BA?logo=paypal&logoColor=white)](https://paypal.me/andiweli)
+If you enjoy this project and would like to support my work, you can make a small contribution via PayPal.
+
+Your support helps me spend more time maintaining existing projects, fixing bugs, improving compatibility, and working on new features.
+
+[![Support via PayPal](https://img.shields.io/badge/Support%20via-PayPal-0070BA?logo=paypal\&logoColor=white)](https://paypal.me/andiweli)
+
+Thank you for your support!
+
+## 📧 Legal
 
 AmiMAIL is an independent, non-commercial hobby project. **Amiga** and **AmigaOS** are trademarks of their respective owners. AmiSSL and other third-party components remain subject to their respective licenses.
 
