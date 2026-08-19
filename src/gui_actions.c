@@ -1,24 +1,280 @@
 #include "gui_internal.h"
 #include "i18n.h"
-#include "imap.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
 #if AMIGMAIL_AMIGA
 #include <clib/alib_protos.h>
+#include <classes/window.h>
+#include <dos/dos.h>
+#include <exec/memory.h>
+#include <gadgets/button.h>
+#include <gadgets/layout.h>
 #include <gadgets/listbrowser.h>
-#include <intuition/intuition.h>
+#include <gadgets/texteditor.h>
+#include <libraries/gadtools.h>
+#include <proto/button.h>
+#include <proto/dos.h>
 #include <proto/exec.h>
+#include <proto/graphics.h>
 #include <proto/intuition.h>
+#include <proto/layout.h>
 #include <proto/listbrowser.h>
+#include <proto/texteditor.h>
+#include <proto/window.h>
 #include <reaction/reaction.h>
-#define T(de,en) amg_tr((de),(en))
-#define MENU_CONTACTS FULLMENUNUM(0,0,NOSUB)
-#define MENU_ACCOUNT FULLMENUNUM(0,2,NOSUB)
-#define MENU_ABOUT FULLMENUNUM(0,3,NOSUB)
-#define MENU_QUIT FULLMENUNUM(0,5,NOSUB)
-#define MENU_EMPTY_TRASH FULLMENUNUM(1,0,NOSUB)
-#define MENU_EMPTY_SPAM FULLMENUNUM(1,1,NOSUB)
+#include <reaction/reaction_macros.h>
+#include <utility/tagitem.h>
+
+#define T(de, en) amg_tr((de), (en))
+
+#ifdef NewObject
+#undef NewObject
+#endif
+#ifdef ButtonObject
+#undef ButtonObject
+#endif
+#define ButtonObject NewObject(NULL, (CONST_STRPTR)"button.gadget"
+
+enum MessageRequestAction {
+    MESSAGE_ACTION_PREVIEW = 0,
+    MESSAGE_ACTION_REPLY,
+    MESSAGE_ACTION_EDIT_DRAFT,
+    MESSAGE_ACTION_REPLY_ALL,
+    MESSAGE_ACTION_FORWARD
+};
+
+enum ReplyMenuGadgetId {
+    GID_REPLY_MENU_REPLY_ALL = 400,
+    GID_REPLY_MENU_FORWARD
+};
+
+enum SignatureGadgetId {
+    GID_SIGNATURE_EDITOR = 420,
+    GID_SIGNATURE_SAVE,
+    GID_SIGNATURE_CANCEL
+};
+
+#define MENU_ACCOUNT FULLMENUNUM(0, 0, NOSUB)
+#define MENU_ABOUT FULLMENUNUM(0, 1, NOSUB)
+#define MENU_QUIT FULLMENUNUM(0, 3, NOSUB)
+#define MENU_CONTACTS FULLMENUNUM(1, 0, NOSUB)
+#define MENU_SIGNATURE FULLMENUNUM(1, 1, NOSUB)
+#define MENU_EMPTY_TRASH FULLMENUNUM(1, 3, NOSUB)
+#define MENU_EMPTY_SPAM FULLMENUNUM(1, 4, NOSUB)
+
+#define GUI_PREFS_DRAWER "ENVARC:AmiMail"
+#define SIGNATURE_PATH "ENVARC:AmiMail/signature.txt"
+#define SIGNATURE_TEMP "ENVARC:AmiMail/signature.txt.new"
+
+
+static void ensure_gui_prefs_drawer(void)
+{
+    BPTR lock = Lock((STRPTR)GUI_PREFS_DRAWER, ACCESS_READ);
+    if (lock) {
+        UnLock(lock);
+        return;
+    }
+    lock = CreateDir((STRPTR)GUI_PREFS_DRAWER);
+    if (lock) UnLock(lock);
+}
+
+void gui_signature_load(char *buffer, size_t capacity)
+{
+    FILE *file;
+    size_t length;
+    if (!buffer || !capacity) return;
+    buffer[0] = 0;
+    file = fopen(SIGNATURE_PATH, "rb");
+    if (!file) return;
+    length = fread(buffer, 1U, capacity - 1U, file);
+    buffer[length] = 0;
+    fclose(file);
+}
+
+int gui_signature_save(const char *text)
+{
+    FILE *file;
+    size_t length;
+    int write_failed = 0;
+    if (!text) text = "";
+    length = strlen(text);
+    if (length >= GUI_SIGNATURE_MAX) return 0;
+
+    ensure_gui_prefs_drawer();
+    file = fopen(SIGNATURE_TEMP, "wb");
+    if (!file) return 0;
+    if (length && fwrite(text, 1U, length, file) != length)
+        write_failed = 1;
+    if (fclose(file) != 0) write_failed = 1;
+    if (write_failed) {
+        DeleteFile((STRPTR)SIGNATURE_TEMP);
+        return 0;
+    }
+    DeleteFile((STRPTR)SIGNATURE_PATH);
+    if (!Rename((STRPTR)SIGNATURE_TEMP, (STRPTR)SIGNATURE_PATH)) {
+        DeleteFile((STRPTR)SIGNATURE_TEMP);
+        return 0;
+    }
+    return 1;
+}
+
+static void signature_dialog(AmgGui *gui)
+{
+    Object *dialog;
+    struct Window *window;
+    struct Gadget *editor;
+    char signature[GUI_SIGNATURE_MAX];
+    ULONG signal_mask = 0UL;
+    LONG char_width = 8L, line_height = 8L;
+    LONG editor_width, editor_height, signature_gap, button_height;
+    int done = 0;
+
+    if (!gui || !gui->screen) return;
+    gui_signature_load(signature, sizeof(signature));
+    if (gui->screen->RastPort.TxWidth > 0)
+        char_width = (LONG)gui->screen->RastPort.TxWidth;
+    if (gui->screen->RastPort.TxHeight > 0)
+        line_height = (LONG)gui->screen->RastPort.TxHeight;
+
+    /* Visible editing area: roughly 60 screen-font characters by 5 lines. */
+    editor_width = char_width * 60L + 12L;
+    editor_height = line_height * 5L + 8L;
+    signature_gap = (line_height + 1L) / 2L;
+    if (signature_gap < 2L) signature_gap = 2L;
+    button_height = line_height + 8L;
+
+    editor = NULL;
+    dialog = WindowObject,
+        WA_Title, T("AmiMail - Signatur", "AmiMail - Signature"),
+        WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
+                  WFLG_ACTIVATE,
+        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
+        WA_PubScreen, gui->screen,
+        WINDOW_Position, WPOS_CENTERSCREEN,
+        WINDOW_ParentGroup, VGroupObject,
+            /* Let the layout determine the complete requester height.  This
+             * keeps the normal ReAction outer margin below the buttons instead
+             * of turning an oversized fixed WA_Height into empty lines. */
+            LAYOUT_SpaceOuter, TRUE,
+            LAYOUT_SpaceInner, FALSE,
+            LAYOUT_ShrinkWrap, TRUE,
+
+            LAYOUT_AddChild,
+                editor = (struct Gadget *)TextEditorObject,
+                    GA_ID, GID_SIGNATURE_EDITOR,
+                    GA_TabCycle, TRUE,
+                    GA_TEXTEDITOR_Contents,
+                        (ULONG)(uintptr_t)signature,
+                EndObject,
+            CHILD_MinWidth, editor_width,
+            CHILD_MaxWidth, editor_width,
+            CHILD_WeightedWidth, 0,
+            CHILD_MinHeight, editor_height,
+            CHILD_MaxHeight, editor_height,
+            CHILD_WeightedHeight, 0,
+
+            /* Exactly half a text line between editor and buttons. */
+            LAYOUT_AddChild, HGroupObject,
+                LAYOUT_SpaceOuter, FALSE,
+                LAYOUT_SpaceInner, FALSE,
+            EndObject,
+            CHILD_MinHeight, signature_gap,
+            CHILD_MaxHeight, signature_gap,
+            CHILD_WeightedHeight, 0,
+
+            LAYOUT_AddChild, HGroupObject,
+                LAYOUT_SpaceOuter, FALSE,
+                LAYOUT_SpaceInner, TRUE,
+                LAYOUT_EvenSize, TRUE,
+                LAYOUT_AddChild, ButtonObject,
+                    GA_ID, GID_SIGNATURE_SAVE,
+                    GA_RelVerify, TRUE,
+                    GA_Text, T("_Speichern", "_Save"),
+                EndObject,
+                LAYOUT_AddChild, ButtonObject,
+                    GA_ID, GID_SIGNATURE_CANCEL,
+                    GA_RelVerify, TRUE,
+                    GA_Text, T("Ab_brechen", "_Cancel"),
+                EndObject,
+            EndObject,
+            CHILD_MinHeight, button_height,
+            CHILD_MaxHeight, button_height,
+            CHILD_WeightedHeight, 0,
+        EndObject,
+    EndWindow;
+
+    if (!dialog) {
+        status_local(gui, T("Signatur-Editor konnte nicht ge\366ffnet werden.",
+                            "Signature editor could not be opened."));
+        return;
+    }
+    window = RA_OpenWindow(dialog);
+    if (!window) {
+        DisposeObject(dialog);
+        status_local(gui, T("Signatur-Editor konnte nicht ge\366ffnet werden.",
+                            "Signature editor could not be opened."));
+        return;
+    }
+    WindowToFront(window);
+    ActivateWindow(window);
+    if (editor) ActivateGadget(editor, window, NULL);
+    GetAttr(WINDOW_SigMask, dialog, &signal_mask);
+
+    while (!done && signal_mask) {
+        ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
+        if (signals & SIGBREAKF_CTRL_C) done = 1;
+        if (signals & signal_mask) {
+            ULONG result;
+            while ((result = RA_HandleInput(dialog, NULL)) != WMHI_LASTMSG) {
+                switch (result & WMHI_CLASSMASK) {
+                    case WMHI_CLOSEWINDOW:
+                        done = 1;
+                        break;
+                    case WMHI_RAWKEY:
+                        if (rawkey_is_cancel(result)) done = 1;
+                        break;
+                    case WMHI_GADGETUP:
+                        if ((result & WMHI_GADGETMASK) ==
+                            GID_SIGNATURE_CANCEL) {
+                            done = 1;
+                        } else if ((result & WMHI_GADGETMASK) ==
+                                   GID_SIGNATURE_SAVE) {
+                            STRPTR text = (STRPTR)(uintptr_t)DoGadgetMethod(
+                                editor, window, NULL,
+                                GM_TEXTEDITOR_ExportText, 0UL);
+                            if (!text) {
+                                status_local(gui,
+                                    T("Signatur konnte nicht gelesen werden.",
+                                      "Signature could not be read."));
+                            } else if (strlen((const char *)text) >= GUI_SIGNATURE_MAX) {
+                                status_local(gui,
+                                    T("Signatur ist zu lang.",
+                                      "Signature is too long."));
+                                FreeVec(text);
+                            } else if (!gui_signature_save((const char *)text)) {
+                                status_local(gui,
+                                    T("Signatur konnte nicht gespeichert werden.",
+                                      "Signature could not be saved."));
+                                FreeVec(text);
+                            } else {
+                                FreeVec(text);
+                                status_local(gui,
+                                    T("Signatur wurde gespeichert.",
+                                      "Signature was saved."));
+                                done = 1;
+                            }
+                        }
+                        break;
+                }
+            }
+        }
+    }
+    DisposeObject(dialog);
+}
+
 static int ensure_account(AmgGui *gui, AmgError *error)
 {
     if (amg_account_validate(gui->account, error) == AMG_OK) return 1;
@@ -32,6 +288,7 @@ static int ensure_account(AmgGui *gui, AmgError *error)
     }
     return 1;
 }
+
 
 static unsigned long inbox_event_uid_validity(const AmgNetworkEvent *event)
 {
@@ -75,6 +332,7 @@ static void commit_inbox_notification_baseline(
         gui_state_save_inbox_notification(gui);
 }
 
+
 static size_t label_index_for_mailbox(const AmgGui *gui,
                                       const char *mailbox_utf8)
 {
@@ -90,7 +348,7 @@ static size_t label_index_for_mailbox(const AmgGui *gui,
 }
 
 static size_t label_index_for_server_mailbox(const AmgGui *gui,
-                                          const char *server_mailbox_utf8)
+                                              const char *server_mailbox_utf8)
 {
     size_t i;
     if (!gui || !server_mailbox_utf8) return gui ? gui->label_count : 0U;
@@ -110,22 +368,214 @@ static int current_mailbox_is_drafts(const AmgGui *gui)
                  gui->labels[3U].server_mailbox_utf8));
 }
 
-static void update_reply_button(AmgGui *gui)
+static int suppress_next_reply_menu_click = 0;
+
+static void set_reply_menu_arrow(AmgGui *gui, int expanded)
 {
-    const char *label;
+    (void)expanded;
+    if (!gui || !gui->reply_menu_gadget) return;
+    /* Keep the same proven classic-font down-arrow in both states. */
+    if (gui->window) {
+        SetGadgetAttrs(gui->reply_menu_gadget, gui->window, NULL,
+                       GA_Text, (ULONG)(uintptr_t)"v",
+                       TAG_DONE);
+        RefreshGList(gui->reply_menu_gadget, gui->window, NULL, 1);
+    } else {
+        SetAttrs((Object *)gui->reply_menu_gadget,
+                 GA_Text, (ULONG)(uintptr_t)"v",
+                 TAG_DONE);
+    }
+}
+
+static int main_pointer_over_reply_menu(const AmgGui *gui)
+{
+    LONG mouse_x, mouse_y, left, top, right, bottom;
+    if (!gui || !gui->window || !gui->reply_menu_gadget) return 0;
+
+    if (gui->screen) {
+        mouse_x = (LONG)gui->screen->MouseX;
+        mouse_y = (LONG)gui->screen->MouseY;
+        left = (LONG)gui->window->LeftEdge +
+               (LONG)gui->reply_menu_gadget->LeftEdge;
+        top = (LONG)gui->window->TopEdge +
+              (LONG)gui->reply_menu_gadget->TopEdge;
+    } else {
+        mouse_x = (LONG)gui->window->MouseX;
+        mouse_y = (LONG)gui->window->MouseY;
+        left = (LONG)gui->reply_menu_gadget->LeftEdge;
+        top = (LONG)gui->reply_menu_gadget->TopEdge;
+    }
+    right = left + (LONG)gui->reply_menu_gadget->Width - 1L;
+    bottom = top + (LONG)gui->reply_menu_gadget->Height - 1L;
+    return mouse_x >= left && mouse_x <= right &&
+           mouse_y >= top && mouse_y <= bottom;
+}
+
+static void update_reply_button_mode(AmgGui *gui)
+{
+    const char *text;
+    int drafts;
     if (!gui || !gui->reply_gadget) return;
-    label = current_mailbox_is_drafts(gui)
+    drafts = current_mailbox_is_drafts(gui);
+    text = drafts
         ? T("_Bearbeiten", "_Edit")
         : T("A_ntworten", "_Reply");
     if (gui->window) {
         SetGadgetAttrs(gui->reply_gadget, gui->window, NULL,
-                       GA_Text, (ULONG)(uintptr_t)label, TAG_DONE);
+                       GA_Text, (ULONG)(uintptr_t)text,
+                       TAG_DONE);
+        if (gui->reply_menu_gadget)
+            SetGadgetAttrs(gui->reply_menu_gadget, gui->window, NULL,
+                           GA_Disabled, drafts ? TRUE : FALSE,
+                           TAG_DONE);
         RefreshGList(gui->reply_gadget, gui->window, NULL, 1);
+        if (gui->reply_menu_gadget)
+            RefreshGList(gui->reply_menu_gadget, gui->window, NULL, 1);
     } else {
         SetAttrs((Object *)gui->reply_gadget,
-                 GA_Text, (ULONG)(uintptr_t)label, TAG_DONE);
+                 GA_Text, (ULONG)(uintptr_t)text,
+                 TAG_DONE);
+        if (gui->reply_menu_gadget)
+            SetAttrs((Object *)gui->reply_menu_gadget,
+                     GA_Disabled, drafts ? TRUE : FALSE,
+                     TAG_DONE);
     }
+    suppress_next_reply_menu_click = 0;
+    set_reply_menu_arrow(gui, 0);
 }
+
+static int reply_action_popup(AmgGui *gui)
+{
+    Object *popup;
+    struct Window *window;
+    ULONG signal_mask = 0UL;
+    LONG left, top, width, button_height, popup_height;
+    int selection = 0;
+    int done = 0;
+    int inactive = 0;
+
+    if (!gui || !gui->window || !gui->reply_gadget ||
+        !gui->reply_menu_gadget || current_mailbox_is_drafts(gui))
+        return 0;
+
+    /* The drop-down buttons deliberately use the exact width and height of
+     * the normal Reply button. With zero inner/outer layout spacing and a
+     * borderless window there is no grey popup background around them. */
+    width = (LONG)gui->reply_gadget->Width;
+    button_height = (LONG)gui->reply_gadget->Height;
+    if (width < 1L || button_height < 1L) return 0;
+    popup_height = button_height * 2L;
+
+    left = (LONG)gui->window->LeftEdge +
+           (LONG)gui->reply_gadget->LeftEdge;
+    top = (LONG)gui->window->TopEdge +
+          (LONG)gui->reply_gadget->TopEdge + button_height;
+    if (gui->screen) {
+        if (left + width > (LONG)gui->screen->Width)
+            left = (LONG)gui->screen->Width - width;
+        if (left < 0L) left = 0L;
+        if (top + popup_height > (LONG)gui->screen->Height)
+            top = (LONG)gui->window->TopEdge +
+                  (LONG)gui->reply_gadget->TopEdge - popup_height;
+        if (top < 0L) top = 0L;
+    }
+
+    popup = WindowObject,
+        WA_Left, left,
+        WA_Top, top,
+        WA_Width, width,
+        WA_Height, popup_height,
+        WA_Borderless, TRUE,
+        WA_Flags, WFLG_ACTIVATE | WFLG_RMBTRAP,
+        WA_IDCMP, IDCMP_GADGETUP | IDCMP_RAWKEY | IDCMP_INACTIVEWINDOW,
+        WA_PubScreen, gui->screen,
+        WINDOW_ParentGroup, VGroupObject,
+            LAYOUT_SpaceOuter, FALSE,
+            LAYOUT_SpaceInner, FALSE,
+            LAYOUT_AddChild, ButtonObject,
+                GA_ID, GID_REPLY_MENU_REPLY_ALL,
+                GA_RelVerify, TRUE,
+                GA_Text, T("Allen _Antworten", "Reply _All"),
+            EndObject,
+            CHILD_MinWidth, width,
+            CHILD_MaxWidth, width,
+            CHILD_WeightedWidth, 0,
+            CHILD_MinHeight, button_height,
+            CHILD_MaxHeight, button_height,
+            CHILD_WeightedHeight, 0,
+            LAYOUT_AddChild, ButtonObject,
+                GA_ID, GID_REPLY_MENU_FORWARD,
+                GA_RelVerify, TRUE,
+                GA_Text, T("_Weiterleiten", "_Forward"),
+            EndObject,
+            CHILD_MinWidth, width,
+            CHILD_MaxWidth, width,
+            CHILD_WeightedWidth, 0,
+            CHILD_MinHeight, button_height,
+            CHILD_MaxHeight, button_height,
+            CHILD_WeightedHeight, 0,
+        EndObject,
+    EndWindow;
+    if (!popup) return 0;
+    window = RA_OpenWindow(popup);
+    if (!window) {
+        DisposeObject(popup);
+        return 0;
+    }
+
+    set_reply_menu_arrow(gui, 1);
+    WindowToFront(window);
+    ActivateWindow(window);
+    GetAttr(WINDOW_SigMask, popup, &signal_mask);
+    if (!signal_mask) {
+        DisposeObject(popup);
+        set_reply_menu_arrow(gui, 0);
+        return 0;
+    }
+
+    while (!done) {
+        ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
+        if (signals & SIGBREAKF_CTRL_C) done = 1;
+        if (signals & signal_mask) {
+            ULONG result;
+            while ((result = RA_HandleInput(popup, NULL)) != WMHI_LASTMSG) {
+                switch (result & WMHI_CLASSMASK) {
+                    case WMHI_INACTIVE:
+                        inactive = 1;
+                        done = 1;
+                        break;
+                    case WMHI_RAWKEY:
+                        if (rawkey_is_cancel(result)) done = 1;
+                        break;
+                    case WMHI_GADGETUP:
+                        if ((result & WMHI_GADGETMASK) ==
+                            GID_REPLY_MENU_REPLY_ALL) {
+                            selection = MESSAGE_ACTION_REPLY_ALL;
+                            done = 1;
+                        } else if ((result & WMHI_GADGETMASK) ==
+                                   GID_REPLY_MENU_FORWARD) {
+                            selection = MESSAGE_ACTION_FORWARD;
+                            done = 1;
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    /* Clicking the arrow again first makes this borderless popup inactive.
+     * That click is still queued for the main window after we return. Detect
+     * that exact case and suppress only the queued arrow event, so the menu
+     * closes instead of immediately reopening. */
+    if (inactive && (gui->window->Flags & WFLG_WINDOWACTIVE) &&
+        main_pointer_over_reply_menu(gui))
+        suppress_next_reply_menu_click = 1;
+
+    DisposeObject(popup);
+    set_reply_menu_arrow(gui, 0);
+    return selection;
+}
+
 
 static int request_label_index(AmgGui *gui, size_t index, AmgError *error)
 {
@@ -135,8 +585,7 @@ static int request_label_index(AmgGui *gui, size_t index, AmgError *error)
     if (!gui->labels[index].available ||
         !gui->labels[index].mailbox_utf8[0]) {
         status_local(gui,
-                     T("Dieser Ordner ist f\374r das Konto nicht verf\374gbar.",
-                       "This folder is not available for the account."));
+                     T("Dieser Ordner ist f\374r das Konto nicht verf\374gbar.", "This folder is not available for the account."));
         return AMG_ERR_ARGUMENT;
     }
     if (!gui->labels[index].selectable) {
@@ -168,7 +617,7 @@ static int request_label_index(AmgGui *gui, size_t index, AmgError *error)
             sizeof(gui->current_label_local) - 1U);
     gui->current_label_local[sizeof(gui->current_label_local) - 1U] = 0;
     select_label_index(gui, index);
-    update_reply_button(gui);
+    update_reply_button_mode(gui);
     clear_current_message_payload(gui);
     show_message_placeholder(gui, T("Ordner wird geladen...", "Loading folder..."));
     set_preview_local(gui,
@@ -234,8 +683,7 @@ static int queue_move_to_label(AmgGui *gui, size_t index, AmgError *error)
     if (!gui->labels[index].available ||
         !gui->labels[index].mailbox_utf8[0]) {
         status_local(gui,
-                     T("Dieser Ordner ist f\374r das Konto nicht verf\374gbar.",
-                       "This folder is not available for the account."));
+                     T("Dieser Ordner ist f\374r das Konto nicht verf\374gbar.", "This folder is not available for the account."));
         return AMG_ERR_ARGUMENT;
     }
     if (!gui->labels[index].selectable) {
@@ -303,6 +751,7 @@ static void remove_message_uid(AmgGui *gui, ULONG uid)
     set_preview_local(gui,
                       T("W\344hlen Sie eine Nachricht zur Anzeige aus.", "Select a message to display."));
 }
+
 
 static void handle_label_gadget(AmgGui *gui, struct Gadget *gadget,
                                 int hierarchical, AmgError *error)
@@ -375,18 +824,23 @@ static void toggle_message_flagged(AmgGui *gui, ULONG uid, AmgError *error)
     }
 }
 
-static void request_message(AmgGui *gui, int reply, AmgError *error)
+static void request_message(AmgGui *gui, int action, AmgError *error)
 {
     ULONG uid = 0;
     ULONG selected[2];
     size_t selected_count;
     ULONG release_event = LBRE_NORMAL;
     int is_doubleclick = 0;
-    int edit_draft = 0;
+    int prepare_reply = action == MESSAGE_ACTION_REPLY;
+    int prepare_reply_all = action == MESSAGE_ACTION_REPLY_ALL;
+    int prepare_forward = action == MESSAGE_ACTION_FORWARD;
+    int edit_draft = action == MESSAGE_ACTION_EDIT_DRAFT;
+    int compose_action = prepare_reply || prepare_reply_all ||
+                         prepare_forward || edit_draft;
+    const char *request_kind = "preview";
     int result;
     if (!gui || !gui->messages_gadget) return;
-    edit_draft = reply && current_mailbox_is_drafts(gui);
-    if (!reply) {
+    if (!compose_action) {
         GetAttr(LISTBROWSER_RelEvent, (Object *)gui->messages_gadget,
                 &release_event);
         if (release_event == LBRE_TITLECLICK) return;
@@ -398,19 +852,22 @@ static void request_message(AmgGui *gui, int reply, AmgError *error)
     } else {
         selected_count = selected_message_uids(gui, selected, 2U);
         if (!selected_count) {
-            status_local(gui, edit_draft
-                ? T("Bitte zuerst einen Entwurf ausw\344hlen.",
-                    "Please select a draft first.")
-                : T("Bitte zuerst eine Nachricht ausw\344hlen.",
-                    "Please select a message first."));
+            status_local(gui, T("Bitte zuerst eine Nachricht ausw\344hlen.", "Please select a message first."));
             return;
         }
         if (selected_count > 1U) {
-            status_local(gui, edit_draft
-                ? T("Bitte zum Bearbeiten nur einen Entwurf ausw\344hlen.",
-                    "Please select only one draft to edit.")
-                : T("Bitte zum Antworten nur eine Nachricht ausw\344hlen.",
-                    "Please select only one message to reply."));
+            if (edit_draft)
+                status_local(gui,
+                    T("Bitte zum Bearbeiten nur einen Entwurf ausw\344hlen.",
+                      "Please select only one draft to edit."));
+            else if (prepare_forward)
+                status_local(gui,
+                    T("Bitte zum Weiterleiten nur eine Nachricht ausw\344hlen.",
+                      "Please select only one message to forward."));
+            else
+                status_local(gui,
+                    T("Bitte zum Antworten nur eine Nachricht ausw\344hlen.",
+                      "Please select only one message to reply."));
             return;
         }
         uid = selected[0];
@@ -419,8 +876,15 @@ static void request_message(AmgGui *gui, int reply, AmgError *error)
         status_local(gui, T("Bitte zuerst eine Nachricht ausw\344hlen.", "Please select a message first."));
         return;
     }
+    if (edit_draft && !current_mailbox_is_drafts(gui)) {
+        update_reply_button_mode(gui);
+        status_local(gui,
+                     T("Entw\374rfe k\366nnen nur im Ordner Entw\374rfe bearbeitet werden.",
+                       "Drafts can only be edited in the Drafts folder."));
+        return;
+    }
     set_message_selected_visual(gui, uid);
-    if (!reply && is_doubleclick) {
+    if (!compose_action && is_doubleclick) {
         toggle_message_flagged(gui, uid, error);
         return;
     }
@@ -428,21 +892,31 @@ static void request_message(AmgGui *gui, int reply, AmgError *error)
         status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.", "Please click 'Fetch' first."));
         return;
     }
-    result = amg_network_request(
-        gui->network, AMG_NET_FETCH_MESSAGE, uid,
-        edit_draft ? "editdraft" : (reply ? "reply" : "preview"),
-        edit_draft
-            ? (gui->labels[3U].server_mailbox_utf8[0]
-                   ? gui->labels[3U].server_mailbox_utf8
-                   : gui->current_mailbox_utf8)
-            : NULL,
-        error);
+    if (edit_draft) request_kind = "editdraft";
+    else if (prepare_reply_all) request_kind = "reply-all";
+    else if (prepare_forward) request_kind = "forward";
+    else if (prepare_reply) request_kind = "reply";
+
+    result = amg_network_request(gui->network, AMG_NET_FETCH_MESSAGE, uid,
+                                 request_kind,
+                                 edit_draft
+                                    ? (gui->labels[3U].server_mailbox_utf8[0]
+                                           ? gui->labels[3U].server_mailbox_utf8
+                                           : gui->current_mailbox_utf8)
+                                    : NULL,
+                                 error);
     if (result == AMG_OK) {
         clear_current_message_payload(gui);
         if (edit_draft)
             status_local(gui, T("Entwurf wird zum Bearbeiten geladen...",
                                 "Loading draft for editing..."));
-        else if (reply)
+        else if (prepare_forward)
+            status_local(gui, T("Weiterleitung wird vorbereitet...",
+                                "Preparing forward..."));
+        else if (prepare_reply_all)
+            status_local(gui, T("Antwort an alle wird vorbereitet...",
+                                "Preparing reply to all..."));
+        else if (prepare_reply)
             status_local(gui, T("Antwort wird vorbereitet...", "Preparing reply..."));
         else {
             set_preview_local(gui, T("Nachricht wird geladen...", "Loading message..."));
@@ -475,12 +949,14 @@ static void toggle_selected_seen(AmgGui *gui, AmgError *error)
     }
     for (i = 0; i < count; ++i) {
         int seen = !message_is_seen(gui, uids[i]);
+        int in_inbox = !strcmp(gui->current_mailbox_utf8, "INBOX");
         int result = amg_network_request(
             gui->network, AMG_NET_SET_SEEN, uids[i],
-            seen ? "1" : "0", "button", error);
+            seen ? "1" : "0", in_inbox ? "button-inbox" : "button",
+            error);
         if (result != AMG_OK) break;
         set_message_seen_visual(gui, uids[i], seen);
-        if (!strcmp(gui->current_mailbox_utf8, "INBOX"))
+        if (in_inbox)
             gui_state_adjust_inbox_unseen(gui, seen ? -1L : 1L);
         ++queued;
     }
@@ -496,6 +972,7 @@ static void toggle_selected_seen(AmgGui *gui, AmgError *error)
         status_utf8(gui, error->message);
     }
 }
+
 
 static void delete_selected_messages(AmgGui *gui, AmgError *error)
 {
@@ -607,15 +1084,17 @@ static void empty_spam(AmgGui *gui, AmgError *error)
         status_utf8(gui, error->message);
 }
 
- void handle_network(AmgGui *gui)
+void handle_network(AmgGui *gui)
 {
     AmgNetworkEvent event;
     while (amg_network_poll(gui->network, &event) > 0) {
         if (event.type == AMG_NET_CHECK_INBOX)
             gui->periodic_check_pending = 0;
+        if (event.type == AMG_NET_RECONFIGURE)
+            gui->network_reconfigure_pending = 0;
 
-        /* Automatic update checks are intentionally silent. A missing GitHub
-         * connection must never disturb normal IMAP/SMTP use. */
+        /* Update-Pruefungen sind bewusst still. Ein fehlendes GitHub oder
+         * Netzwerk darf beim Programmstart keinen Fehlerdialog/-status erzeugen. */
         if (event.type == AMG_NET_CHECK_UPDATE) {
             gui_update_handle_check(gui, &event);
             amg_network_event_clear(&event);
@@ -630,19 +1109,16 @@ static void empty_spam(AmgGui *gui, AmgError *error)
         }
 
         if (event.result != AMG_OK) {
-            if (event.type == AMG_NET_RECONFIGURE)
-                gui->network_reconfigure_pending = 0;
             if (event.type == AMG_NET_SET_SEEN) {
                 set_message_seen_visual(
                     gui, event.uid, atoi(event.argument1) == 0);
-                if (!strcmp(gui->current_mailbox_utf8, "INBOX") &&
-                    !strcmp(event.argument2, "button"))
+                if (strstr(event.argument2, "-inbox"))
                     gui_state_adjust_inbox_unseen(
                         gui, atoi(event.argument1) ? 1L : -1L);
-            }
-            else if (event.type == AMG_NET_SET_FLAGGED)
+            } else if (event.type == AMG_NET_SET_FLAGGED) {
                 set_message_flagged_visual(
                     gui, event.uid, atoi(event.argument1) == 0);
+            }
             status_utf8(gui,
                         event.message[0] ? event.message : T("Netzwerkfehler", "Network error"));
             if (gui->update_check_deferred &&
@@ -712,12 +1188,10 @@ static void empty_spam(AmgGui *gui, AmgError *error)
                             if (generation_changed) {
                                 notify_count = 0U;
                             } else if (!had_baseline) {
-                                /* No persisted high-water mark exists yet
-                                 * (first run after upgrading from an older
-                                 * AmiMAIL, or a newly configured account).
-                                 * Alert once if that first snapshot contains
-                                 * unread mail, then persist the generation so
-                                 * subsequent starts are precise. */
+                                /* First run after installing the persistent
+                                 * notification state: alert once if the first
+                                 * snapshot contains unread mail, then save the
+                                 * high-water mark for subsequent starts. */
                                 notify_count = unseen_parse_error >= 0
                                     ? unseen_count : 0U;
                             }
@@ -747,7 +1221,7 @@ static void empty_spam(AmgGui *gui, AmgError *error)
                         gui->current_label_local[
                             sizeof(gui->current_label_local) - 1U] = 0;
                         select_label_index(gui, index);
-                        update_reply_button(gui);
+                        update_reply_button_mode(gui);
                     }
                     set_preview_local(
                         gui, T("W\344hlen Sie eine Nachricht zur Anzeige aus.", "Select a message to display."));
@@ -766,7 +1240,7 @@ static void empty_spam(AmgGui *gui, AmgError *error)
                                             : T("Ordner", "folder"));
                     }
                     status_local(gui, message);
-                    if (gui->update_check_deferred) {
+                    if (index == 0U && gui->update_check_deferred) {
                         gui->update_check_deferred = 0;
                         gui_update_request_check(gui);
                     }
@@ -808,11 +1282,9 @@ static void empty_spam(AmgGui *gui, AmgError *error)
                                 gui_state_set_inbox_unseen(
                                     gui, (unsigned long)unseen_count);
                         } else if (!had_baseline) {
-                            /* See the full-fetch path above.  The first
-                             * snapshot cannot distinguish historic unread
-                             * mail from mail received since installing this
-                             * state format, so issue at most one initial
-                             * notification and persist the high-water mark. */
+                            /* Migration from the old RAM-only baseline:
+                             * issue at most one initial notification, then
+                             * persist UID/UIDVALIDITY for future starts. */
                             new_count = 0U;
                             notify_count = unseen_parse_error >= 0
                                 ? unseen_count : 0U;
@@ -862,8 +1334,12 @@ static void empty_spam(AmgGui *gui, AmgError *error)
                 {
                     AmgError preview_error;
                     int prepare_reply = !strcmp(event.argument1, "reply");
-                    int prepare_edit = !strcmp(event.argument1, "editdraft");
-                    int unread_before = !prepare_edit &&
+                    int prepare_reply_all =
+                        !strcmp(event.argument1, "reply-all");
+                    int prepare_forward =
+                        !strcmp(event.argument1, "forward");
+                    int edit_draft = !strcmp(event.argument1, "editdraft");
+                    int unread_before = !edit_draft &&
                         !message_is_seen(gui, event.uid);
                     memset(&preview_error, 0, sizeof(preview_error));
                     if (display_message_payload(
@@ -882,42 +1358,73 @@ static void empty_spam(AmgGui *gui, AmgError *error)
                                 "1", in_inbox ? "preview-inbox" : "preview",
                                 NULL);
                         }
-                        if (prepare_edit) {
+                        if (edit_draft) {
                             DraftEditData edit;
                             memset(&edit, 0, sizeof(edit));
                             if (prepare_draft_edit_payload(
                                     gui, event.payload, event.payload_length,
-                                    event.uid, event.argument2,
-                                    &edit, &preview_error) == AMG_OK) {
-                                if (!compose_dialog(gui, COMPOSE_MODE_EDIT_DRAFT, &edit,
-                                                    &preview_error))
-                                    status_local(
-                                        gui,
+                                    event.uid, event.argument2, &edit,
+                                    &preview_error) == AMG_OK) {
+                                if (!compose_dialog(gui, COMPOSE_MODE_EDIT_DRAFT,
+                                                    &edit, &preview_error))
+                                    status_local(gui,
                                         T("Entwurf wurde nicht ge\344ndert.",
                                           "Draft was not changed."));
                                 cleanup_draft_edit_files(&edit);
                             } else {
                                 cleanup_draft_edit_files(&edit);
-                                status_utf8(
-                                    gui,
+                                status_utf8(gui,
                                     preview_error.message[0]
                                         ? preview_error.message
                                         : T("Entwurf konnte nicht zum Bearbeiten vorbereitet werden.",
                                             "Draft could not be prepared for editing."));
                             }
-                        } else if (prepare_reply) {
-                            if (prepare_reply_payload(
+                        } else if (prepare_forward) {
+                            DraftEditData forward_seed;
+                            memset(&forward_seed, 0, sizeof(forward_seed));
+                            if (prepare_forward_payload(
                                     gui, event.payload, event.payload_length,
+                                    event.uid, &forward_seed,
                                     &preview_error) == AMG_OK) {
-                                if (!compose_dialog(gui, COMPOSE_MODE_REPLY, NULL,
-                                                    &preview_error))
+                                if (!compose_dialog(gui, COMPOSE_MODE_FORWARD,
+                                                    &forward_seed, &preview_error))
                                     status_local(gui,
-                                                 T("Antwort wurde nicht gesendet.", "Reply was not sent."));
+                                        T("Weiterleitung wurde nicht gesendet.",
+                                          "Forward was not sent."));
+                                cleanup_draft_edit_files(&forward_seed);
+                            } else {
+                                cleanup_draft_edit_files(&forward_seed);
+                                status_utf8(gui,
+                                    preview_error.message[0]
+                                        ? preview_error.message
+                                        : T("Weiterleitung konnte nicht vorbereitet werden.",
+                                            "Forward could not be prepared."));
+                            }
+                        } else if (prepare_reply_all || prepare_reply) {
+                            int prep_result = prepare_reply_all
+                                ? prepare_reply_all_payload(
+                                    gui, event.payload, event.payload_length,
+                                    &preview_error)
+                                : prepare_reply_payload(
+                                    gui, event.payload, event.payload_length,
+                                    &preview_error);
+                            if (prep_result == AMG_OK) {
+                                if (!compose_dialog(gui, COMPOSE_MODE_REPLY,
+                                                    NULL, &preview_error))
+                                    status_local(gui, prepare_reply_all
+                                        ? T("Antwort an alle wurde nicht gesendet.",
+                                            "Reply to all was not sent.")
+                                        : T("Antwort wurde nicht gesendet.",
+                                            "Reply was not sent."));
                             } else {
                                 status_utf8(gui,
                                     preview_error.message[0]
                                         ? preview_error.message
-                                        : T("Antwort konnte nicht vorbereitet werden.", "Reply could not be prepared."));
+                                        : (prepare_reply_all
+                                            ? T("Antwort an alle konnte nicht vorbereitet werden.",
+                                                "Reply to all could not be prepared.")
+                                            : T("Antwort konnte nicht vorbereitet werden.",
+                                                "Reply could not be prepared.")));
                             }
                         } else {
                             status_local(gui, T("Nachricht geladen.", "Message loaded."));
@@ -931,16 +1438,14 @@ static void empty_spam(AmgGui *gui, AmgError *error)
                     break;
                 }
                 case AMG_NET_SET_SEEN:
-                {
-                    int new_seen = atoi(event.argument1) != 0;
-                    set_message_seen_visual(gui, event.uid, new_seen);
+                    set_message_seen_visual(
+                        gui, event.uid, atoi(event.argument1) != 0);
                     if (strncmp(event.argument2, "preview", 7U))
                         status_local(
-                            gui, new_seen
+                            gui, atoi(event.argument1)
                                 ? T("Nachricht als gelesen markiert.", "Message marked as read.")
                                 : T("Nachricht als ungelesen markiert.", "Message marked as unread."));
                     break;
-                }
                 case AMG_NET_SET_FLAGGED:
                     set_message_flagged_visual(
                         gui, event.uid, atoi(event.argument1) != 0);
@@ -1018,7 +1523,8 @@ static void empty_spam(AmgGui *gui, AmgError *error)
                     size_t target = label_index_for_server_mailbox(
                         gui, event.argument2);
                     const char *target_name = event.argument2;
-                    if (!message_is_seen(gui, event.uid)) {
+                    int was_unseen = !message_is_seen(gui, event.uid);
+                    if (was_unseen) {
                         if (!strcmp(gui->current_mailbox_utf8, "INBOX"))
                             gui_state_adjust_inbox_unseen(gui, -1L);
                         else if (target == 0U)
@@ -1047,7 +1553,7 @@ static void empty_spam(AmgGui *gui, AmgError *error)
     }
 }
 
- void periodic_fetch_mail(AmgGui *gui, AmgError *error)
+void periodic_fetch_mail(AmgGui *gui, AmgError *error)
 {
     int result = AMG_OK;
     if (!gui || !gui->account || !gui->account->periodic_fetch ||
@@ -1079,7 +1585,7 @@ static void empty_spam(AmgGui *gui, AmgError *error)
         status_utf8(gui, error->message);
 }
 
- void fetch_mail(AmgGui *gui, AmgError *error)
+void fetch_mail(AmgGui *gui, AmgError *error)
 {
     int result = AMG_OK;
     if (!ensure_account(gui, error)) return;
@@ -1106,12 +1612,13 @@ static void empty_spam(AmgGui *gui, AmgError *error)
     }
 }
 
- void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
+void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
                                AmgError *error)
 {
     switch (gadget_id) {
         case GID_NEW_MAIL:
-            if (ensure_account(gui, error)) compose_dialog(gui, COMPOSE_MODE_NEW, NULL, error);
+            if (ensure_account(gui, error))
+                compose_dialog(gui, COMPOSE_MODE_NEW, NULL, error);
             break;
         case GID_FETCH:
             fetch_mail(gui, error);
@@ -1129,7 +1636,7 @@ static void empty_spam(AmgGui *gui, AmgError *error)
             handle_labels_scroller(gui);
             break;
         case GID_MESSAGES:
-            request_message(gui, 0, error);
+            request_message(gui, MESSAGE_ACTION_PREVIEW, error);
             break;
         case GID_MESSAGES_SCROLL:
             handle_messages_scroller(gui);
@@ -1141,7 +1648,20 @@ static void empty_spam(AmgGui *gui, AmgError *error)
             save_current_attachments(gui);
             break;
         case GID_REPLY:
-            request_message(gui, 1, error);
+            request_message(gui, current_mailbox_is_drafts(gui)
+                                     ? MESSAGE_ACTION_EDIT_DRAFT
+                                     : MESSAGE_ACTION_REPLY,
+                            error);
+            break;
+        case GID_REPLY_MENU:
+            if (suppress_next_reply_menu_click) {
+                suppress_next_reply_menu_click = 0;
+                break;
+            }
+            if (!current_mailbox_is_drafts(gui)) {
+                int action = reply_action_popup(gui);
+                if (action) request_message(gui, action, error);
+            }
             break;
         case GID_DELETE:
             delete_selected_messages(gui, error);
@@ -1155,7 +1675,7 @@ static void empty_spam(AmgGui *gui, AmgError *error)
     }
 }
 
- void handle_menu(AmgGui *gui, ULONG menu_code, AmgError *error)
+void handle_menu(AmgGui *gui, ULONG menu_code, AmgError *error)
 {
     switch (menu_code) {
         case MENU_CONTACTS:
@@ -1169,6 +1689,9 @@ static void empty_spam(AmgGui *gui, AmgError *error)
             break;
         case MENU_QUIT:
             gui->running = 0;
+            break;
+        case MENU_SIGNATURE:
+            signature_dialog(gui);
             break;
         case MENU_EMPTY_TRASH:
             empty_trash(gui, error);

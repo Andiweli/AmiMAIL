@@ -2,7 +2,9 @@
 #include "banner_data.h"
 #include "iconified_data.h"
 #include "i18n.h"
+
 #include <string.h>
+
 #if AMIGMAIL_AMIGA
 #include <clib/alib_protos.h>
 #include <classes/window.h>
@@ -34,6 +36,15 @@
 #include <utility/hooks.h>
 #include <utility/tagitem.h>
 #include <workbench/workbench.h>
+
+static int window_current_mailbox_is_drafts(const AmgGui *gui)
+{
+    return gui && gui->label_count > 3U && gui->labels[3U].available &&
+        (!strcmp(gui->current_mailbox_utf8, gui->labels[3U].mailbox_utf8) ||
+         !strcmp(gui->current_mailbox_utf8,
+                 gui->labels[3U].server_mailbox_utf8));
+}
+
 static struct DiskObject *load_embedded_disk_object(
     const unsigned char *data, size_t size,
     const char *base_name, const char *info_name)
@@ -41,6 +52,10 @@ static struct DiskObject *load_embedded_disk_object(
     struct DiskObject *icon = NULL;
     BPTR file;
     if (!IconBase || !data || !size || !base_name || !info_name) return NULL;
+
+    /* icon.library has no public memory-source GetDiskObject() on classic
+     * AmigaOS. Materialise the complete embedded .info briefly in T:, let
+     * icon.library build the native DiskObject, then delete the file again. */
     file = Open((CONST_STRPTR)info_name, MODE_NEWFILE);
     if (file) {
         LONG written = Write(file, (APTR)data, (LONG)size);
@@ -59,29 +74,42 @@ static void load_iconify_disk_object(AmgGui *gui)
         amg_icon_iconified_info, amg_icon_iconified_info_size,
         "T:AmiMail-Iconified-Embedded",
         "T:AmiMail-Iconified-Embedded.info");
+
+    /* Safety fallback for unusual systems where T: or icon.library rejects
+     * the embedded icon. The installed program icon remains usable. */
     if (!gui->icon_iconified && IconBase)
         gui->icon_iconified = GetDiskObject((CONST_STRPTR)"PROGDIR:AmiMail");
 }
 
+/*
+ * WindowObject/EndWindow spans several expressions.  Keep the same classic
+ * GCC/ReAction NewObject handling as the previously tested gui.c.
+ */
 #ifdef NewObject
 #undef NewObject
 #endif
+
 #ifdef ButtonObject
 #undef ButtonObject
 #endif
-#define ButtonObject NewObject(NULL,(CONST_STRPTR)"button.gadget"
+#define ButtonObject NewObject(NULL, (CONST_STRPTR)"button.gadget"
+
 #define GUI_MESSAGE_FLAG_COLUMN_WIDTH 16
-#define T(de,en) amg_tr((de),(en))
-static UWORD solid_fill_pattern[2]={0xffffU,0xffffU};
+#define T(de, en) amg_tr((de), (en))
+
+/* LAYOUT_FillPattern uses the classic two-row, 16-bit area pattern. */
+static UWORD solid_fill_pattern[2] = {0xffffU, 0xffffU};
+
 static struct NewMenu menus_de[] = {
     {NM_TITLE, (STRPTR)"Datei", NULL, 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Kontakte...", (STRPTR)"K", 0, 0, NULL},
-    {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Konto-Einstellungen...", (STRPTR)"E", 0, 0, NULL},
     {NM_ITEM, (STRPTR)"\334ber AmiMail...", NULL, 0, 0, NULL},
     {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Beenden", (STRPTR)"Q", 0, 0, NULL},
     {NM_TITLE, (STRPTR)"Bearbeiten", NULL, 0, 0, NULL},
+    {NM_ITEM, (STRPTR)"Kontaktverwaltung", (STRPTR)"K", 0, 0, NULL},
+    {NM_ITEM, (STRPTR)"Signatur", NULL, 0, 0, NULL},
+    {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Papierkorb leeren...", NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Spam leeren...", NULL, 0, 0, NULL},
     {NM_END, NULL, NULL, 0, 0, NULL}
@@ -89,17 +117,19 @@ static struct NewMenu menus_de[] = {
 
 static struct NewMenu menus_en[] = {
     {NM_TITLE, (STRPTR)"File", NULL, 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Contacts...", (STRPTR)"C", 0, 0, NULL},
-    {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Account settings...", (STRPTR)"E", 0, 0, NULL},
     {NM_ITEM, (STRPTR)"About AmiMail...", NULL, 0, 0, NULL},
     {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, NULL},
     {NM_TITLE, (STRPTR)"Edit", NULL, 0, 0, NULL},
+    {NM_ITEM, (STRPTR)"Contact management", (STRPTR)"C", 0, 0, NULL},
+    {NM_ITEM, (STRPTR)"Signature", NULL, 0, 0, NULL},
+    {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Empty Trash...", NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Empty Spam...", NULL, 0, 0, NULL},
     {NM_END, NULL, NULL, 0, 0, NULL}
 };
+
 static ULONG compact_text_render_subentry(struct Hook *hook,
                                           struct Node *node, APTR message)
 {
@@ -164,20 +194,19 @@ static void init_compact_list_render_hooks(AmgGui *gui)
 
     memset(&gui->system_label_render_hook, 0,
            sizeof(gui->system_label_render_hook));
-    gui->system_label_render_hook.h_Entry =
-        (__typeof__(gui->system_label_render_hook.h_Entry))HookEntry;
+    gui->system_label_render_hook.h_Entry = (__typeof__(gui->system_label_render_hook.h_Entry))HookEntry;
     gui->system_label_render_hook.h_SubEntry =
         (__typeof__(gui->system_label_render_hook.h_SubEntry))compact_text_render_subentry;
     gui->system_label_render_hook.h_Data = NULL;
 
     memset(&gui->message_flag_render_hook, 0,
            sizeof(gui->message_flag_render_hook));
-    gui->message_flag_render_hook.h_Entry =
-        (__typeof__(gui->message_flag_render_hook.h_Entry))HookEntry;
+    gui->message_flag_render_hook.h_Entry = (__typeof__(gui->message_flag_render_hook.h_Entry))HookEntry;
     gui->message_flag_render_hook.h_SubEntry =
         (__typeof__(gui->message_flag_render_hook.h_SubEntry))compact_text_render_subentry;
     gui->message_flag_render_hook.h_Data = gui; /* centre flag column */
 }
+
 
 static unsigned short banner_be16(const unsigned char *data)
 {
@@ -279,6 +308,8 @@ static void prepare_update_pen(AmgGui *gui)
 {
     LONG pen;
     if (!gui || !gui->screen) return;
+    /* Deep blue (#003366) stays readable on the banner's #888888 grey
+     * without the visual harshness of the previous full-intensity red. */
     pen = ObtainBestPenA(gui->screen->ViewPort.ColorMap,
                          0x00000000UL, 0x33333333UL, 0x66666666UL, NULL);
     if (pen >= 0) {
@@ -291,7 +322,7 @@ static void prepare_update_pen(AmgGui *gui)
     gui->update_pen = pen >= 0 ? pen : (LONG)gui->screen->DetailPen;
 }
 
- void center_window_on_screen(struct Window *window)
+void center_window_on_screen(struct Window *window)
 {
     LONG left, top;
     if (!window || !window->WScreen) return;
@@ -302,7 +333,7 @@ static void prepare_update_pen(AmgGui *gui)
     MoveWindow(window, left - window->LeftEdge, top - window->TopEdge);
 }
 
- void draw_embedded_banner_at(AmgGui *gui, struct Window *window,
+void draw_embedded_banner_at(AmgGui *gui, struct Window *window,
                                     LONG left, LONG top,
                                     LONG available_width, LONG available_height)
 {
@@ -391,7 +422,7 @@ static void draw_banner(AmgGui *gui)
 
 static void draw_version_text(AmgGui *gui)
 {
-    static const char version_text[] = "Version " AMIMAIL_VERSION;
+    static const char version_text[] = "Version " AMIGMAIL_VERSION;
     struct RastPort *rp;
     struct TextFont *old_font;
     LONG header_top, status_top, right, text_width, text_x, text_y;
@@ -471,7 +502,7 @@ static void draw_message_flag_header(AmgGui *gui)
     if (old_font) SetFont(rp, old_font);
 }
 
- void draw_window_overlays(AmgGui *gui)
+void draw_window_overlays(AmgGui *gui)
 {
     draw_banner(gui);
     gui_update_refresh_gadget(gui);
@@ -495,6 +526,7 @@ int create_window(AmgGui *gui, AmgError *error)
             return AMG_ERR_MEMORY;
         }
     }
+
     gui->screen = LockPubScreen(NULL);
     if (!gui->screen) {
         amg_error_set(error, AMG_ERR_IO,
@@ -529,7 +561,9 @@ int create_window(AmgGui *gui, AmgError *error)
         LAYOUT_AddChild, VGroupObject,
             LAYOUT_SpaceOuter, TRUE,
             LAYOUT_SpaceInner, FALSE,
-            /* Version text is a JAM1 overlay so the banner remains visible. */
+            /* Reserve a small first line for the version text.  The text
+             * itself is drawn as a JAM1 overlay in draw_version_text(), so
+             * no gadget background can cover the header artwork. */
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, FALSE,
@@ -592,6 +626,7 @@ int create_window(AmgGui *gui, AmgError *error)
         LBCIA_Weight, 13,
         LBCIA_AutoSort, TRUE,
         LBCIA_SortArrow, TRUE,
+        LBCIA_DraggableSeparator, TRUE,
         TAG_DONE);
     if (!gui->columns) {
         amg_error_set(error, AMG_ERR_MEMORY,
@@ -663,7 +698,11 @@ int create_window(AmgGui *gui, AmgError *error)
                 LAYOUT_SpaceInner, TRUE,
 
                 LAYOUT_AddChild, HGroupObject,
-                    LAYOUT_EvenSize, TRUE,
+                    /* Keep the six main action buttons equally weighted.
+                     * Spacing is explicit so the arrow can sit directly
+                     * against Reply without changing the other gaps. */
+                    LAYOUT_EvenSize, FALSE,
+                    LAYOUT_SpaceInner, FALSE,
                     LAYOUT_AddChild,
                         gui->new_mail_gadget = (struct Gadget *)ButtonObject,
                         GA_ID, GID_NEW_MAIL,
@@ -671,37 +710,77 @@ int create_window(AmgGui *gui, AmgError *error)
                         GA_Text, T("_Neue Mail", "_New mail"),
                     EndObject,
                     CHILD_MinWidth, 92,
+                    CHILD_WeightedWidth, 100,
+                    LAYOUT_AddChild, HGroupObject, EndObject,
+                    CHILD_MinWidth, 4,
+                    CHILD_MaxWidth, 4,
+                    CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_FETCH,
                         GA_RelVerify, TRUE,
                         GA_Text, T("_Abrufen", "_Fetch"),
                     EndObject,
                     CHILD_MinWidth, 92,
+                    CHILD_WeightedWidth, 100,
+                    LAYOUT_AddChild, HGroupObject, EndObject,
+                    CHILD_MinWidth, 4,
+                    CHILD_MaxWidth, 4,
+                    CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         gui->reply_gadget = (struct Gadget *)ButtonObject,
                         GA_ID, GID_REPLY,
                         GA_RelVerify, TRUE,
-                        GA_Text, T("A_ntworten", "_Reply"),
+                        GA_Text, window_current_mailbox_is_drafts(gui)
+                            ? T("_Bearbeiten", "_Edit")
+                            : T("A_ntworten", "_Reply"),
                     EndObject,
                     CHILD_MinWidth, 92,
+                    CHILD_WeightedWidth, 100,
+                    LAYOUT_AddChild,
+                        gui->reply_menu_gadget =
+                            (struct Gadget *)ButtonObject,
+                        GA_ID, GID_REPLY_MENU,
+                        GA_RelVerify, TRUE,
+                        GA_Disabled, window_current_mailbox_is_drafts(gui)
+                            ? TRUE : FALSE,
+                        GA_Text, "v",
+                    EndObject,
+                    CHILD_MinWidth, 18,
+                    CHILD_MaxWidth, 18,
+                    CHILD_WeightedWidth, 0,
+                    LAYOUT_AddChild, HGroupObject, EndObject,
+                    CHILD_MinWidth, 4,
+                    CHILD_MaxWidth, 4,
+                    CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_DELETE,
                         GA_RelVerify, TRUE,
                         GA_Text, T("_L\366schen", "_Delete"),
                     EndObject,
                     CHILD_MinWidth, 92,
+                    CHILD_WeightedWidth, 100,
+                    LAYOUT_AddChild, HGroupObject, EndObject,
+                    CHILD_MinWidth, 4,
+                    CHILD_MaxWidth, 4,
+                    CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_MOVE,
                         GA_RelVerify, TRUE,
                         GA_Text, T("_Verschieben", "_Move"),
                     EndObject,
                     CHILD_MinWidth, 92,
+                    CHILD_WeightedWidth, 100,
+                    LAYOUT_AddChild, HGroupObject, EndObject,
+                    CHILD_MinWidth, 4,
+                    CHILD_MaxWidth, 4,
+                    CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_SEEN,
                         GA_RelVerify, TRUE,
                         GA_Text, T("_Un/Gelesen", "_Read/Unread"),
                     EndObject,
                     CHILD_MinWidth, 92,
+                    CHILD_WeightedWidth, 100,
                 EndObject,
                 CHILD_WeightedHeight, 0,
 
@@ -871,17 +950,18 @@ int create_window(AmgGui *gui, AmgError *error)
     EndWindow;
 
     if (!gui->window_object) {
+        if (gui->icon_iconified) FreeDiskObject(gui->icon_iconified);
+        gui->icon_iconified = NULL;
         FreeLBColumnInfo(gui->columns);
         gui->columns = NULL;
         gui->labels_scroller = NULL;
         gui->messages_scroller = NULL;
         gui->preview_scroller = NULL;
         amg_error_set(error, AMG_ERR_MEMORY,
-                      T("ReAction-Fenster konnte nicht erzeugt werden.",
-                        "ReAction window could not be created."));
+                      "ReAction-Fenster konnte nicht erzeugt werden.");
         return AMG_ERR_MEMORY;
     }
     return AMG_OK;
 }
 
-#endif /* AMIGMAIL_AMIGA */
+#endif

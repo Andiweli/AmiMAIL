@@ -1,16 +1,33 @@
 # Changelog
 
+## AmiMail 1.1 - 2026-08-19
+
+- update the program and package version to 1.1; the visible header, About window and startup splash follow the central `AMIMAIL_VERSION`
+- use the central version macro for the binary client identification and `$VER:` string; update the `$VER:` date to 19.08.2026
+- add the compact Reply split button from the tested AmiGmail UI: the main action remains Reply while the adjacent arrow offers Reply All and Forward
+- add Reply All with duplicate/self-recipient filtering
+- add Forward with forwarded message headers and existing MIME attachments within the normal 8-attachment/10 MB limits
+- add local signature management under Edit; the signature is stored in `ENVARC:AmiMail/signature.txt`
+- insert the signature automatically into new messages, mailto bodies, replies, Reply All and forwards, while avoiding duplicate insertion when editing existing drafts
+- use the compact signature editor layout with the final tested ReAction spacing and keyboard behavior
+- move the address-book entry to **Edit -> Contact management**, place **Signature** directly below it, and rename the main contacts window to **Contact management**
+- keep message columns at their defined default widths on every launch; no persistent column-width state is used
+- add a centered ReAction startup splash using the embedded AmiMail banner, current version, localized `Mail-Client für AmigaOS 3.2` / `Mail client for AmigaOS 3.2` text and `© Andreas Stürmer`
+- use the normal application/screen font, left-aligned splash text and a subtle ReAction frame
+- use separate temporary ReAction library references for the splash so closing it does not invalidate the library bases used by the main GUI
+- remove the `Andiweli` nickname from the visible About-window and splash copyright lines
+- preserve AmiMail's original application/header background palette while integrating the new UI features
+
 ## AmiMail 1.0 - 2026-08-17 - Final release
 
 - promote the tested AmiMail 1.0 RC2 code base to the final AmiMail 1.0 release
-- fix startup new-mail detection when the persisted Inbox baseline is UID 0, so the first mail received while AmiMail was not running now triggers the configured notification sound after launch
+- fix startup new-mail detection when the persisted Inbox baseline is UID 0, so the first mail received while AmiMail was not running triggers the configured notification sound after launch
 - add `SMTP nutzt den gleichen Login` / `SMTP uses same credentials` to the account settings
 - when enabled, SMTP uses the effective IMAP username and IMAP password while the separate SMTP login fields are disabled
 - preserve separate SMTP credentials when the shared-login option is enabled, so they are available again when the option is disabled
 - persist the shared SMTP-login setting in the backward-compatible `AMIMAIL-ACCOUNT-2` account format
 - increase the Workbench program icon stack size to 100000 for reliable operation on the tested AmigaOS setup
 - update the embedded program identification, `$VER:` string, Makefile package version and visible header/About version to 1.0
-
 
 ## AmiMail 1.0 RC2 - 2026-08-15 - Public release candidate 2
 

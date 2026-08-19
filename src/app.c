@@ -5,6 +5,7 @@
 #include "gui.h"
 #include "i18n.h"
 #include "mailto.h"
+#include "splash.h"
 #include "storage.h"
 
 #include <stdio.h>
@@ -74,7 +75,7 @@ int amg_app_run(int argc, char **argv)
         }
 
         /* Browser external-command handlers may wait for the launched
-         * process.  Turn the first mailto: invocation into a short-lived
+         * process. Turn the first mailto: invocation into a short-lived
          * hand-off and start the real AmiMail instance asynchronously. */
         if (!detached_mailto_child &&
             amg_mailto_spawn_detached(startup_mailto)) {
@@ -92,6 +93,10 @@ int amg_app_run(int argc, char **argv)
         free(startup_mailto);
         return 0;
     }
+
+    /* Only the real primary instance gets a splash. Short-lived mailto:
+     * forwarding/detach helpers above have already returned at this point. */
+    amg_splash_open();
 
     amg_account_init(&account);
 #if AMIGMAIL_AMIGA
@@ -138,12 +143,19 @@ int amg_app_run(int argc, char **argv)
 #endif
     gui = amg_gui_create(&account, &error);
     if (!gui) {
+        amg_splash_close();
         print_local_error(error.message);
         amg_mailto_server_destroy(mailto_server);
         amg_account_clear(&account);
         free(startup_mailto);
         return 20;
     }
+
+    /* Keep the splash up through account/config loading and construction of
+     * the ReAction GUI, then remove it immediately before the main event
+     * loop takes over. */
+    amg_splash_close();
+
     result = amg_gui_run(gui, mailto_server, startup_mailto, &error);
     if (result != AMG_OK) print_local_error(error.message);
     amg_gui_destroy(gui);

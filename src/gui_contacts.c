@@ -729,7 +729,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
         return;
     }
     dialog = WindowObject,
-        WA_Title, T("AmiMail - Kontakte", "AmiMail - Contacts"),
+        WA_Title, T("AmiMail - Kontaktverwaltung", "AmiMail - Contact management"),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                   WFLG_SIZEGADGET | WFLG_ACTIVATE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
@@ -887,8 +887,8 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
 
                             if (selected_count == 1U) {
                                 snprintf(question, sizeof(question), "%s",
-                                    T("Kontakt wirklich l\366schen?",
-                                      "Really delete contact?"));
+                                         T("Kontakt wirklich l\366schen?",
+                                           "Really delete contact?"));
                             } else {
                                 amg_tr_snprintf(
                                     question, sizeof(question),
@@ -896,12 +896,11 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                                     "Really delete %lu selected contacts?",
                                     (unsigned long)selected_count);
                             }
-
                             if (confirm_question_dialog_for_window(
                                     gui, window, question,
                                     T("Dieser Vorgang kann nicht widerrufen werden.",
                                       "This action cannot be undone."),
-                                    340L)) {
+                                    330L)) {
                                 for (i = 0U; i < selected_count; ++i) {
                                     if (amg_contacts_delete(
                                             &book, ids[i], error) != AMG_OK) {

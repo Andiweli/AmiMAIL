@@ -1852,7 +1852,7 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
             CHILD_WeightedHeight, 0,
 
             LAYOUT_AddChild,
-                static_text_label("\251 Andreas 'Andiweli' St\374rmer"),
+                static_text_label("\251 Andreas St\374rmer"),
             CHILD_MinHeight, line_height,
             CHILD_MaxHeight, line_height,
             CHILD_WeightedHeight, 0,
