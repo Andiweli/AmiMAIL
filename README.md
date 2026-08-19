@@ -8,6 +8,7 @@
 ![ReAction](https://img.shields.io/badge/GUI-ReAction-green)
 ![AmiSSL](https://img.shields.io/badge/TLS-AmiSSL-lightgrey)
 ![AI](https://img.shields.io/badge/AI-assisted%20coding-6e7781)
+[![Support via PayPal](https://img.shields.io/badge/Support%20via-PayPal-0070BA?logo=paypal&logoColor=white)](https://paypal.me/andiweli)
 
 ## 🌐 About
 
@@ -94,6 +95,16 @@ Additional interface languages are not planned.
 ## 🔗 References
 
 - [AmiSSL project](https://github.com/jens-maus/amissl)
+
+## ❤️ Support
+
+If you enjoy this project and would like to support my work, you can make a small contribution via PayPal.
+
+Your support helps me spend more time maintaining existing projects, fixing bugs, improving compatibility, and working on new features.
+
+[![Support via PayPal](https://img.shields.io/badge/Support%20via-PayPal-0070BA?logo=paypal\&logoColor=white)](https://paypal.me/andiweli)
+
+Thank you for your support!
 
 ## 📧 Legal
 
