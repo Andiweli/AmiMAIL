@@ -1842,11 +1842,7 @@ if (amg_storage_cache_session_key(
     if (changed) {
         if (periodic_fetch_changed)
             periodic_timer_restart(gui);
-        if (persistent_cache_warning)
-            status_local(gui,
-                T("Konto gespeichert; dauerhafte Entsperrung konnte nicht gespeichert werden.",
-                  "Account saved; persistent unlock could not be stored."));
-        else if (session_cache_warning)
+        if (session_cache_warning)
             status_local(gui,
                 T("Konto ist entsperrt; Sitzungsschl\374ssel konnte nicht in ENV: gespeichert werden.",
                   "Account is unlocked; session key could not be stored in ENV:."));
@@ -1913,7 +1909,7 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
     banner_slot = HGroupObject,
         LAYOUT_SpaceOuter, FALSE,
         LAYOUT_SpaceInner, FALSE,
-        LAYOUT_FillPen, gui->banner_pens[2],
+        LAYOUT_FillPen, gui->banner_pens[0],
         LAYOUT_FillPattern,
             (ULONG)(uintptr_t)about_header_fill_pattern,
     EndObject;
@@ -1936,7 +1932,7 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_FillPen, gui->banner_pens[2],
+                LAYOUT_FillPen, gui->banner_pens[0],
                 LAYOUT_FillPattern,
                     (ULONG)(uintptr_t)about_header_fill_pattern,
                 LAYOUT_AddChild, banner_slot,
@@ -1949,7 +1945,7 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
                 LAYOUT_AddChild, VGroupObject,
                     LAYOUT_SpaceOuter, FALSE,
                     LAYOUT_SpaceInner, FALSE,
-                    LAYOUT_FillPen, gui->banner_pens[2],
+                    LAYOUT_FillPen, gui->banner_pens[0],
                     LAYOUT_FillPattern,
                         (ULONG)(uintptr_t)about_header_fill_pattern,
                     LAYOUT_AddChild, static_text_label("AmiMail " AMIGMAIL_VERSION),

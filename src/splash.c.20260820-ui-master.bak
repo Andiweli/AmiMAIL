@@ -159,15 +159,6 @@ static void splash_draw_banner(void)
     left = (LONG)slot->LeftEdge;
     top = (LONG)slot->TopEdge;
 
-    if (slot->Width > 0 && slot->Height > 0) {
-        /* AmiMAIL CMAP index 2 is the exact #888888 banner background. */
-        SetAPen(rastport, (ULONG)splash_pens[2]);
-        RectFill(rastport,
-                 left, top,
-                 left + (LONG)slot->Width - 1L,
-                 top + (LONG)slot->Height - 1L);
-    }
-
     header = splash_chunk("BMHD", &header_length);
     body = splash_chunk("BODY", &body_length);
     if (!header || header_length < 20U || !body) return;
@@ -334,7 +325,8 @@ static Object *splash_create_window_object(void)
         LAYOUT_BevelStyle, BVS_THIN,
         LAYOUT_AddChild, (ULONG)(uintptr_t)splash_banner_slot,
         CHILD_MinWidth, SPLASH_BANNER_WIDTH,
-        CHILD_WeightedWidth, 100,
+        CHILD_MaxWidth, SPLASH_BANNER_WIDTH,
+        CHILD_WeightedWidth, 0,
         CHILD_MinHeight, SPLASH_BANNER_HEIGHT,
         CHILD_MaxHeight, SPLASH_BANNER_HEIGHT,
         CHILD_WeightedHeight, 0,

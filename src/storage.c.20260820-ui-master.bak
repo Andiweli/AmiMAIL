@@ -16,10 +16,7 @@
 #include <openssl/evp.h>
 #endif
 
-#define STORAGE_ITERATIONS_CURRENT 5000UL
-#define STORAGE_ITERATIONS_LEGACY 100000UL
-#define STORAGE_ITERATIONS_MIN 1000UL
-#define STORAGE_ITERATIONS_MAX 1000000UL
+#define STORAGE_ITERATIONS 100000
 #define STORAGE_HEADER_V1 "AMIMAIL-ACCOUNT-1\n"
 #define STORAGE_HEADER_V2 "AMIMAIL-ACCOUNT-2\n"
 #define SESSION_HEADER "AMIMAIL-SESSION-KEY-1\n"
@@ -100,8 +97,7 @@ static int encrypt_secrets(const char *master, const unsigned char *plain,
         amg_random_bytes(iv, 12U) != AMG_OK)
         goto done;
     if (PKCS5_PBKDF2_HMAC(master, (int)strlen(master), salt, 16,
-                          (int)STORAGE_ITERATIONS_CURRENT,
-                          EVP_sha256(), 32, key) != 1)
+                          STORAGE_ITERATIONS, EVP_sha256(), 32, key) != 1)
         goto done;
     ctx = EVP_CIPHER_CTX_new();
     if (!ctx ||
@@ -140,20 +136,16 @@ done:
 }
 
 static int derive_storage_key(const char *master, const unsigned char salt[16],
-                              unsigned long iterations,
                               unsigned char key[SESSION_KEY_SIZE],
                               AmgError *error)
 {
     int result;
     if (!master || !*master || !salt || !key) return AMG_ERR_ARGUMENT;
-    if (iterations < STORAGE_ITERATIONS_MIN ||
-        iterations > STORAGE_ITERATIONS_MAX)
-        return AMG_ERR_PARSE;
     memset(key, 0, SESSION_KEY_SIZE);
     result = amg_tls_global_init(error);
     if (result != AMG_OK) return result;
     if (PKCS5_PBKDF2_HMAC(master, (int)strlen(master), salt, 16,
-                          (int)iterations, EVP_sha256(),
+                          STORAGE_ITERATIONS, EVP_sha256(),
                           (int)SESSION_KEY_SIZE, key) != 1) {
         amg_tls_global_cleanup();
         amg_secure_clear(key, SESSION_KEY_SIZE);
@@ -214,14 +206,13 @@ done:
 static int decrypt_secrets(const char *master, const unsigned char *cipher,
                            size_t cipher_length, const unsigned char salt[16],
                            const unsigned char iv[12],
-                           const unsigned char tag[16],
-                           unsigned long iterations, AmgBuffer *plain,
+                           const unsigned char tag[16], AmgBuffer *plain,
                            AmgError *error)
 {
     unsigned char key[SESSION_KEY_SIZE];
     int result;
     memset(key, 0, sizeof(key));
-    result = derive_storage_key(master, salt, iterations, key, error);
+    result = derive_storage_key(master, salt, key, error);
     if (result == AMG_OK)
         result = decrypt_secrets_with_key(key, cipher, cipher_length,
                                           iv, tag, plain, error);
@@ -260,7 +251,7 @@ int amg_storage_save_account(const char *path,const AmgAccount *account,const ch
         amg_buffer_append_cstr(&plain,"\nrefresh_token=");if(account->refresh_token)hex_encode((unsigned char*)account->refresh_token,strlen(account->refresh_token),&plain);amg_buffer_append_char(&plain,'\n');
 #if AMIGMAIL_AMIGA
         if(result==AMG_OK)result=encrypt_secrets(master_password,plain.data,plain.length,salt,iv,tag,&cipher,error);
-        if(result==AMG_OK){fprintf(file,"secrets=aes-256-gcm\niterations=%lu\n",STORAGE_ITERATIONS_CURRENT);result=write_hex_line(file,"salt",salt,16U);}
+        if(result==AMG_OK){fprintf(file,"secrets=aes-256-gcm\niterations=%d\n",STORAGE_ITERATIONS);result=write_hex_line(file,"salt",salt,16U);}
         if(result==AMG_OK)result=write_hex_line(file,"iv",iv,12U);
         if(result==AMG_OK)result=write_hex_line(file,"tag",tag,16U);
         if(result==AMG_OK)result=write_hex_line(file,"ciphertext",cipher.data,cipher.length);
@@ -287,26 +278,6 @@ static char *read_all(const char *path,size_t *length)
 static const char *field(const char *data,const char *name,char *value,size_t size)
 {
     size_t n=strlen(name);const char *p=data;while((p=strstr(p,name))!=NULL){if((p==data||p[-1]=='\n')&&p[n]=='='){const char *start=p+n+1U,*end=strchr(start,'\n');size_t len;if(!end)end=start+strlen(start);len=(size_t)(end-start);if(len&&start[len-1U]=='\r')--len;if(len>=size)len=size-1U;memcpy(value,start,len);value[len]=0;return value;}p+=n;}return NULL;
-}
-
-
-static unsigned long storage_iterations_from_data(const char *data)
-{
-    char value[64];
-    char *end = NULL;
-    unsigned long iterations;
-
-    if (!data) return 0UL;
-    if (!field(data, "iterations", value, sizeof(value)))
-        return STORAGE_ITERATIONS_LEGACY;
-
-    iterations = strtoul(value, &end, 10);
-    while (end && (*end == ' ' || *end == '\t' || *end == '\r')) ++end;
-    if (!value[0] || (end && *end) ||
-        iterations < STORAGE_ITERATIONS_MIN ||
-        iterations > STORAGE_ITERATIONS_MAX)
-        return 0UL;
-    return iterations;
 }
 
 int amg_storage_load_legacy_master(const char *path, char *output,
@@ -377,53 +348,6 @@ static int read_account_salt(const char *path, unsigned char salt[16],
 }
 #endif
 
-
-static int read_account_iterations(const char *path,
-                                   unsigned long *iterations,
-                                   AmgError *error)
-{
-    size_t length;
-    char *data;
-    char value[64];
-    unsigned long parsed;
-    int result = AMG_ERR_PARSE;
-
-    if (!path || !iterations) return AMG_ERR_ARGUMENT;
-    *iterations = 0UL;
-    data = read_all(path, &length);
-    (void)length;
-    if (!data) return AMG_ERR_IO;
-
-    if (storage_header_version(data) &&
-        field(data, "secrets", value, sizeof(value)) &&
-        !strcmp(value, "aes-256-gcm")) {
-        parsed = storage_iterations_from_data(data);
-        if (parsed) {
-            *iterations = parsed;
-            result = AMG_OK;
-        }
-    }
-
-    amg_secure_clear(data, strlen(data));
-    free(data);
-    if (result != AMG_OK)
-        amg_error_set(error, result,
-                      T("Kontodatei enthält ungültige KDF-Daten.",
-                        "Account file contains invalid KDF data."));
-    return result;
-}
-
-int amg_storage_account_needs_kdf_refresh(const char *path)
-{
-    unsigned long iterations = 0UL;
-    AmgError error;
-    memset(&error, 0, sizeof(error));
-    if (read_account_iterations(path, &iterations, &error) != AMG_OK)
-        return 0;
-    return iterations == STORAGE_ITERATIONS_LEGACY &&
-           STORAGE_ITERATIONS_CURRENT != STORAGE_ITERATIONS_LEGACY;
-}
-
 void amg_storage_forget_session_key(const char *session_path)
 {
     if (session_path && *session_path) discard_file(session_path);
@@ -437,7 +361,6 @@ int amg_storage_cache_session_key(const char *account_path,
 #if AMIGMAIL_AMIGA
     unsigned char salt[16];
     unsigned char key[SESSION_KEY_SIZE];
-    unsigned long iterations = 0UL;
     char temporary[512];
     FILE *file = NULL;
     int result;
@@ -449,10 +372,7 @@ int amg_storage_cache_session_key(const char *account_path,
     memset(key, 0, sizeof(key));
     result = read_account_salt(account_path, salt, error);
     if (result == AMG_OK)
-        result = read_account_iterations(account_path, &iterations, error);
-    if (result == AMG_OK)
-        result = derive_storage_key(master_password, salt, iterations,
-                                    key, error);
+        result = derive_storage_key(master_password, salt, key, error);
     if (result == AMG_OK) {
         if (strlen(session_path) + 5U >= sizeof(temporary))
             result = AMG_ERR_LIMIT;
@@ -583,11 +503,9 @@ static int load_account_internal(const char *path, const char *master_password,
     if (field(data, "secrets", value, sizeof(value)) &&
         !strcmp(value, "aes-256-gcm")) {
         AmgBuffer salt, iv, tag, cipher, plain;
-        unsigned long iterations = storage_iterations_from_data(data);
         amg_buffer_init(&salt); amg_buffer_init(&iv); amg_buffer_init(&tag);
         amg_buffer_init(&cipher); amg_buffer_init(&plain);
-        if (!iterations ||
-            !field(data, "salt", value, sizeof(value)) ||
+        if (!field(data, "salt", value, sizeof(value)) ||
             hex_decode(value, &salt) != AMG_OK ||
             !field(data, "iv", value, sizeof(value)) ||
             hex_decode(value, &iv) != AMG_OK ||
@@ -606,7 +524,7 @@ static int load_account_internal(const char *path, const char *master_password,
         } else if (master_password && *master_password) {
             result = decrypt_secrets(master_password, cipher.data,
                                      cipher.length, salt.data, iv.data,
-                                     tag.data, iterations, &plain, error);
+                                     tag.data, &plain, error);
         } else {
             result = AMG_ERR_AUTH;
         }

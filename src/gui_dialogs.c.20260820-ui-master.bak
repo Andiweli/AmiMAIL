@@ -35,13 +35,11 @@
 #define ButtonObject NewObject(NULL,(CONST_STRPTR)"button.gadget"
 #define GUI_ACCOUNT_FIELD_GAP 1
 #define GUI_ACCOUNT_LABEL_WIDTH 150
-#define GUI_ABOUT_BANNER_WIDTH 170L
-#define GUI_ABOUT_BANNER_HEIGHT 28L
 #define GUI_RAWKEY_NP_ENTER 0x43UL
 #define GUI_RAWKEY_RETURN 0x44UL
 #define GUI_RAWKEY_ESCAPE 0x45UL
 #define T(de,en) amg_tr((de),(en))
-enum AccountGadgetId { GID_ACCOUNT_NAME=100,GID_ACCOUNT_EMAIL,GID_ACCOUNT_IMAP_HOST,GID_ACCOUNT_IMAP_PORT,GID_ACCOUNT_IMAP_STARTTLS,GID_ACCOUNT_IMAP_USERNAME,GID_ACCOUNT_IMAP_PASSWORD,GID_ACCOUNT_SMTP_HOST,GID_ACCOUNT_SMTP_PORT,GID_ACCOUNT_SMTP_STARTTLS,GID_ACCOUNT_SMTP_SAME_CREDENTIALS,GID_ACCOUNT_SMTP_USERNAME,GID_ACCOUNT_SMTP_PASSWORD,GID_ACCOUNT_FOLDER_MAPPING,GID_ACCOUNT_MASTER_PASSWORD,GID_ACCOUNT_NO_MASTER_PROMPT,GID_ACCOUNT_FETCH_DAYS,GID_ACCOUNT_FETCH_ON_START,GID_ACCOUNT_PERIODIC_FETCH,GID_ACCOUNT_NOTIFICATION_SOUND,GID_ACCOUNT_NOTIFICATION_PATH,GID_ACCOUNT_NOTIFICATION_CHOOSE,GID_ACCOUNT_STATUS,GID_ACCOUNT_UNLOCK,GID_ACCOUNT_SAVE,GID_ACCOUNT_CANCEL };
+enum AccountGadgetId { GID_ACCOUNT_NAME=100,GID_ACCOUNT_EMAIL,GID_ACCOUNT_IMAP_HOST,GID_ACCOUNT_IMAP_PORT,GID_ACCOUNT_IMAP_STARTTLS,GID_ACCOUNT_IMAP_USERNAME,GID_ACCOUNT_IMAP_PASSWORD,GID_ACCOUNT_SMTP_HOST,GID_ACCOUNT_SMTP_PORT,GID_ACCOUNT_SMTP_STARTTLS,GID_ACCOUNT_SMTP_SAME_CREDENTIALS,GID_ACCOUNT_SMTP_USERNAME,GID_ACCOUNT_SMTP_PASSWORD,GID_ACCOUNT_FOLDER_MAPPING,GID_ACCOUNT_MASTER_PASSWORD,GID_ACCOUNT_FETCH_DAYS,GID_ACCOUNT_FETCH_ON_START,GID_ACCOUNT_PERIODIC_FETCH,GID_ACCOUNT_NOTIFICATION_SOUND,GID_ACCOUNT_NOTIFICATION_PATH,GID_ACCOUNT_NOTIFICATION_CHOOSE,GID_ACCOUNT_STATUS,GID_ACCOUNT_UNLOCK,GID_ACCOUNT_SAVE,GID_ACCOUNT_CANCEL };
 enum FolderMappingGadgetId { GID_FOLDER_SENT=140,GID_FOLDER_DRAFTS,GID_FOLDER_ALL,GID_FOLDER_SPAM,GID_FOLDER_TRASH,GID_FOLDER_SAVE_SENT,GID_FOLDER_OK,GID_FOLDER_CANCEL };
 enum ConfirmGadgetId { GID_CONFIRM_YES=300,GID_CONFIRM_NO };
 enum AboutGadgetId { GID_ABOUT_OK=400 };
@@ -115,22 +113,6 @@ static int account_string_id(ULONG gadget_id)
         default:
             return 0;
     }
-}
-
-static int persistent_unlock_enabled(void)
-{
-    BPTR lock = Lock((CONST_STRPTR)PERSISTENT_KEY_PATH, ACCESS_READ);
-    if (!lock) return 0;
-    UnLock(lock);
-    return 1;
-}
-
-static int account_file_exists(void)
-{
-    BPTR lock = Lock((CONST_STRPTR)ACCOUNT_PATH, ACCESS_READ);
-    if (!lock) return 0;
-    UnLock(lock);
-    return 1;
 }
 
 static int ensure_config_drawer(AmgError *error)
@@ -668,25 +650,12 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                                              "Enter the master password."));
                                 break;
                             }
-                            set_string(
-                                status_gadget, window,
-                                T("Master-Passwort wird gepr\374ft...",
-                                  "Checking master password..."));
-                            RefreshGList(status_gadget, window, NULL, 1);
                             amg_account_init(&loaded);
                             if (amg_storage_load_account(
                                     ACCOUNT_PATH, master, &loaded,
                                     error) == AMG_OK) {
                                 AmgError session_error;
-                                AmgError refresh_error;
                                 memset(&session_error, 0, sizeof(session_error));
-                                memset(&refresh_error, 0, sizeof(refresh_error));
-                                if (amg_storage_account_needs_kdf_refresh(
-                                        ACCOUNT_PATH)) {
-                                    (void)amg_storage_save_account(
-                                        ACCOUNT_PATH, &loaded, master,
-                                        &refresh_error);
-                                }
                                 replace_account(gui, &loaded);
                                 unlocked =
                                     amg_storage_cache_session_key(
@@ -724,7 +693,6 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
     struct Gadget *smtp_starttls_gadget, *smtp_same_credentials_gadget;
     struct Gadget *smtp_username_gadget, *smtp_password_gadget;
     struct Gadget *master_password_gadget, *fetch_days_gadget;
-    struct Gadget *no_master_prompt_gadget;
     struct Gadget *fetch_on_start_gadget, *periodic_fetch_gadget;
     struct Gadget *notification_sound_gadget, *notification_sound_path_gadget;
     struct Gadget *dialog_status;
@@ -739,12 +707,9 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
     int save_sent_copy;
     int done = 0, changed = 0;
     int session_cache_warning = 0;
-    int persistent_cache_warning = 0;
     int network_was_running = amg_network_is_running(gui->network);
     int network_settings_changed = 0;
     int periodic_fetch_changed = 0;
-    int can_unlock_existing = account_file_exists();
-    int persistent_unlock = persistent_unlock_enabled();
 
     name_gadget = NULL;
     email_gadget = NULL;
@@ -760,7 +725,6 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
     smtp_username_gadget = NULL;
     smtp_password_gadget = NULL;
     master_password_gadget = NULL;
-    no_master_prompt_gadget = NULL;
     fetch_days_gadget = NULL;
     fetch_on_start_gadget = NULL;
     periodic_fetch_gadget = NULL;
@@ -1200,41 +1164,6 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
 
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
-                    LAYOUT_AddChild, HGroupObject,
-                        LAYOUT_SpaceOuter, FALSE,
-                        LAYOUT_SpaceInner, FALSE,
-                    EndObject,
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
-                    CHILD_WeightedWidth, 0,
-                    LAYOUT_AddChild,
-                        no_master_prompt_gadget =
-                            (struct Gadget *)ButtonObject,
-                            GA_ID, GID_ACCOUNT_NO_MASTER_PROMPT,
-                            GA_RelVerify, TRUE,
-                            GA_Selected,
-                                persistent_unlock ? TRUE : FALSE,
-                            BUTTON_AutoButton, BAG_CHECKBOX,
-                            BUTTON_PushButton, TRUE,
-                        EndObject,
-                    CHILD_MinWidth, 24,
-                    CHILD_MaxWidth, 24,
-                    CHILD_WeightedWidth, 0,
-                    LAYOUT_AddChild, static_text_label(
-                        T("Master-Passwort beim Start nicht abfragen",
-                          "Do not ask for master password at startup")),
-                EndObject,
-                CHILD_WeightedHeight, 0,
-
-                LAYOUT_AddChild, HGroupObject,
-                    LAYOUT_SpaceOuter, FALSE,
-                    LAYOUT_SpaceInner, FALSE,
-                EndObject,
-                CHILD_MinHeight, GUI_ACCOUNT_FIELD_GAP,
-                CHILD_MaxHeight, GUI_ACCOUNT_FIELD_GAP,
-                CHILD_WeightedHeight, 0,
-
-                LAYOUT_AddChild, HGroupObject,
-                    LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T("Abruf-Zeitraum (Tage):", "Fetch period (days):")),
                     CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
                     CHILD_WeightedWidth, 0,
@@ -1420,7 +1349,6 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_ACCOUNT_UNLOCK,
                     GA_RelVerify, TRUE,
-                    GA_Disabled, can_unlock_existing ? FALSE : TRUE,
                     GA_Text, T("_Entsperren", "_Unlock"),
                 EndObject,
                 LAYOUT_AddChild, ButtonObject,
@@ -1508,18 +1436,7 @@ int unlock_account_dialog(AmgGui *gui, AmgError *error)
                                         AmgError session_error;
                                         memset(&session_error, 0,
                                                sizeof(session_error));
-                                                                                if (persistent_unlock_enabled()) {
-                                            AmgError persistent_error;
-                                            memset(&persistent_error, 0,
-                                                   sizeof(persistent_error));
-                                            if (amg_storage_cache_session_key(
-                                                    ACCOUNT_PATH,
-                                                    PERSISTENT_KEY_PATH,
-                                                    master,
-                                                    &persistent_error) != AMG_OK)
-                                                persistent_cache_warning = 1;
-                                        }
-if (amg_storage_cache_session_key(
+                                        if (amg_storage_cache_session_key(
                                                 ACCOUNT_PATH,
                                                 SESSION_KEY_PATH, master,
                                                 &session_error) != AMG_OK)
@@ -1586,7 +1503,6 @@ if (amg_storage_cache_session_key(
                                 ULONG imap_starttls = 0;
                                 ULONG smtp_starttls = 0;
                                 ULONG smtp_same_credentials = 0;
-                                ULONG no_master_prompt = 0;
                                 const char *master =
                                     string_text(master_password_gadget);
                                 if (!*master) {
@@ -1791,26 +1707,6 @@ if (amg_storage_cache_session_key(
                                     amg_account_clear(&candidate);
                                     break;
                                 }
-                                GetAttr(
-                                    GA_Selected,
-                                    (Object *)no_master_prompt_gadget,
-                                    &no_master_prompt);
-
-                                if (no_master_prompt) {
-                                    AmgError persistent_error;
-                                    memset(&persistent_error, 0,
-                                           sizeof(persistent_error));
-                                    if (amg_storage_cache_session_key(
-                                            ACCOUNT_PATH,
-                                            PERSISTENT_KEY_PATH,
-                                            master,
-                                            &persistent_error) != AMG_OK)
-                                        persistent_cache_warning = 1;
-                                } else {
-                                    amg_storage_forget_session_key(
-                                        PERSISTENT_KEY_PATH);
-                                }
-
                                 {
                                     AmgError session_error;
                                     memset(&session_error, 0,
@@ -1842,11 +1738,7 @@ if (amg_storage_cache_session_key(
     if (changed) {
         if (periodic_fetch_changed)
             periodic_timer_restart(gui);
-        if (persistent_cache_warning)
-            status_local(gui,
-                T("Konto gespeichert; dauerhafte Entsperrung konnte nicht gespeichert werden.",
-                  "Account saved; persistent unlock could not be stored."));
-        else if (session_cache_warning)
+        if (session_cache_warning)
             status_local(gui,
                 T("Konto ist entsperrt; Sitzungsschl\374ssel konnte nicht in ENV: gespeichert werden.",
                   "Account is unlocked; session key could not be stored in ENV:."));
@@ -1871,24 +1763,17 @@ if (amg_storage_cache_session_key(
     return changed;
 }
 
-static UWORD about_header_fill_pattern[2] = {0xffffU, 0xffffU};
-
 static void draw_about_banner(AmgGui *gui, struct Window *window,
                               Object *banner_slot)
 {
     struct Gadget *gadget;
-    LONG banner_top;
     if (!gui || !window || !banner_slot) return;
     gadget = (struct Gadget *)banner_slot;
-    banner_top = (LONG)gadget->TopEdge;
-    if ((LONG)gadget->Height > GUI_ABOUT_BANNER_HEIGHT)
-        banner_top +=
-            ((LONG)gadget->Height - GUI_ABOUT_BANNER_HEIGHT) / 2L;
     draw_embedded_banner_at(gui, window,
                             (LONG)gadget->LeftEdge,
-                            banner_top,
-                            GUI_ABOUT_BANNER_WIDTH,
-                            GUI_ABOUT_BANNER_HEIGHT);
+                            (LONG)gadget->TopEdge,
+                            (LONG)gadget->Width,
+                            (LONG)gadget->Height);
 }
 
  void about_dialog(AmgGui *gui)
@@ -1899,23 +1784,16 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
     ULONG signal_mask = 0;
     LONG font_height = 8L;
     LONG line_height;
-    LONG header_height;
     int done = 0;
 
     if (!gui || !gui->window || !gui->screen) return;
     if (gui->screen->Font && gui->screen->Font->ta_YSize)
         font_height = (LONG)gui->screen->Font->ta_YSize;
     line_height = font_height + 2L;
-    header_height = line_height * 3L;
-    if (header_height < GUI_ABOUT_BANNER_HEIGHT)
-        header_height = GUI_ABOUT_BANNER_HEIGHT;
 
     banner_slot = HGroupObject,
         LAYOUT_SpaceOuter, FALSE,
         LAYOUT_SpaceInner, FALSE,
-        LAYOUT_FillPen, gui->banner_pens[2],
-        LAYOUT_FillPattern,
-            (ULONG)(uintptr_t)about_header_fill_pattern,
     EndObject;
     if (!banner_slot) return;
 
@@ -1936,22 +1814,16 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_FillPen, gui->banner_pens[2],
-                LAYOUT_FillPattern,
-                    (ULONG)(uintptr_t)about_header_fill_pattern,
                 LAYOUT_AddChild, banner_slot,
-                CHILD_MinWidth, GUI_ABOUT_BANNER_WIDTH,
-                CHILD_MaxWidth, GUI_ABOUT_BANNER_WIDTH,
+                CHILD_MinWidth, 170,
+                CHILD_MaxWidth, 170,
                 CHILD_WeightedWidth, 0,
-                CHILD_MinHeight, header_height,
-                CHILD_MaxHeight, header_height,
+                CHILD_MinHeight, 28,
+                CHILD_MaxHeight, 28,
                 CHILD_WeightedHeight, 0,
                 LAYOUT_AddChild, VGroupObject,
                     LAYOUT_SpaceOuter, FALSE,
                     LAYOUT_SpaceInner, FALSE,
-                    LAYOUT_FillPen, gui->banner_pens[2],
-                    LAYOUT_FillPattern,
-                        (ULONG)(uintptr_t)about_header_fill_pattern,
                     LAYOUT_AddChild, static_text_label("AmiMail " AMIGMAIL_VERSION),
                     CHILD_MinHeight, line_height,
                     CHILD_MaxHeight, line_height,

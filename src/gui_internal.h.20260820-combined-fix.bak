@@ -35,7 +35,6 @@ struct DiskObject;
 #define ACCOUNT_PATH "ENVARC:AmiMail/account.cfg"
 #define ACCOUNT_DRAWER "ENVARC:AmiMail"
 #define SESSION_KEY_PATH "ENV:AmiMail.session-key"
-#define PERSISTENT_KEY_PATH "ENVARC:AmiMail/account.key"
 
 enum MainGadgetId {
     GID_NEW_MAIL = 1,

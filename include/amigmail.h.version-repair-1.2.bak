@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #define AMIMAIL_NAME "AmiMail"
-#define AMIMAIL_VERSION "1.2"
+#define AMIMAIL_VERSION "1.1"
 /* Legacy internal names are kept as aliases while the codebase is gradually
  * renamed; new AmiMail-specific code should use AMIMAIL_* directly. */
 #define AMIGMAIL_NAME AMIMAIL_NAME

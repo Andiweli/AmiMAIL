@@ -17,6 +17,5 @@ int amg_storage_cache_session_key(const char *account_path,
                                   const char *master_password,
                                   AmgError *error);
 void amg_storage_forget_session_key(const char *session_path);
-int amg_storage_account_needs_kdf_refresh(const char *path);
 
 #endif

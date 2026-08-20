@@ -1,5 +1,24 @@
 # Changelog
 
+## AmiMail 1.2 - 2026-08-20
+
+- update the program, package and release-asset version to 1.2
+- improve first-run account configuration: **Unlock** is disabled until an encrypted account configuration actually exists
+- fix master-password handling so the PBKDF2 iteration count stored in `account.cfg` is actually used when deriving and validating encryption keys
+- retain compatibility with existing 100000-round encrypted account files while newly saved accounts use a more practical PBKDF2 cost for 68k Amiga systems
+- automatically migrate a successfully unlocked legacy account to the current KDF settings without storing the master password itself
+- show `Master-Passwort wird geprüft...` / `Checking master password...` while the password verification is running
+- fix the German `ü` in the master-password status message for the native Amiga character set
+- add **Master-Passwort beim Start nicht abfragen** / **Do not ask for master password at startup** to the account configuration
+- when enabled, store only the derived account key in `ENVARC:AmiMail/account.key`, allowing AmiMail to start without requesting the master password again
+- disabling the option removes the persistent key and restores the normal startup password requester
+- retain the existing volatile `ENV:AmiMail.session-key` mechanism for normal per-Amiga-session unlocking
+- make the **About** header font-safe and keep the embedded 170×28 AmiMail banner vertically centred with larger Workbench fonts
+- extend the About-header and startup-splash background using the correct AmiMail palette entry for `#888888`
+- allow the splash banner background to expand to the full popup width when the selected Workbench font makes the text wider than the artwork
+- fix the persistent-unlock status path so the classic GCC build no longer reports `persistent_cache_warning` as set but unused
+- preserve the existing generic IMAP/SMTP, STARTTLS, drafts, folder mapping, contacts, notifications, updater, mailto and iconify behaviour
+
 ## AmiMail 1.1 - 2026-08-19
 
 - update the program and package version to 1.1; the visible header, About window and startup splash follow the central `AMIMAIL_VERSION`

@@ -43,7 +43,6 @@ int amg_app_run(int argc, char **argv)
 #if AMIGMAIL_AMIGA
     char legacy_master[128];
     const char *session_key = "ENV:AmiMail.session-key";
-    const char *persistent_key = "ENVARC:AmiMail/account.key";
 #endif
 
     memset(&error, 0, sizeof(error));
@@ -106,12 +105,6 @@ int amg_app_run(int argc, char **argv)
      * derived account key and disappears with the Amiga session. */
     result = amg_storage_load_account_session(
         config, session_key, &account, &error);
-    if (result != AMG_OK) {
-        amg_account_clear(&account);
-        amg_account_init(&account);
-        result = amg_storage_load_account_session(
-            config, persistent_key, &account, &error);
-    }
     if (result != AMG_OK) {
         amg_account_clear(&account);
         amg_account_init(&account);
