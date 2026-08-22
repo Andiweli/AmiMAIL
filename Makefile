@@ -1,5 +1,5 @@
 PROJECT := AmiMail
-VERSION := 1.2
+VERSION := 1.3
 
 ifeq ($(origin CC),default)
 CC := m68k-amigaos-gcc
@@ -125,6 +125,8 @@ dist: release
 
 	cp -R config dist/$(PROJECT)-$(VERSION)/
 
+	cp -R Catalogs dist/$(PROJECT)-$(VERSION)/
+
 	cd dist && tar -czf $(PROJECT)-$(VERSION)-AmigaOS3.tar.gz $(PROJECT)-$(VERSION)
 
 release-lha: release
@@ -140,6 +142,8 @@ release-lha: release
 	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md dist/$(PROJECT)-$(VERSION)/docs/
 
 	cp -R config dist/$(PROJECT)-$(VERSION)/
+
+	cp -R Catalogs dist/$(PROJECT)-$(VERSION)/
 
 	cd dist && $(LHA) a $(RELEASE_ASSET) $(PROJECT)-$(VERSION)
 

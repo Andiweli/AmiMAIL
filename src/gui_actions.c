@@ -28,7 +28,7 @@
 #include <reaction/reaction_macros.h>
 #include <utility/tagitem.h>
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 #ifdef NewObject
 #undef NewObject
@@ -148,7 +148,7 @@ static void signature_dialog(AmgGui *gui)
 
     editor = NULL;
     dialog = WindowObject,
-        WA_Title, T("AmiMail - Signatur", "AmiMail - Signature"),
+        WA_Title, T(MSG_AMIMAIL_SIGNATURE, "AmiMail - Signature"),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                   WFLG_ACTIVATE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
@@ -192,12 +192,12 @@ static void signature_dialog(AmgGui *gui)
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_SIGNATURE_SAVE,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("_Speichern", "_Save"),
+                    GA_Text, T(MSG_SAVE, "_Save"),
                 EndObject,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_SIGNATURE_CANCEL,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("Ab_brechen", "_Cancel"),
+                    GA_Text, T(MSG_CANCEL, "_Cancel"),
                 EndObject,
             EndObject,
             CHILD_MinHeight, button_height,
@@ -207,15 +207,13 @@ static void signature_dialog(AmgGui *gui)
     EndWindow;
 
     if (!dialog) {
-        status_local(gui, T("Signatur-Editor konnte nicht ge\366ffnet werden.",
-                            "Signature editor could not be opened."));
+        status_local(gui, T(MSG_SIGNATURE_EDITOR_COULD_NOT_BE_OPENED, "Signature editor could not be opened."));
         return;
     }
     window = RA_OpenWindow(dialog);
     if (!window) {
         DisposeObject(dialog);
-        status_local(gui, T("Signatur-Editor konnte nicht ge\366ffnet werden.",
-                            "Signature editor could not be opened."));
+        status_local(gui, T(MSG_SIGNATURE_EDITOR_COULD_NOT_BE_OPENED, "Signature editor could not be opened."));
         return;
     }
     WindowToFront(window);
@@ -247,23 +245,19 @@ static void signature_dialog(AmgGui *gui)
                                 GM_TEXTEDITOR_ExportText, 0UL);
                             if (!text) {
                                 status_local(gui,
-                                    T("Signatur konnte nicht gelesen werden.",
-                                      "Signature could not be read."));
+                                    T(MSG_SIGNATURE_COULD_NOT_BE_READ, "Signature could not be read."));
                             } else if (strlen((const char *)text) >= GUI_SIGNATURE_MAX) {
                                 status_local(gui,
-                                    T("Signatur ist zu lang.",
-                                      "Signature is too long."));
+                                    T(MSG_SIGNATURE_IS_TOO_LONG, "Signature is too long."));
                                 FreeVec(text);
                             } else if (!gui_signature_save((const char *)text)) {
                                 status_local(gui,
-                                    T("Signatur konnte nicht gespeichert werden.",
-                                      "Signature could not be saved."));
+                                    T(MSG_SIGNATURE_COULD_NOT_BE_SAVED, "Signature could not be saved."));
                                 FreeVec(text);
                             } else {
                                 FreeVec(text);
                                 status_local(gui,
-                                    T("Signatur wurde gespeichert.",
-                                      "Signature was saved."));
+                                    T(MSG_SIGNATURE_WAS_SAVED, "Signature was saved."));
                                 done = 1;
                             }
                         }
@@ -418,8 +412,8 @@ static void update_reply_button_mode(AmgGui *gui)
     if (!gui || !gui->reply_gadget) return;
     drafts = current_mailbox_is_drafts(gui);
     text = drafts
-        ? T("_Bearbeiten", "_Edit")
-        : T("A_ntworten", "_Reply");
+        ? T(MSG_EDIT, "_Edit")
+        : T(MSG_REPLY, "_Reply");
     if (gui->window) {
         SetGadgetAttrs(gui->reply_gadget, gui->window, NULL,
                        GA_Text, (ULONG)(uintptr_t)text,
@@ -495,7 +489,7 @@ static int reply_action_popup(AmgGui *gui)
             LAYOUT_AddChild, ButtonObject,
                 GA_ID, GID_REPLY_MENU_REPLY_ALL,
                 GA_RelVerify, TRUE,
-                GA_Text, T("Allen _Antworten", "Reply _All"),
+                GA_Text, T(MSG_REPLY_ALL, "Reply _All"),
             EndObject,
             CHILD_MinWidth, width,
             CHILD_MaxWidth, width,
@@ -506,7 +500,7 @@ static int reply_action_popup(AmgGui *gui)
             LAYOUT_AddChild, ButtonObject,
                 GA_ID, GID_REPLY_MENU_FORWARD,
                 GA_RelVerify, TRUE,
-                GA_Text, T("_Weiterleiten", "_Forward"),
+                GA_Text, T(MSG_FORWARD, "_Forward"),
             EndObject,
             CHILD_MinWidth, width,
             CHILD_MaxWidth, width,
@@ -585,17 +579,16 @@ static int request_label_index(AmgGui *gui, size_t index, AmgError *error)
     if (!gui->labels[index].available ||
         !gui->labels[index].mailbox_utf8[0]) {
         status_local(gui,
-                     T("Dieser Ordner ist f\374r das Konto nicht verf\374gbar.", "This folder is not available for the account."));
+                     T(MSG_THIS_FOLDER_IS_NOT_AVAILABLE_FOR_THE_ACCOUNT, "This folder is not available for the account."));
         return AMG_ERR_ARGUMENT;
     }
     if (!gui->labels[index].selectable) {
         status_local(gui,
-                     T("Dieser Eintrag ist nur ein Ordner-Container und kann nicht ge\366ffnet werden.",
-                       "This entry is only a folder container and cannot be opened."));
+                     T(MSG_THIS_ENTRY_IS_ONLY_A_FOLDER_CONTAINER_AND, "This entry is only a folder container and cannot be opened."));
         return AMG_ERR_ARGUMENT;
     }
     if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.", "Please click 'Fetch' first."));
+        status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return AMG_ERR_IO;
     }
     result = amg_network_request(gui->network, AMG_NET_FETCH_INBOX, 0,
@@ -619,12 +612,10 @@ static int request_label_index(AmgGui *gui, size_t index, AmgError *error)
     select_label_index(gui, index);
     update_reply_button_mode(gui);
     clear_current_message_payload(gui);
-    show_message_placeholder(gui, T("Ordner wird geladen...", "Loading folder..."));
+    show_message_placeholder(gui, T(MSG_LOADING_FOLDER, "Loading folder..."));
     set_preview_local(gui,
-                      T("W\344hlen Sie nach dem Abruf eine Nachricht aus.", "Select a message after fetching."));
-    amg_tr_snprintf(message, sizeof(message),
-                    "%s wird geladen...", "Loading %s...",
-                    gui->current_label_local);
+                      T(MSG_SELECT_A_MESSAGE_AFTER_FETCHING, "Select a message after fetching."));
+    amg_tr_snprintf(message, sizeof(message), MSG_LOADING_VALUE, "Loading %s...", gui->current_label_local);
     status_local(gui, message);
     return AMG_OK;
 }
@@ -634,16 +625,16 @@ static void begin_move(AmgGui *gui, AmgError *error)
     ULONG uid = 0;
     size_t source_index;
     if (!cursor_node_user_data(gui->messages_gadget, &uid) || !uid) {
-        status_local(gui, T("Bitte zuerst eine Nachricht ausw\344hlen.", "Please select a message first."));
+        status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
         return;
     }
     if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.", "Please click 'Fetch' first."));
+        status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
     }
     if (!gui->current_mailbox_utf8[0]) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Der Quellordner ist nicht bekannt.", "The source folder is unknown."));
+                      T(MSG_THE_SOURCE_FOLDER_IS_UNKNOWN, "The source folder is unknown."));
         status_utf8(gui, error->message);
         return;
     }
@@ -660,7 +651,7 @@ static void begin_move(AmgGui *gui, AmgError *error)
     gui->move_pending = 1;
     status_local(
         gui,
-        T("Bitte seitlich einen Zielordner zum Verschieben ausw\344hlen.", "Please select a destination folder on the left."));
+        T(MSG_PLEASE_SELECT_A_DESTINATION_FOLDER_ON_THE_LEFT, "Please select a destination folder on the left."));
 }
 
 void cancel_pending_move(AmgGui *gui)
@@ -669,7 +660,7 @@ void cancel_pending_move(AmgGui *gui)
     gui->move_pending = 0;
     gui->move_uid = 0;
     gui->move_source_mailbox_utf8[0] = 0;
-    status_local(gui, T("Verschieben abgebrochen.", "Move cancelled."));
+    status_local(gui, T(MSG_MOVE_CANCELLED, "Move cancelled."));
 }
 
 static int queue_move_to_label(AmgGui *gui, size_t index, AmgError *error)
@@ -683,18 +674,17 @@ static int queue_move_to_label(AmgGui *gui, size_t index, AmgError *error)
     if (!gui->labels[index].available ||
         !gui->labels[index].mailbox_utf8[0]) {
         status_local(gui,
-                     T("Dieser Ordner ist f\374r das Konto nicht verf\374gbar.", "This folder is not available for the account."));
+                     T(MSG_THIS_FOLDER_IS_NOT_AVAILABLE_FOR_THE_ACCOUNT, "This folder is not available for the account."));
         return AMG_ERR_ARGUMENT;
     }
     if (!gui->labels[index].selectable) {
         status_local(gui,
-                     T("In diesen Ordner-Container kann nicht verschoben werden.",
-                       "Messages cannot be moved into this folder container."));
+                     T(MSG_MESSAGES_CANNOT_BE_MOVED_INTO_THIS_FOLDER_CONTAINER, "Messages cannot be moved into this folder container."));
         return AMG_ERR_ARGUMENT;
     }
     if (!strcmp(gui->move_source_mailbox_utf8,
                 gui->labels[index].server_mailbox_utf8)) {
-        status_local(gui, T("Quell- und Zielordner sind identisch.", "Source and destination folders are identical."));
+        status_local(gui, T(MSG_SOURCE_AND_DESTINATION_FOLDERS_ARE_IDENTICAL, "Source and destination folders are identical."));
         return AMG_ERR_ARGUMENT;
     }
     result = amg_network_request(
@@ -713,9 +703,7 @@ static int queue_move_to_label(AmgGui *gui, size_t index, AmgError *error)
     target_name = gui->labels[index].path_local[0]
         ? gui->labels[index].path_local
         : gui->labels[index].display_local;
-    amg_tr_snprintf(message, sizeof(message),
-                    "Nachricht wird nach %s verschoben...",
-                    "Moving message to %s...", target_name);
+    amg_tr_snprintf(message, sizeof(message), MSG_MOVING_MESSAGE_TO_VALUE, "Moving message to %s...", target_name);
     status_local(gui, message);
     return AMG_OK;
 }
@@ -742,14 +730,14 @@ static void remove_message_uid(AmgGui *gui, ULONG uid)
     }
     if (!gui->messages_list.lh_Head->ln_Succ) {
         node = message_placeholder_node(
-            T("Dieser Ordner enth\344lt keine Nachrichten.", "This folder contains no messages."));
+            T(MSG_THIS_FOLDER_CONTAINS_NO_MESSAGES, "This folder contains no messages."));
         if (node) AddTail(&gui->messages_list, node);
     }
     attach_listbrowser(gui->messages_gadget, gui->window,
                        &gui->messages_list);
     clear_current_message_payload(gui);
     set_preview_local(gui,
-                      T("W\344hlen Sie eine Nachricht zur Anzeige aus.", "Select a message to display."));
+                      T(MSG_SELECT_A_MESSAGE_TO_DISPLAY, "Select a message to display."));
 }
 
 
@@ -807,7 +795,7 @@ static void toggle_message_flagged(AmgGui *gui, ULONG uid, AmgError *error)
     int result;
     if (!gui || !uid) return;
     if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.", "Please click 'Fetch' first."));
+        status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
     }
     flagged = !message_is_flagged(gui, uid);
@@ -817,8 +805,8 @@ static void toggle_message_flagged(AmgGui *gui, ULONG uid, AmgError *error)
     if (result == AMG_OK) {
         set_message_flagged_visual(gui, uid, flagged);
         status_local(gui, flagged
-            ? T("Sternmarkierung wird gesetzt...", "Setting star...")
-            : T("Sternmarkierung wird entfernt...", "Removing star..."));
+            ? T(MSG_SETTING_STAR, "Setting star...")
+            : T(MSG_REMOVING_STAR, "Removing star..."));
     } else if (error && error->message[0]) {
         status_utf8(gui, error->message);
     }
@@ -845,42 +833,38 @@ static void request_message(AmgGui *gui, int action, AmgError *error)
                 &release_event);
         if (release_event == LBRE_TITLECLICK) return;
         if (!cursor_node_user_data(gui->messages_gadget, &uid) || !uid) {
-            status_local(gui, T("Bitte zuerst eine Nachricht ausw\344hlen.", "Please select a message first."));
+            status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
             return;
         }
         is_doubleclick = message_doubleclick_detected(gui, uid, release_event);
     } else {
         selected_count = selected_message_uids(gui, selected, 2U);
         if (!selected_count) {
-            status_local(gui, T("Bitte zuerst eine Nachricht ausw\344hlen.", "Please select a message first."));
+            status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
             return;
         }
         if (selected_count > 1U) {
             if (edit_draft)
                 status_local(gui,
-                    T("Bitte zum Bearbeiten nur einen Entwurf ausw\344hlen.",
-                      "Please select only one draft to edit."));
+                    T(MSG_PLEASE_SELECT_ONLY_ONE_DRAFT_TO_EDIT, "Please select only one draft to edit."));
             else if (prepare_forward)
                 status_local(gui,
-                    T("Bitte zum Weiterleiten nur eine Nachricht ausw\344hlen.",
-                      "Please select only one message to forward."));
+                    T(MSG_PLEASE_SELECT_ONLY_ONE_MESSAGE_TO_FORWARD, "Please select only one message to forward."));
             else
                 status_local(gui,
-                    T("Bitte zum Antworten nur eine Nachricht ausw\344hlen.",
-                      "Please select only one message to reply."));
+                    T(MSG_PLEASE_SELECT_ONLY_ONE_MESSAGE_TO_REPLY, "Please select only one message to reply."));
             return;
         }
         uid = selected[0];
     }
     if (!uid) {
-        status_local(gui, T("Bitte zuerst eine Nachricht ausw\344hlen.", "Please select a message first."));
+        status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
         return;
     }
     if (edit_draft && !current_mailbox_is_drafts(gui)) {
         update_reply_button_mode(gui);
         status_local(gui,
-                     T("Entw\374rfe k\366nnen nur im Ordner Entw\374rfe bearbeitet werden.",
-                       "Drafts can only be edited in the Drafts folder."));
+                     T(MSG_DRAFTS_CAN_ONLY_BE_EDITED_IN_THE_DRAFTS, "Drafts can only be edited in the Drafts folder."));
         return;
     }
     set_message_selected_visual(gui, uid);
@@ -889,7 +873,7 @@ static void request_message(AmgGui *gui, int action, AmgError *error)
         return;
     }
     if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.", "Please click 'Fetch' first."));
+        status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
     }
     if (edit_draft) request_kind = "editdraft";
@@ -908,19 +892,16 @@ static void request_message(AmgGui *gui, int action, AmgError *error)
     if (result == AMG_OK) {
         clear_current_message_payload(gui);
         if (edit_draft)
-            status_local(gui, T("Entwurf wird zum Bearbeiten geladen...",
-                                "Loading draft for editing..."));
+            status_local(gui, T(MSG_LOADING_DRAFT_FOR_EDITING, "Loading draft for editing..."));
         else if (prepare_forward)
-            status_local(gui, T("Weiterleitung wird vorbereitet...",
-                                "Preparing forward..."));
+            status_local(gui, T(MSG_PREPARING_FORWARD, "Preparing forward..."));
         else if (prepare_reply_all)
-            status_local(gui, T("Antwort an alle wird vorbereitet...",
-                                "Preparing reply to all..."));
+            status_local(gui, T(MSG_PREPARING_REPLY_TO_ALL, "Preparing reply to all..."));
         else if (prepare_reply)
-            status_local(gui, T("Antwort wird vorbereitet...", "Preparing reply..."));
+            status_local(gui, T(MSG_PREPARING_REPLY, "Preparing reply..."));
         else {
-            set_preview_local(gui, T("Nachricht wird geladen...", "Loading message..."));
-            status_local(gui, T("Nachricht wird geladen...", "Loading message..."));
+            set_preview_local(gui, T(MSG_LOADING_MESSAGE, "Loading message..."));
+            status_local(gui, T(MSG_LOADING_MESSAGE, "Loading message..."));
         }
     } else if (error && error->message[0]) {
         status_utf8(gui, error->message);
@@ -934,17 +915,17 @@ static void toggle_selected_seen(AmgGui *gui, AmgError *error)
     if (!gui) return;
     uids = selected_message_uids_alloc(gui, &count);
     if (!uids) {
-        status_local(gui, T("Nicht genug Speicher.", "Not enough memory."));
+        status_local(gui, T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
         return;
     }
     if (!count) {
         free(uids);
-        status_local(gui, T("Bitte zuerst eine Nachricht ausw\344hlen.", "Please select a message first."));
+        status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
         return;
     }
     if (!amg_network_is_connected(gui->network)) {
         free(uids);
-        status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.", "Please click 'Fetch' first."));
+        status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
     }
     for (i = 0; i < count; ++i) {
@@ -963,10 +944,7 @@ static void toggle_selected_seen(AmgGui *gui, AmgError *error)
     free(uids);
     if (queued == count) {
         char message[128];
-        amg_tr_snprintf(message, sizeof(message),
-                        "%lu Nachricht(en): Lesestatus wird ge\344ndert.",
-                        "%lu message(s): changing read status.",
-                        (unsigned long)queued);
+        amg_tr_snprintf(message, sizeof(message), MSG_VALUE_MESSAGE_S_CHANGING_READ_STATUS, "%lu message(s): changing read status.", (unsigned long)queued);
         status_local(gui, message);
     } else if (error && error->message[0]) {
         status_utf8(gui, error->message);
@@ -983,17 +961,17 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
     if (!gui) return;
     uids = selected_message_uids_alloc(gui, &count);
     if (!uids) {
-        status_local(gui, T("Nicht genug Speicher.", "Not enough memory."));
+        status_local(gui, T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
         return;
     }
     if (!count) {
         free(uids);
-        status_local(gui, T("Bitte zuerst eine Nachricht ausw\344hlen.", "Please select a message first."));
+        status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
         return;
     }
     if (!amg_network_is_connected(gui->network)) {
         free(uids);
-        status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.", "Please click 'Fetch' first."));
+        status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
     }
     if (!confirm_delete_dialog(gui)) {
@@ -1008,12 +986,12 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
         ? gui->labels[6U].server_mailbox_utf8 : "\\Trash";
     if (!source_label || !*source_label) {
         free(uids);
-        status_local(gui, T("Der aktuelle Mailordner ist nicht bekannt.", "The current mail folder is unknown."));
+        status_local(gui, T(MSG_THE_CURRENT_MAIL_FOLDER_IS_UNKNOWN, "The current mail folder is unknown."));
         return;
     }
     if (!strcmp(source_label, trash_label)) {
         free(uids);
-        status_local(gui, T("Die Nachricht liegt bereits im Papierkorb.", "The message is already in Trash."));
+        status_local(gui, T(MSG_THE_MESSAGE_IS_ALREADY_IN_TRASH, "The message is already in Trash."));
         return;
     }
     for (i = 0; i < count; ++i) {
@@ -1027,10 +1005,7 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
         }
     }
     free(uids);
-    amg_tr_snprintf(status_text, sizeof(status_text),
-                    "%lu Nachricht(en) werden gel\366scht.",
-                    "Deleting %lu message(s).",
-                    (unsigned long)count);
+    amg_tr_snprintf(status_text, sizeof(status_text), MSG_DELETING_VALUE_MESSAGE_S, "Deleting %lu message(s).", (unsigned long)count);
     status_local(gui, status_text);
 }
 
@@ -1040,20 +1015,20 @@ static void empty_trash(AmgGui *gui, AmgError *error)
     int result;
     if (!gui) return;
     if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.", "Please click 'Fetch' first."));
+        status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
     }
     if (!confirm_empty_trash_dialog(gui)) return;
     trash_label = gui->labels[6U].available
         ? gui->labels[6U].server_mailbox_utf8 : "\\Trash";
     if (!trash_label || !*trash_label) {
-        status_local(gui, T("Der Papierkorb-Ordner ist nicht bekannt.", "The Trash folder is unknown."));
+        status_local(gui, T(MSG_THE_TRASH_FOLDER_IS_UNKNOWN, "The Trash folder is unknown."));
         return;
     }
     result = amg_network_request(gui->network, AMG_NET_EMPTY_TRASH, 0,
                                  trash_label, NULL, error);
     if (result == AMG_OK)
-        status_local(gui, T("Papierkorb wird geleert...", "Emptying Trash..."));
+        status_local(gui, T(MSG_EMPTYING_TRASH, "Emptying Trash..."));
     else if (error && error->message[0])
         status_utf8(gui, error->message);
 }
@@ -1064,22 +1039,20 @@ static void empty_spam(AmgGui *gui, AmgError *error)
     int result;
     if (!gui) return;
     if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T("Bitte zuerst 'Abrufen' anklicken.",
-                            "Please click 'Fetch' first."));
+        status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
     }
     if (!confirm_empty_spam_dialog(gui)) return;
     spam_label = gui->labels[5U].available
         ? gui->labels[5U].server_mailbox_utf8 : NULL;
     if (!spam_label || !*spam_label) {
-        status_local(gui, T("Der Spam-Ordner ist nicht bekannt.",
-                            "The Spam folder is unknown."));
+        status_local(gui, T(MSG_THE_SPAM_FOLDER_IS_UNKNOWN, "The Spam folder is unknown."));
         return;
     }
     result = amg_network_request(gui->network, AMG_NET_EMPTY_SPAM, 0,
                                  spam_label, NULL, error);
     if (result == AMG_OK)
-        status_local(gui, T("Spam wird geleert...", "Emptying Spam..."));
+        status_local(gui, T(MSG_EMPTYING_SPAM, "Emptying Spam..."));
     else if (error && error->message[0])
         status_utf8(gui, error->message);
 }
@@ -1120,7 +1093,7 @@ void handle_network(AmgGui *gui)
                     gui, event.uid, atoi(event.argument1) == 0);
             }
             status_utf8(gui,
-                        event.message[0] ? event.message : T("Netzwerkfehler", "Network error"));
+                        event.message[0] ? event.message : T(MSG_NETWORK_ERROR, "Network error"));
             if (gui->update_check_deferred &&
                 (event.type == AMG_NET_CONNECT ||
                  event.type == AMG_NET_RECONFIGURE ||
@@ -1132,15 +1105,14 @@ void handle_network(AmgGui *gui)
         } else {
             switch (event.type) {
                 case AMG_NET_CONNECT:
-                    status_local(gui, T("Mit dem Mailserver verbunden.", "Connected to the mail server."));
+                    status_local(gui, T(MSG_CONNECTED_TO_THE_MAIL_SERVER, "Connected to the mail server."));
                     amg_network_request(gui->network, AMG_NET_FETCH_LABELS,
                                         0, NULL, NULL, NULL);
                     break;
                 case AMG_NET_RECONFIGURE:
                     gui->network_reconfigure_pending = 0;
                     status_local(gui,
-                        T("Mailserver-Verbindung wurde neu konfiguriert.",
-                          "Mail-server connection was reconfigured."));
+                        T(MSG_MAIL_SERVER_CONNECTION_WAS_RECONFIGURED, "Mail-server connection was reconfigured."));
                     amg_network_request(gui->network, AMG_NET_FETCH_LABELS,
                                         0, NULL, NULL, NULL);
                     break;
@@ -1150,10 +1122,7 @@ void handle_network(AmgGui *gui)
                     char message[96];
                     size_t count = update_labels_from_payload(
                         gui, event.payload, event.payload_length);
-                    amg_tr_snprintf(message, sizeof(message),
-                                    "%lu IMAP-Ordner wurden geladen.",
-                                    "%lu IMAP folders loaded.",
-                                    (unsigned long)count);
+                    amg_tr_snprintf(message, sizeof(message), MSG_VALUE_IMAP_FOLDERS_LOADED, "%lu IMAP folders loaded.", (unsigned long)count);
                     status_local(gui, message);
                     memset(&request_error, 0, sizeof(request_error));
                     request_label_index(gui, 0U, &request_error);
@@ -1224,20 +1193,13 @@ void handle_network(AmgGui *gui)
                         update_reply_button_mode(gui);
                     }
                     set_preview_local(
-                        gui, T("W\344hlen Sie eine Nachricht zur Anzeige aus.", "Select a message to display."));
+                        gui, T(MSG_SELECT_A_MESSAGE_TO_DISPLAY, "Select a message to display."));
                     if (parse_error < 0) {
-                        amg_tr_snprintf(message, sizeof(message),
-                                        "IMAP-Nachrichten konnten nicht ausgewertet werden (Code %d).",
-                                        "IMAP messages could not be parsed (code %d).",
-                                        parse_error);
+                        amg_tr_snprintf(message, sizeof(message), MSG_IMAP_MESSAGES_COULD_NOT_BE_PARSED_CODE_VALUE, "IMAP messages could not be parsed (code %d).", parse_error);
                     } else {
-                        amg_tr_snprintf(message, sizeof(message),
-                                        "%lu Nachrichten in %s geladen.",
-                                        "%lu messages loaded in %s.",
-                                        (unsigned long)count,
-                                        gui->current_label_local[0]
+                        amg_tr_snprintf(message, sizeof(message), MSG_VALUE_MESSAGES_LOADED_IN_VALUE, "%lu messages loaded in %s.", (unsigned long)count, gui->current_label_local[0]
                                             ? gui->current_label_local
-                                            : T("Ordner", "folder"));
+                                            : T(MSG_FOLDER, "folder"));
                     }
                     status_local(gui, message);
                     if (index == 0U && gui->update_check_deferred) {
@@ -1266,10 +1228,7 @@ void handle_network(AmgGui *gui)
                         &max_uid, &parse_error);
                     if (parse_error < 0) {
                         char message[160];
-                        amg_tr_snprintf(message, sizeof(message),
-                                        "Periodischer Abruf konnte nicht ausgewertet werden (Code %d).",
-                                        "Periodic fetch could not be parsed (code %d).",
-                                        parse_error);
+                        amg_tr_snprintf(message, sizeof(message), MSG_PERIODIC_FETCH_COULD_NOT_BE_PARSED_CODE_VALUE, "Periodic fetch could not be parsed (code %d).", parse_error);
                         status_local(gui, message);
                         break;
                     }
@@ -1316,16 +1275,11 @@ void handle_network(AmgGui *gui)
                         if (notify_count > 0U) {
                             char message[128];
                             gui_notify_new_mail(gui);
-                            amg_tr_snprintf(
-                                message, sizeof(message),
-                                "Periodischer Abruf: %lu neue Mail(s) im Posteingang.",
-                                "Periodic fetch: %lu new mail(s) in Inbox.",
-                                (unsigned long)notify_count);
+                            amg_tr_snprintf(message, sizeof(message), MSG_PERIODIC_FETCH_VALUE_NEW_MAIL_S_IN_INBOX, "Periodic fetch: %lu new mail(s) in Inbox.", (unsigned long)notify_count);
                             status_local(gui, message);
                         } else {
                             status_local(gui,
-                                T("Periodischer Abruf: keine neuen Mails.",
-                                  "Periodic fetch: no new mail."));
+                                T(MSG_PERIODIC_FETCH_NO_NEW_MAIL, "Periodic fetch: no new mail."));
                         }
                     }
                     break;
@@ -1368,16 +1322,14 @@ void handle_network(AmgGui *gui)
                                 if (!compose_dialog(gui, COMPOSE_MODE_EDIT_DRAFT,
                                                     &edit, &preview_error))
                                     status_local(gui,
-                                        T("Entwurf wurde nicht ge\344ndert.",
-                                          "Draft was not changed."));
+                                        T(MSG_DRAFT_WAS_NOT_CHANGED, "Draft was not changed."));
                                 cleanup_draft_edit_files(&edit);
                             } else {
                                 cleanup_draft_edit_files(&edit);
                                 status_utf8(gui,
                                     preview_error.message[0]
                                         ? preview_error.message
-                                        : T("Entwurf konnte nicht zum Bearbeiten vorbereitet werden.",
-                                            "Draft could not be prepared for editing."));
+                                        : T(MSG_DRAFT_COULD_NOT_BE_PREPARED_FOR_EDITING, "Draft could not be prepared for editing."));
                             }
                         } else if (prepare_forward) {
                             DraftEditData forward_seed;
@@ -1389,16 +1341,14 @@ void handle_network(AmgGui *gui)
                                 if (!compose_dialog(gui, COMPOSE_MODE_FORWARD,
                                                     &forward_seed, &preview_error))
                                     status_local(gui,
-                                        T("Weiterleitung wurde nicht gesendet.",
-                                          "Forward was not sent."));
+                                        T(MSG_FORWARD_WAS_NOT_SENT, "Forward was not sent."));
                                 cleanup_draft_edit_files(&forward_seed);
                             } else {
                                 cleanup_draft_edit_files(&forward_seed);
                                 status_utf8(gui,
                                     preview_error.message[0]
                                         ? preview_error.message
-                                        : T("Weiterleitung konnte nicht vorbereitet werden.",
-                                            "Forward could not be prepared."));
+                                        : T(MSG_FORWARD_COULD_NOT_BE_PREPARED, "Forward could not be prepared."));
                             }
                         } else if (prepare_reply_all || prepare_reply) {
                             int prep_result = prepare_reply_all
@@ -1412,28 +1362,24 @@ void handle_network(AmgGui *gui)
                                 if (!compose_dialog(gui, COMPOSE_MODE_REPLY,
                                                     NULL, &preview_error))
                                     status_local(gui, prepare_reply_all
-                                        ? T("Antwort an alle wurde nicht gesendet.",
-                                            "Reply to all was not sent.")
-                                        : T("Antwort wurde nicht gesendet.",
-                                            "Reply was not sent."));
+                                        ? T(MSG_REPLY_TO_ALL_WAS_NOT_SENT, "Reply to all was not sent.")
+                                        : T(MSG_REPLY_WAS_NOT_SENT, "Reply was not sent."));
                             } else {
                                 status_utf8(gui,
                                     preview_error.message[0]
                                         ? preview_error.message
                                         : (prepare_reply_all
-                                            ? T("Antwort an alle konnte nicht vorbereitet werden.",
-                                                "Reply to all could not be prepared.")
-                                            : T("Antwort konnte nicht vorbereitet werden.",
-                                                "Reply could not be prepared.")));
+                                            ? T(MSG_REPLY_TO_ALL_COULD_NOT_BE_PREPARED, "Reply to all could not be prepared.")
+                                            : T(MSG_REPLY_COULD_NOT_BE_PREPARED, "Reply could not be prepared.")));
                             }
                         } else {
-                            status_local(gui, T("Nachricht geladen.", "Message loaded."));
+                            status_local(gui, T(MSG_MESSAGE_LOADED, "Message loaded."));
                         }
                     } else {
                         status_utf8(
                             gui, preview_error.message[0]
                                      ? preview_error.message
-                                     : T("Nachricht konnte nicht dargestellt werden.", "Message could not be displayed."));
+                                     : T(MSG_MESSAGE_COULD_NOT_BE_DISPLAYED, "Message could not be displayed."));
                     }
                     break;
                 }
@@ -1443,16 +1389,16 @@ void handle_network(AmgGui *gui)
                     if (strncmp(event.argument2, "preview", 7U))
                         status_local(
                             gui, atoi(event.argument1)
-                                ? T("Nachricht als gelesen markiert.", "Message marked as read.")
-                                : T("Nachricht als ungelesen markiert.", "Message marked as unread."));
+                                ? T(MSG_MESSAGE_MARKED_AS_READ, "Message marked as read.")
+                                : T(MSG_MESSAGE_MARKED_AS_UNREAD, "Message marked as unread."));
                     break;
                 case AMG_NET_SET_FLAGGED:
                     set_message_flagged_visual(
                         gui, event.uid, atoi(event.argument1) != 0);
                     status_local(
                         gui, atoi(event.argument1)
-                            ? T("Sternmarkierung wurde gesetzt.", "Star was set.")
-                            : T("Sternmarkierung wurde entfernt.", "Star was removed."));
+                            ? T(MSG_STAR_WAS_SET, "Star was set.")
+                            : T(MSG_STAR_WAS_REMOVED, "Star was removed."));
                     break;
                 case AMG_NET_DELETE:
                     if (!strcmp(gui->current_mailbox_utf8, "INBOX") &&
@@ -1460,29 +1406,29 @@ void handle_network(AmgGui *gui)
                         gui_state_adjust_inbox_unseen(gui, -1L);
                     remove_message_uid(gui, event.uid);
                     status_local(gui,
-                                 T("Nachricht wurde in den Papierkorb verschoben.", "Message moved to Trash."));
+                                 T(MSG_MESSAGE_MOVED_TO_TRASH, "Message moved to Trash."));
                     break;
                 case AMG_NET_EMPTY_TRASH:
                     if (label_index_for_mailbox(
                             gui, gui->current_mailbox_utf8) == 6U) {
                         clear_current_message_payload(gui);
                         show_message_placeholder(
-                            gui, T("Dieser Ordner enth\344lt keine Nachrichten.", "This folder contains no messages."));
+                            gui, T(MSG_THIS_FOLDER_CONTAINS_NO_MESSAGES, "This folder contains no messages."));
                         set_preview_local(
-                            gui, T("W\344hlen Sie eine Nachricht zur Anzeige aus.", "Select a message to display."));
+                            gui, T(MSG_SELECT_A_MESSAGE_TO_DISPLAY, "Select a message to display."));
                     }
-                    status_local(gui, T("Papierkorb wurde geleert.", "Trash was emptied."));
+                    status_local(gui, T(MSG_TRASH_WAS_EMPTIED, "Trash was emptied."));
                     break;
                 case AMG_NET_EMPTY_SPAM:
                     if (label_index_for_mailbox(
                             gui, gui->current_mailbox_utf8) == 5U) {
                         clear_current_message_payload(gui);
                         show_message_placeholder(
-                            gui, T("Dieser Ordner enth\344lt keine Nachrichten.", "This folder contains no messages."));
+                            gui, T(MSG_THIS_FOLDER_CONTAINS_NO_MESSAGES, "This folder contains no messages."));
                         set_preview_local(
-                            gui, T("W\344hlen Sie eine Nachricht zur Anzeige aus.", "Select a message to display."));
+                            gui, T(MSG_SELECT_A_MESSAGE_TO_DISPLAY, "Select a message to display."));
                     }
-                    status_local(gui, T("Spam wurde geleert.", "Spam was emptied."));
+                    status_local(gui, T(MSG_SPAM_WAS_EMPTIED, "Spam was emptied."));
                     break;
                 case AMG_NET_SAVE_DRAFT:
                     if (event.uid && !strcmp(event.argument2,
@@ -1499,14 +1445,12 @@ void handle_network(AmgGui *gui)
                         status_utf8(gui, event.message);
                     else if (event.uid && current_mailbox_is_drafts(gui))
                         status_local(gui,
-                                     T("Entwurf wurde gespeichert; Ordner wird aktualisiert...",
-                                       "Draft was saved; refreshing folder..."));
+                                     T(MSG_DRAFT_WAS_SAVED_REFRESHING_FOLDER, "Draft was saved; refreshing folder..."));
                     else
-                        status_local(gui, T("Entwurf wurde gespeichert.",
-                                            "Draft was saved."));
+                        status_local(gui, T(MSG_DRAFT_WAS_SAVED, "Draft was saved."));
                     break;
                 case AMG_NET_SEND_REPLY:
-                    status_local(gui, T("Antwort wurde versendet.", "Reply sent."));
+                    status_local(gui, T(MSG_REPLY_SENT, "Reply sent."));
                     break;
                 case AMG_NET_SEND_MAIL:
                     if (event.uid && !strcmp(event.argument2,
@@ -1515,7 +1459,7 @@ void handle_network(AmgGui *gui)
                     if (event.message[0])
                         status_utf8(gui, event.message);
                     else
-                        status_local(gui, T("Mail wurde versendet.", "Mail sent."));
+                        status_local(gui, T(MSG_MAIL_SENT, "Mail sent."));
                     break;
                 case AMG_NET_MOVE:
                 {
@@ -1535,17 +1479,14 @@ void handle_network(AmgGui *gui)
                         target_name = gui->labels[target].path_local[0]
                             ? gui->labels[target].path_local
                             : gui->labels[target].display_local;
-                    amg_tr_snprintf(message, sizeof(message),
-                                    "Nachricht wurde nach %s verschoben.",
-                                    "Message moved to %s.",
-                                    target_name && *target_name
+                    amg_tr_snprintf(message, sizeof(message), MSG_MESSAGE_MOVED_TO_VALUE, "Message moved to %s.", target_name && *target_name
                                         ? target_name
-                                        : T("Zielordner", "destination folder"));
+                                        : T(MSG_DESTINATION_FOLDER, "destination folder"));
                     status_local(gui, message);
                     break;
                 }
                 default:
-                    status_local(gui, T("Aktion abgeschlossen.", "Action completed."));
+                    status_local(gui, T(MSG_ACTION_COMPLETED, "Action completed."));
                     break;
             }
         }
@@ -1566,8 +1507,7 @@ void periodic_fetch_mail(AmgGui *gui, AmgError *error)
         return;
     }
     if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T("Periodischer Abruf: Verbinde mit dem Mailserver...",
-                            "Periodic fetch: connecting to the mail server..."));
+        status_local(gui, T(MSG_PERIODIC_FETCH_CONNECTING_TO_THE_MAIL_SERVER, "Periodic fetch: connecting to the mail server..."));
         result = amg_network_request(gui->network, AMG_NET_CONNECT, 0,
                                      NULL, "periodic", error);
     } else {
@@ -1595,7 +1535,7 @@ void fetch_mail(AmgGui *gui, AmgError *error)
     if (result != AMG_OK) {
         status_utf8(gui, error->message);
     } else if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T("Verbinde mit dem Mailserver...", "Connecting to the mail server..."));
+        status_local(gui, T(MSG_CONNECTING_TO_THE_MAIL_SERVER, "Connecting to the mail server..."));
         result = amg_network_request(gui->network, AMG_NET_CONNECT, 0,
                                      NULL, NULL, error);
         if (result != AMG_OK) status_utf8(gui, error->message);

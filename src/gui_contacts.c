@@ -41,7 +41,7 @@
 #endif
 #define ButtonObject NewObject(NULL, (CONST_STRPTR)"button.gadget"
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 enum ContactGadgetId {
     GID_CONTACTS_LIST = 300,
@@ -91,20 +91,20 @@ static struct ColumnInfo *contacts_columns(void)
     return AllocLBColumnInfo(
         3,
         LBCIA_Column, 0,
-        LBCIA_Title, (ULONG)(uintptr_t)T("Vorname", "First name"),
+        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_FIRST_NAME, "First name"),
         LBCIA_Weight, 30,
         LBCIA_AutoSort, TRUE,
         LBCIA_SortArrow, TRUE,
         LBCIA_DraggableSeparator, TRUE,
         LBCIA_Column, 1,
-        LBCIA_Title, (ULONG)(uintptr_t)T("Nachname", "Last name"),
+        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_LAST_NAME, "Last name"),
         LBCIA_Weight, 30,
         LBCIA_AutoSort, TRUE,
         LBCIA_SortArrow, TRUE,
         LBCIA_SortDirection, LBMSORT_FORWARD,
         LBCIA_DraggableSeparator, TRUE,
         LBCIA_Column, 2,
-        LBCIA_Title, (ULONG)(uintptr_t)T("E-Mail-Adresse", "Email address"),
+        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_EMAIL_ADDRESS, "Email address"),
         LBCIA_Weight, 40,
         LBCIA_DraggableSeparator, TRUE,
         TAG_DONE);
@@ -228,9 +228,8 @@ static void rebuild_contact_list(struct Gadget *gadget, struct Window *window,
             LBNA_Column, 0,
             LBNCA_CopyText, TRUE,
             LBNCA_Text, (ULONG)(uintptr_t)(email_only
-                ? T("Keine Kontakte mit E-Mail-Adresse.",
-                    "No contacts with an email address.")
-                : T("Keine Kontakte vorhanden.", "No contacts available.")),
+                ? T(MSG_NO_CONTACTS_WITH_AN_EMAIL_ADDRESS, "No contacts with an email address.")
+                : T(MSG_NO_CONTACTS_AVAILABLE, "No contacts available.")),
             LBNCA_RenderHook, hooks ? (ULONG)(uintptr_t)&hooks[0] : 0UL,
             LBNCA_HookHeight, row_height ? row_height : 10U,
             TAG_DONE);
@@ -367,8 +366,8 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
 
     dialog = WindowObject,
         WA_Title, editing
-            ? T("AmiMail - Kontakt bearbeiten", "AmiMail - Edit contact")
-            : T("AmiMail - Neuer Kontakt", "AmiMail - New contact"),
+            ? T(MSG_AMIMAIL_EDIT_CONTACT, "AmiMail - Edit contact")
+            : T(MSG_AMIMAIL_NEW_CONTACT, "AmiMail - New contact"),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                   WFLG_ACTIVATE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
@@ -381,7 +380,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             LAYOUT_SpaceInner, TRUE,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Vorname:", "First name:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_FIRST_NAME_E581, "First name:")),
                 CHILD_MinWidth, 105,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -396,7 +395,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             CHILD_WeightedHeight, 0,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Nachname:", "Last name:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_LAST_NAME_67EF, "Last name:")),
                 CHILD_MinWidth, 105,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -411,7 +410,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             CHILD_WeightedHeight, 0,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Firma:", "Company:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_COMPANY, "Company:")),
                 CHILD_MinWidth, 105,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -426,7 +425,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             CHILD_WeightedHeight, 0,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("E-Mail-Adresse:", "Email address:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_EMAIL_ADDRESS_F1D2, "Email address:")),
                 CHILD_MinWidth, 105,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -441,7 +440,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             CHILD_WeightedHeight, 0,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Telefon:", "Phone:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_PHONE, "Phone:")),
                 CHILD_MinWidth, 105,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -456,7 +455,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             CHILD_WeightedHeight, 0,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Mobiltelefon:", "Mobile phone:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_MOBILE_PHONE, "Mobile phone:")),
                 CHILD_MinWidth, 105,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -471,7 +470,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             CHILD_WeightedHeight, 0,
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Website:", "Website:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_WEBSITE, "Website:")),
                 CHILD_MinWidth, 105,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -494,12 +493,12 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_CONTACT_EDIT_SAVE,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("_Speichern", "_Save"),
+                    GA_Text, T(MSG_SAVE, "_Save"),
                 EndObject,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_CONTACT_EDIT_CANCEL,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("Ab_brechen", "_Cancel"),
+                    GA_Text, T(MSG_CANCEL, "_Cancel"),
                 EndObject,
             EndObject,
             CHILD_WeightedHeight, 0,
@@ -552,21 +551,18 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
                                 mobile_gadget, website_gadget);
                             if (result != AMG_OK) {
                                 set_contact_editor_status(status_gadget, window,
-                                    T("Ein Eingabefeld ist zu lang.",
-                                      "An input field is too long."));
+                                    T(MSG_AN_INPUT_FIELD_IS_TOO_LONG, "An input field is too long."));
                                 break;
                             }
                             if (!amg_contact_has_data(&edited)) {
                                 set_contact_editor_status(status_gadget, window,
-                                    T("Bitte mindestens ein Feld ausf\374llen.",
-                                      "Please fill at least one field."));
+                                    T(MSG_PLEASE_FILL_AT_LEAST_ONE_FIELD, "Please fill at least one field."));
                                 break;
                             }
                             if (amg_contacts_is_duplicate(
                                     book, &edited, contact_id)) {
                                 set_contact_editor_status(status_gadget, window,
-                                    T("Kontakt ist bereits vorhanden.",
-                                      "Contact already exists."));
+                                    T(MSG_CONTACT_ALREADY_EXISTS, "Contact already exists."));
                                 break;
                             }
                             if (editing)
@@ -575,8 +571,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
                                 result = amg_contacts_add(book, &edited, &new_id, error);
                             if (result != AMG_OK) {
                                 set_contact_editor_status(status_gadget, window,
-                                    T("Kontakt konnte nicht gespeichert werden.",
-                                      "Contact could not be saved."));
+                                    T(MSG_CONTACT_COULD_NOT_BE_SAVED, "Contact could not be saved."));
                                 break;
                             }
                             result = amg_contacts_save(
@@ -590,8 +585,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
                                     amg_contacts_delete(book, new_id, NULL);
                                 }
                                 set_contact_editor_status(status_gadget, window,
-                                    T("Kontaktdatei konnte nicht gespeichert werden.",
-                                      "Contact file could not be saved."));
+                                    T(MSG_CONTACT_FILE_COULD_NOT_BE_SAVED, "Contact file could not be saved."));
                                 break;
                             }
                             saved = 1;
@@ -619,8 +613,7 @@ static int choose_contact_import_file(struct Window *window,
         (LONG)sizeof(accept_pattern));
     requester = AllocAslRequestTags(
         ASL_FileRequest,
-        ASLFR_TitleText, (ULONG)(uintptr_t)T("Kontakte importieren",
-                                             "Import contacts"),
+        ASLFR_TitleText, (ULONG)(uintptr_t)T(MSG_IMPORT_CONTACTS, "Import contacts"),
         ASLFR_Window, (ULONG)(uintptr_t)window,
         ASLFR_SleepWindow, TRUE,
         ASLFR_RejectIcons, TRUE,
@@ -662,8 +655,7 @@ static void import_contacts(AmgGui *gui, struct Window *window,
         rebuild_contact_list(list_gadget, window, list, book, 0,
                              hooks, row_height);
         set_contact_status(status_gadget, window,
-            T("Kontakte konnten nicht importiert werden.",
-              "Contacts could not be imported."));
+            T(MSG_CONTACTS_COULD_NOT_BE_IMPORTED, "Contacts could not be imported."));
         return;
     }
     if (imported.imported &&
@@ -674,24 +666,12 @@ static void import_contacts(AmgGui *gui, struct Window *window,
         rebuild_contact_list(list_gadget, window, list, book, 0,
                              hooks, row_height);
         set_contact_status(status_gadget, window,
-            T("Import konnte nicht gespeichert werden.",
-              "Imported contacts could not be saved."));
+            T(MSG_IMPORTED_CONTACTS_COULD_NOT_BE_SAVED, "Imported contacts could not be saved."));
         return;
     }
     rebuild_contact_list(list_gadget, window, list, book, 0,
                              hooks, row_height);
-    if (amg_i18n_is_german())
-        snprintf(message, sizeof(message),
-                 "%lu importiert, %lu Dubletten, %lu \374bersprungen.",
-                 (unsigned long)imported.imported,
-                 (unsigned long)imported.duplicates,
-                 (unsigned long)imported.skipped);
-    else
-        snprintf(message, sizeof(message),
-                 "%lu imported, %lu duplicates, %lu skipped.",
-                 (unsigned long)imported.imported,
-                 (unsigned long)imported.duplicates,
-                 (unsigned long)imported.skipped);
+    amg_tr_snprintf(message, sizeof(message), MSG_VALUE_IMPORTED_VALUE_DUPLICATES_VALUE_SKIPPED, "%lu imported, %lu duplicates, %lu skipped.", (unsigned long)imported.imported, (unsigned long)imported.duplicates, (unsigned long)imported.skipped);
     set_contact_status(status_gadget, window, message);
     (void)gui;
 }
@@ -717,8 +697,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
             ? (UWORD)(gui->screen->RastPort.TxHeight + 2U) : 10U);
     amg_contacts_init(&book);
     if (amg_contacts_load(AMG_CONTACTS_DEFAULT_PATH, &book, error) != AMG_OK) {
-        status_local(gui, T("Kontaktdatei konnte nicht geladen werden.",
-                            "Contact file could not be loaded."));
+        status_local(gui, T(MSG_CONTACT_FILE_COULD_NOT_BE_LOADED, "Contact file could not be loaded."));
         amg_contacts_free(&book);
         return;
     }
@@ -729,7 +708,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
         return;
     }
     dialog = WindowObject,
-        WA_Title, T("AmiMail - Kontaktverwaltung", "AmiMail - Contact management"),
+        WA_Title, T(MSG_AMIMAIL_CONTACT_MANAGEMENT, "AmiMail - Contact management"),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                   WFLG_SIZEGADGET | WFLG_ACTIVATE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
@@ -747,22 +726,22 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_CONTACTS_NEW,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("_Neuer Kontakt", "_New contact"),
+                    GA_Text, T(MSG_NEW_CONTACT, "_New contact"),
                 EndObject,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_CONTACTS_EDIT,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("_Bearbeiten", "_Edit"),
+                    GA_Text, T(MSG_EDIT, "_Edit"),
                 EndObject,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_CONTACTS_DELETE,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("_L\366schen", "_Delete"),
+                    GA_Text, T(MSG_DELETE, "_Delete"),
                 EndObject,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_CONTACTS_IMPORT,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("_Importieren", "_Import"),
+                    GA_Text, T(MSG_IMPORT, "_Import"),
                 EndObject,
             EndObject,
             CHILD_WeightedHeight, 0,
@@ -789,7 +768,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
             LAYOUT_AddChild, ButtonObject,
                 GA_ID, GID_CONTACTS_CLOSE,
                 GA_RelVerify, TRUE,
-                GA_Text, T("_Schlie\337en", "_Close"),
+                GA_Text, T(MSG_CLOSE, "_Close"),
             EndObject,
             CHILD_WeightedHeight, 0,
         EndObject,
@@ -834,7 +813,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                                                      &list, &book, 0,
                                                      render_hooks, row_height);
                                 set_contact_status(status_gadget, window,
-                                    T("Kontakt gespeichert.", "Contact saved."));
+                                    T(MSG_CONTACT_SAVED, "Contact saved."));
                             }
                         } else if (gid == GID_CONTACTS_EDIT ||
                                    gid == GID_CONTACTS_LIST) {
@@ -848,8 +827,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                             }
                             if (!selected_contact_id(list_gadget, &id)) {
                                 set_contact_status(status_gadget, window,
-                                    T("Bitte zuerst einen Kontakt ausw\344hlen.",
-                                      "Please select a contact first."));
+                                    T(MSG_PLEASE_SELECT_A_CONTACT_FIRST, "Please select a contact first."));
                                 break;
                             }
                             if (contact_editor(gui, &book, id, error)) {
@@ -857,7 +835,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                                                      &list, &book, 0,
                                                      render_hooks, row_height);
                                 set_contact_status(status_gadget, window,
-                                    T("Kontakt gespeichert.", "Contact saved."));
+                                    T(MSG_CONTACT_SAVED, "Contact saved."));
                             }
                         } else if (gid == GID_CONTACTS_DELETE) {
                             size_t selected_count =
@@ -870,16 +848,14 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
 
                             if (!selected_count) {
                                 set_contact_status(status_gadget, window,
-                                    T("Bitte mindestens einen Kontakt ausw\344hlen.",
-                                      "Please select at least one contact."));
+                                    T(MSG_PLEASE_SELECT_AT_LEAST_ONE_CONTACT, "Please select at least one contact."));
                                 break;
                             }
                             ids = (unsigned long *)malloc(
                                 selected_count * sizeof(*ids));
                             if (!ids) {
                                 set_contact_status(status_gadget, window,
-                                    T("Nicht genug Speicher.",
-                                      "Not enough memory."));
+                                    T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
                                 break;
                             }
                             (void)selected_contact_ids(
@@ -887,19 +863,13 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
 
                             if (selected_count == 1U) {
                                 snprintf(question, sizeof(question), "%s",
-                                         T("Kontakt wirklich l\366schen?",
-                                           "Really delete contact?"));
+                                         T(MSG_REALLY_DELETE_CONTACT, "Really delete contact?"));
                             } else {
-                                amg_tr_snprintf(
-                                    question, sizeof(question),
-                                    "%lu ausgew\344hlte Kontakte wirklich l\366schen?",
-                                    "Really delete %lu selected contacts?",
-                                    (unsigned long)selected_count);
+                                amg_tr_snprintf(question, sizeof(question), MSG_REALLY_DELETE_VALUE_SELECTED_CONTACTS, "Really delete %lu selected contacts?", (unsigned long)selected_count);
                             }
                             if (confirm_question_dialog_for_window(
                                     gui, window, question,
-                                    T("Dieser Vorgang kann nicht widerrufen werden.",
-                                      "This action cannot be undone."),
+                                    T(MSG_THIS_ACTION_CANNOT_BE_UNDONE, "This action cannot be undone."),
                                     330L)) {
                                 for (i = 0U; i < selected_count; ++i) {
                                     if (amg_contacts_delete(
@@ -917,14 +887,9 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                                     if (selected_count == 1U) {
                                         snprintf(status_text,
                                                  sizeof(status_text), "%s",
-                                                 T("Kontakt gel\366scht.",
-                                                   "Contact deleted."));
+                                                 T(MSG_CONTACT_DELETED, "Contact deleted."));
                                     } else {
-                                        amg_tr_snprintf(
-                                            status_text, sizeof(status_text),
-                                            "%lu Kontakte gel\366scht.",
-                                            "%lu contacts deleted.",
-                                            (unsigned long)selected_count);
+                                        amg_tr_snprintf(status_text, sizeof(status_text), MSG_VALUE_CONTACTS_DELETED, "%lu contacts deleted.", (unsigned long)selected_count);
                                     }
                                     set_contact_status(status_gadget, window,
                                                        status_text);
@@ -939,8 +904,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                                                          &list, &book, 0,
                                                          render_hooks, row_height);
                                     set_contact_status(status_gadget, window,
-                                        T("Kontakte konnten nicht gel\366scht werden.",
-                                          "Contacts could not be deleted."));
+                                        T(MSG_CONTACTS_COULD_NOT_BE_DELETED, "Contacts could not be deleted."));
                                 }
                             }
                             free(ids);
@@ -1069,8 +1033,7 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
     columns = contacts_columns();
     if (!columns) { amg_contacts_free(&book); return 0; }
     dialog = WindowObject,
-        WA_Title, T("AmiMail - Kontakte ausw\344hlen",
-                    "AmiMail - Select contacts"),
+        WA_Title, T(MSG_AMIMAIL_SELECT_CONTACTS, "AmiMail - Select contacts"),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                   WFLG_SIZEGADGET | WFLG_ACTIVATE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
@@ -1100,8 +1063,7 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
                 status_gadget = (struct Gadget *)StringObject,
                     GA_ReadOnly, TRUE,
                     STRINGA_MaxChars, 255,
-                    STRINGA_TextVal, T("Mehrfachauswahl ist m\366glich.",
-                                      "Multiple selection is supported."),
+                    STRINGA_TextVal, T(MSG_MULTIPLE_SELECTION_IS_SUPPORTED, "Multiple selection is supported."),
                 EndObject,
             CHILD_WeightedHeight, 0,
             LAYOUT_AddChild, HGroupObject,
@@ -1110,12 +1072,12 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_CONTACT_SELECT_ACCEPT,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("_\334bernehmen", "_Use selected"),
+                    GA_Text, T(MSG_USE_SELECTED, "_Use selected"),
                 EndObject,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_CONTACT_SELECT_CANCEL,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("Ab_brechen", "_Cancel"),
+                    GA_Text, T(MSG_CANCEL, "_Cancel"),
                 EndObject,
             EndObject,
             CHILD_WeightedHeight, 0,
@@ -1179,8 +1141,7 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
                                                 email_local) != AMG_OK) {
                                             set_contact_status(
                                                 status_gadget, window,
-                                                T("Empf\344ngerliste ist zu lang.",
-                                                  "Recipient list is too long."));
+                                                T(MSG_RECIPIENT_LIST_IS_TOO_LONG, "Recipient list is too long."));
                                             selected_any = -1;
                                             break;
                                         }
@@ -1191,8 +1152,7 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
                             }
                             if (!selected_any) {
                                 set_contact_status(status_gadget, window,
-                                    T("Bitte mindestens einen Kontakt ausw\344hlen.",
-                                      "Please select at least one contact."));
+                                    T(MSG_PLEASE_SELECT_AT_LEAST_ONE_CONTACT, "Please select at least one contact."));
                             } else if (selected_any > 0) {
                                 set_string(target, parent, recipients);
                                 accepted = 1;

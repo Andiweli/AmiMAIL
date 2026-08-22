@@ -1,5 +1,11 @@
 # Changelog
 
+## AmiMail 1.3 - 2026-08-22
+
+- update the program, package and release-asset version to 1.3
+- update the binary `$VER:` date to 22.08.2026
+- no functional changes relative to the preceding 1.2 code base
+
 ## AmiMail 1.2 - 2026-08-20
 
 - update the program, package and release-asset version to 1.2

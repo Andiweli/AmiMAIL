@@ -22,7 +22,7 @@
 #include <proto/intuition.h>
 #include <utility/tagitem.h>
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 /* Minimaler openurl.library-Aufruf ohne Abhaengigkeit vom OpenURL-SDK.
  * URL_OpenA() liegt bei der klassischen API am Library-Vektor 0x1e. */
@@ -288,7 +288,7 @@ static void set_preview_utf8(AmgGui *gui, const unsigned char *utf8,
         amg_buffer_terminate(&local) == AMG_OK)
         set_preview_local(gui, (const char *)local.data);
     else
-        set_preview_local(gui, T("Nachricht konnte nicht dargestellt werden.", "Message could not be displayed."));
+        set_preview_local(gui, T(MSG_MESSAGE_COULD_NOT_BE_DISPLAYED, "Message could not be displayed."));
     amg_buffer_free(&local);
     (void)length;
 }
@@ -323,7 +323,7 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
                                         &position, &record);
     if (result <= 0) {
         amg_error_set(error, result < 0 ? result : AMG_ERR_PARSE,
-                      T("Die ausgew\303\244hlte Nachricht enth\303\244lt keinen Mail-Datenblock.", "The selected message contains no mail data block."));
+                      T(MSG_THE_SELECTED_MESSAGE_CONTAINS_NO_MAIL_DATA_BLOCK, "The selected message contains no mail data block."));
         return result < 0 ? result : AMG_ERR_PARSE;
     }
 
@@ -335,16 +335,16 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
                                     record.literal_length, &headers, NULL);
     if (result == AMG_OK)
         result = append_preview_header(
-            &preview, T("Von: ", "From: "), amg_mail_header_get(&headers, "From"));
+            &preview, T(MSG_FROM, "From: "), amg_mail_header_get(&headers, "From"));
     if (result == AMG_OK)
         result = append_preview_header(
-            &preview, T("An: ", "To: "), amg_mail_header_get(&headers, "To"));
+            &preview, T(MSG_TO, "To: "), amg_mail_header_get(&headers, "To"));
     if (result == AMG_OK)
         result = append_preview_header(
-            &preview, T("Datum: ", "Date: "), amg_mail_header_get(&headers, "Date"));
+            &preview, T(MSG_DATE, "Date: "), amg_mail_header_get(&headers, "Date"));
     if (result == AMG_OK)
         result = append_preview_header(
-            &preview, T("Betreff: ", "Subject: "), amg_mail_header_get(&headers, "Subject"));
+            &preview, T(MSG_SUBJECT, "Subject: "), amg_mail_header_get(&headers, "Subject"));
     if (result == AMG_OK)
         result = amg_buffer_append_char(&preview, '\n');
     if (result == AMG_OK)
@@ -357,7 +357,7 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
                                     record.literal_length, &attachments,
                                     NULL) == AMG_OK &&
         attachments.length) {
-        result = amg_buffer_append_cstr(&preview, T("\n\nAnh\303\244nge:\n", "\n\nAttachments:\n"));
+        result = amg_buffer_append_cstr(&preview, T(MSG_ATTACHMENTS_791D, "\n\nAttachments:\n"));
         if (result == AMG_OK)
             result = amg_buffer_append(&preview, attachments.data,
                                        attachments.length);
@@ -366,7 +366,7 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
         set_preview_utf8(gui, preview.data, preview.length);
         amg_error_set(error, AMG_OK, "");
     } else if (result != AMG_OK) {
-        set_preview_local(gui, T("Nachrichtentext konnte nicht dargestellt werden.", "Message text could not be displayed."));
+        set_preview_local(gui, T(MSG_MESSAGE_TEXT_COULD_NOT_BE_DISPLAYED, "Message text could not be displayed."));
     }
     amg_mail_headers_free(&headers);
     amg_buffer_free(&body);
@@ -464,7 +464,7 @@ void sanitize_attachment_name(const char *name_utf8,
 {
     size_t i, used;
     if (!name_local || !capacity) return;
-    utf8_to_local_copy(name_utf8 && *name_utf8 ? name_utf8 : T("Anhang.bin", "attachment.bin"),
+    utf8_to_local_copy(name_utf8 && *name_utf8 ? name_utf8 : T(MSG_ATTACHMENT_BIN, "attachment.bin"),
                        name_local, capacity);
     used = strlen(name_local);
     for (i = 0U; i < used; ++i) {
@@ -474,7 +474,7 @@ void sanitize_attachment_name(const char *name_utf8,
     }
     while (name_local[0] == '.')
         memmove(name_local, name_local + 1, strlen(name_local));
-    if (!name_local[0]) strcpy(name_local, T("Anhang.bin", "attachment.bin"));
+    if (!name_local[0]) strcpy(name_local, T(MSG_ATTACHMENT_BIN, "attachment.bin"));
 }
 
 int build_unique_attachment_path(const char *drawer,
@@ -508,19 +508,19 @@ void save_current_attachments(AmgGui *gui)
     size_t i, saved = 0U;
     if (!gui || !gui->current_message_payload ||
         !gui->current_attachment_count) {
-        status_local(gui, T("Diese Nachricht enth\344lt keine speicherbaren Anh\344nge.", "This message has no savable attachments."));
+        status_local(gui, T(MSG_THIS_MESSAGE_HAS_NO_SAVABLE_ATTACHMENTS, "This message has no savable attachments."));
         return;
     }
     request = (struct FileRequester *)AllocAslRequestTags(
         ASL_FileRequest,
-        ASLFR_TitleText, (ULONG)(uintptr_t)T("Anh\344nge speichern", "Save attachments"),
+        ASLFR_TitleText, (ULONG)(uintptr_t)T(MSG_SAVE_ATTACHMENTS, "Save attachments"),
         ASLFR_Window, (ULONG)(uintptr_t)gui->window,
         ASLFR_SleepWindow, TRUE,
         ASLFR_DrawersOnly, TRUE,
         ASLFR_RejectIcons, TRUE,
         TAG_DONE);
     if (!request) {
-        status_local(gui, T("Zielordner konnte nicht ausgew\344hlt werden.", "Destination folder could not be selected."));
+        status_local(gui, T(MSG_DESTINATION_FOLDER_COULD_NOT_BE_SELECTED, "Destination folder could not be selected."));
         return;
     }
     if (!AslRequest(request, NULL)) {
@@ -532,7 +532,7 @@ void save_current_attachments(AmgGui *gui)
     drawer[sizeof(drawer) - 1U] = 0;
     FreeAslRequest(request);
     if (!drawer[0]) {
-        status_local(gui, T("Kein Zielordner ausgew\344hlt.", "No destination folder selected."));
+        status_local(gui, T(MSG_NO_DESTINATION_FOLDER_SELECTED, "No destination folder selected."));
         return;
     }
 
@@ -555,7 +555,7 @@ void save_current_attachments(AmgGui *gui)
             amg_buffer_free(&data);
             status_utf8(gui, attachment_error.message[0]
                                  ? attachment_error.message
-                                 : T("Anhang konnte nicht gespeichert werden.", "Attachment could not be saved."));
+                                 : T(MSG_ATTACHMENT_COULD_NOT_BE_SAVED, "Attachment could not be saved."));
             return;
         }
         sanitize_attachment_name((const char *)name_utf8.data,
@@ -565,14 +565,14 @@ void save_current_attachments(AmgGui *gui)
         if (result != AMG_OK) {
             amg_buffer_free(&name_utf8);
             amg_buffer_free(&data);
-            status_local(gui, T("Dateipfad f\374r Anhang ist zu lang.", "Attachment path is too long."));
+            status_local(gui, T(MSG_ATTACHMENT_PATH_IS_TOO_LONG, "Attachment path is too long."));
             return;
         }
         file = fopen(path, "wb");
         if (!file) {
             amg_buffer_free(&name_utf8);
             amg_buffer_free(&data);
-            status_local(gui, T("Anhang konnte nicht auf Disk geschrieben werden.", "Attachment could not be written to disk."));
+            status_local(gui, T(MSG_ATTACHMENT_COULD_NOT_BE_WRITTEN_TO_DISK, "Attachment could not be written to disk."));
             return;
         }
         {
@@ -582,7 +582,7 @@ void save_current_attachments(AmgGui *gui)
             if (write_failed || close_failed) {
                 amg_buffer_free(&name_utf8);
                 amg_buffer_free(&data);
-                status_local(gui, T("Anhang konnte nicht auf Disk geschrieben werden.", "Attachment could not be written to disk."));
+                status_local(gui, T(MSG_ATTACHMENT_COULD_NOT_BE_WRITTEN_TO_DISK, "Attachment could not be written to disk."));
                 return;
             }
         }
@@ -592,10 +592,7 @@ void save_current_attachments(AmgGui *gui)
     }
     {
         char message[128];
-        amg_tr_snprintf(message, sizeof(message),
-                        "%lu Anhang/Anh\344nge gespeichert.",
-                        "%lu attachment(s) saved.",
-                        (unsigned long)saved);
+        amg_tr_snprintf(message, sizeof(message), MSG_VALUE_ATTACHMENT_S_SAVED, "%lu attachment(s) saved.", (unsigned long)saved);
         status_local(gui, message);
     }
 }

@@ -1,13 +1,10 @@
 #ifndef AMIGMAIL_I18N_H
 #define AMIGMAIL_I18N_H
-
 #include <stddef.h>
-
+#include "catalog_ids.h"
 void amg_i18n_init(void);
-int amg_i18n_is_german(void);
-const char *amg_tr(const char *german, const char *english);
+void amg_i18n_cleanup(void);
+const char *amg_tr(long string_id, const char *english_fallback);
 int amg_tr_snprintf(char *output, size_t capacity,
-                    const char *german_format,
-                    const char *english_format, ...);
-
+                    long string_id, const char *english_format, ...);
 #endif

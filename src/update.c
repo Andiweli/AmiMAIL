@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 #define AMG_UPDATE_API_URL \
     "https://api.github.com/repos/Andiweli/AmiMAIL/releases/latest"
 #define AMG_UPDATE_DOWNLOAD_PREFIX \
@@ -193,8 +193,7 @@ int amg_update_parse_latest_json(const unsigned char *json, size_t length,
                              info->tag, sizeof(info->tag)) ||
         !parse_version(info->tag, &parsed_version)) {
         amg_error_set(error, AMG_ERR_PARSE,
-                      T("GitHub-Antwort enth\303\244lt keine g\303\274ltige Release-Version.",
-                        "GitHub response does not contain a valid release version."));
+                      T(MSG_GITHUB_RESPONSE_DOES_NOT_CONTAIN_A_VALID_RELEASE, "GitHub response does not contain a valid release version."));
         return AMG_ERR_PARSE;
     }
     written = snprintf(info->download_url, sizeof(info->download_url),
@@ -202,8 +201,7 @@ int amg_update_parse_latest_json(const unsigned char *json, size_t length,
                        info->tag, info->tag);
     if (written < 0 || (size_t)written >= sizeof(info->download_url)) {
         amg_error_set(error, AMG_ERR_LIMIT,
-                      T("GitHub-Downloadadresse ist zu lang.",
-                        "GitHub download address is too long."));
+                      T(MSG_GITHUB_DOWNLOAD_ADDRESS_IS_TOO_LONG, "GitHub download address is too long."));
         return AMG_ERR_LIMIT;
     }
     return AMG_OK;
@@ -370,7 +368,7 @@ static int https_get_once(const char *url, size_t max_body,
 
     if (!parse_https_url(url, host, sizeof(host), path, sizeof(path))) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Ung\303\274ltige HTTPS-Adresse.", "Invalid HTTPS address."));
+                      T(MSG_INVALID_HTTPS_ADDRESS, "Invalid HTTPS address."));
         return AMG_ERR_ARGUMENT;
     }
     if (location && location_capacity) location[0] = 0;
@@ -392,7 +390,7 @@ static int https_get_once(const char *url, size_t max_body,
             "\r\nAccept: application/vnd.github+json, application/octet-stream"
             "\r\nConnection: close\r\n\r\n") != AMG_OK) {
         result = AMG_ERR_MEMORY;
-        amg_error_set(error, result, T("Nicht genug Speicher.", "Not enough memory."));
+        amg_error_set(error, result, T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
         goto done;
     }
     result = amg_tls_write_all(connection, request.data, request.length, error);
@@ -404,14 +402,14 @@ static int https_get_once(const char *url, size_t max_body,
         result = amg_buffer_append(&response, block, (size_t)count);
         if (result != AMG_OK) {
             amg_error_set(error, result,
-                          T("Nicht genug Speicher.", "Not enough memory."));
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
             goto done;
         }
     }
     if (response.length > max_body + 65536U) {
         result = AMG_ERR_LIMIT;
         amg_error_set(error, result,
-                      T("HTTPS-Antwort ist zu gro\303\237.", "HTTPS response is too large."));
+                      T(MSG_HTTPS_RESPONSE_IS_TOO_LARGE, "HTTPS response is too large."));
         goto done;
     }
     if (amg_buffer_terminate(&response) != AMG_OK) {
@@ -421,14 +419,14 @@ static int https_get_once(const char *url, size_t max_body,
     if (sscanf((const char *)response.data, "HTTP/%*u.%*u %d", status) != 1) {
         result = AMG_ERR_PROTOCOL;
         amg_error_set(error, result,
-                      T("Ung\303\274ltige HTTPS-Antwort.", "Invalid HTTPS response."));
+                      T(MSG_INVALID_HTTPS_RESPONSE, "Invalid HTTPS response."));
         goto done;
     }
     body_start = find_header_end(response.data, response.length);
     if (!body_start) {
         result = AMG_ERR_PROTOCOL;
         amg_error_set(error, result,
-                      T("HTTPS-Header ist unvollst\303\244ndig.", "HTTPS header is incomplete."));
+                      T(MSG_HTTPS_HEADER_IS_INCOMPLETE, "HTTPS header is incomplete."));
         goto done;
     }
     header_length = (size_t)(body_start - response.data);
@@ -443,10 +441,7 @@ static int https_get_once(const char *url, size_t max_body,
     if (!status || *status < 200 || *status >= 300) {
         char message[256];
         result = AMG_ERR_PROTOCOL;
-        amg_tr_snprintf(message, sizeof(message),
-                        "GitHub antwortete mit HTTP-Status %d.",
-                        "GitHub returned HTTP status %d.",
-                        status ? *status : 0);
+        amg_tr_snprintf(message, sizeof(message), MSG_GITHUB_RETURNED_HTTP_STATUS_VALUE, "GitHub returned HTTP status %d.", status ? *status : 0);
         amg_error_set(error, result, message);
         goto done;
     }
@@ -475,9 +470,8 @@ static int https_get_once(const char *url, size_t max_body,
     if (result != AMG_OK && error && error->code == AMG_OK)
         amg_error_set(error, result,
                       result == AMG_ERR_LIMIT
-                        ? T("Download ist zu gro\303\237.", "Download is too large.")
-                        : T("HTTPS-Daten konnten nicht ausgewertet werden.",
-                            "HTTPS data could not be parsed."));
+                        ? T(MSG_DOWNLOAD_IS_TOO_LARGE, "Download is too large.")
+                        : T(MSG_HTTPS_DATA_COULD_NOT_BE_PARSED, "HTTPS data could not be parsed."));
 
 done:
     if (connection) amg_tls_close(connection);
@@ -509,15 +503,13 @@ static int https_get_follow(const char *url, size_t max_body,
               status == 307 || status == 308) || !location[0] ||
             !resolve_redirect(current, location, next, sizeof(next))) {
             amg_error_set(error, AMG_ERR_PROTOCOL,
-                          T("GitHub-Weiterleitung ist ung\303\274ltig.",
-                            "GitHub redirect is invalid."));
+                          T(MSG_GITHUB_REDIRECT_IS_INVALID, "GitHub redirect is invalid."));
             return AMG_ERR_PROTOCOL;
         }
         strcpy(current, next);
     }
     amg_error_set(error, AMG_ERR_PROTOCOL,
-                  T("Zu viele GitHub-Weiterleitungen.",
-                    "Too many GitHub redirects."));
+                  T(MSG_TOO_MANY_GITHUB_REDIRECTS, "Too many GitHub redirects."));
     return AMG_ERR_PROTOCOL;
 }
 
@@ -567,8 +559,7 @@ int amg_update_download(const char *url, const char *destination,
             remove(destination);
             result = AMG_ERR_IO;
             amg_error_set(error, result,
-                          T("Update konnte nicht nach RAM: geschrieben werden.",
-                            "Update could not be written to RAM:."));
+                          T(MSG_UPDATE_COULD_NOT_BE_WRITTEN_TO_RAM, "Update could not be written to RAM:."));
         }
     }
     amg_buffer_free(&body);
@@ -582,7 +573,7 @@ int amg_update_check_latest(AmgUpdateInfo *info, AmgError *error)
 {
     (void)info;
     amg_error_set(error, AMG_ERR_UNSUPPORTED,
-                  T("Update-Pr\303\274fung ist nur unter AmigaOS verf\303\274gbar.", "Update check is available only on AmigaOS."));
+                  T(MSG_UPDATE_CHECK_IS_AVAILABLE_ONLY_ON_AMIGAOS, "Update check is available only on AmigaOS."));
     return AMG_ERR_UNSUPPORTED;
 }
 
@@ -592,7 +583,7 @@ int amg_update_download(const char *url, const char *destination,
     (void)url;
     (void)destination;
     amg_error_set(error, AMG_ERR_UNSUPPORTED,
-                  T("Update-Download ist nur unter AmigaOS verf\303\274gbar.", "Update download is available only on AmigaOS."));
+                  T(MSG_UPDATE_DOWNLOAD_IS_AVAILABLE_ONLY_ON_AMIGAOS, "Update download is available only on AmigaOS."));
     return AMG_ERR_UNSUPPORTED;
 }
 

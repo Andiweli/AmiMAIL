@@ -693,13 +693,13 @@ static void test_update(void)
 
 static void test_i18n(void)
 {
-    char text_buffer[64];
+    char formatted[64];
     amg_i18n_init();
-    CHECK(!amg_i18n_is_german());
-    CHECK(!strcmp(amg_tr("Deutsch", "English"), "English"));
-    amg_tr_snprintf(text_buffer, sizeof(text_buffer),
-                    "%lu Nachricht", "%lu message", 3UL);
-    CHECK(!strcmp(text_buffer, "3 message"));
+    CHECK(!strcmp(amg_tr(123456L, "English"), "English"));
+    amg_tr_snprintf(formatted, sizeof(formatted),
+                    123457L, "%lu message", 3UL);
+    CHECK(!strcmp(formatted, "3 message"));
+    amg_i18n_cleanup();
 }
 
 int main(void)

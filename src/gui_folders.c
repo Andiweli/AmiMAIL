@@ -25,22 +25,22 @@
 #define GUI_TREE_AXIS_LEFT_SHIFT ((GUI_TREE_IMAGE_WIDTH - 1) / 2)
 #define GUI_TREE_CHILD_LEFT_SHIFT (GUI_TREE_AXIS_LEFT_SHIFT + 1)
 #define GUI_TREE_DOT_STEP 2
-#define T(de,en) amg_tr((de),(en))
+#define T(id, en) amg_tr((id), (en))
 
 typedef struct SystemLabelDefinition {
-    const char *display_de;
+    long string_id;
     const char *display_en;
     unsigned long special_use;
 } SystemLabelDefinition;
 
 static const SystemLabelDefinition system_labels[GUI_SYSTEM_LABEL_COUNT] = {
-    {"Posteingang", "Inbox", AMG_LABEL_INBOX},
-    {"Markiert", "Starred", AMG_LABEL_FLAGGED},
-    {"Gesendet", "Sent", AMG_LABEL_SENT},
-    {"Entw\374rfe", "Drafts", AMG_LABEL_DRAFTS},
-    {"Alle Nachrichten", "All Mail", AMG_LABEL_ALL},
-    {"Spam", "Spam", AMG_LABEL_SPAM},
-    {"Papierkorb", "Trash", AMG_LABEL_TRASH}
+    {MSG_INBOX, "Inbox", AMG_LABEL_INBOX},
+    {MSG_SYSTEM_STARRED, "Starred", AMG_LABEL_FLAGGED},
+    {MSG_SYSTEM_SENT, "Sent", AMG_LABEL_SENT},
+    {MSG_SYSTEM_DRAFTS, "Drafts", AMG_LABEL_DRAFTS},
+    {MSG_SYSTEM_ALL_MAIL, "All Mail", AMG_LABEL_ALL},
+    {MSG_SYSTEM_SPAM, "Spam", AMG_LABEL_SPAM},
+    {MSG_SYSTEM_TRASH, "Trash", AMG_LABEL_TRASH}
 };
 
 static const char *system_special_aliases[GUI_SYSTEM_LABEL_COUNT] = {
@@ -447,7 +447,7 @@ static void initialize_system_label_map(AmgGui *gui)
     for (i = 0; i < GUI_SYSTEM_LABEL_COUNT; ++i) {
         memset(&gui->labels[i], 0, sizeof(gui->labels[i]));
         {
-            const char *display = T(system_labels[i].display_de,
+            const char *display = T(system_labels[i].string_id,
                                     system_labels[i].display_en);
             strncpy(gui->labels[i].display_local, display,
                     sizeof(gui->labels[i].display_local) - 1U);
@@ -498,7 +498,7 @@ static void initialize_system_label_map(AmgGui *gui)
 {
     initialize_system_label_map(gui);
     strcpy(gui->current_mailbox_utf8, "INBOX");
-    strcpy(gui->current_label_local, T("Posteingang", "Inbox"));
+    strcpy(gui->current_label_local, T(MSG_INBOX, "Inbox"));
     rebuild_label_lists(gui);
 }
 

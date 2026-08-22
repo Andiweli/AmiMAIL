@@ -4,7 +4,7 @@
 #include "tls.h"
 #include "i18n.h"
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -132,10 +132,10 @@ done:
     amg_secure_clear(key, sizeof(key));
     amg_tls_global_cleanup();
     if (result == AMG_ERR_MEMORY)
-        amg_error_set(error, result, T("Nicht genug Speicher.", "Not enough memory."));
+        amg_error_set(error, result, T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
     else if (result != AMG_OK)
         amg_error_set(error, result,
-                      T("AmiSSL konnte die Kontodaten nicht verschl\303\274sseln.", "AmiSSL could not encrypt the account data."));
+                      T(MSG_AMISSL_COULD_NOT_ENCRYPT_THE_ACCOUNT_DATA, "AmiSSL could not encrypt the account data."));
     return result;
 }
 
@@ -158,8 +158,7 @@ static int derive_storage_key(const char *master, const unsigned char salt[16],
         amg_tls_global_cleanup();
         amg_secure_clear(key, SESSION_KEY_SIZE);
         amg_error_set(error, AMG_ERR_TLS,
-                      T("AmiSSL konnte den Sitzungsschlüssel nicht ableiten.",
-                        "AmiSSL could not derive the session key."));
+                      T(MSG_AMISSL_COULD_NOT_DERIVE_THE_SESSION_KEY, "AmiSSL could not derive the session key."));
         return AMG_ERR_TLS;
     }
     amg_tls_global_cleanup();
@@ -207,7 +206,7 @@ done:
     if (ctx) EVP_CIPHER_CTX_free(ctx);
     amg_tls_global_cleanup();
     if (result == AMG_ERR_MEMORY)
-        amg_error_set(error, result, T("Nicht genug Speicher.", "Not enough memory."));
+        amg_error_set(error, result, T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
     return result;
 }
 
@@ -240,7 +239,7 @@ int amg_storage_save_account(const char *path,const AmgAccount *account,const ch
     if (!path || !account) return AMG_ERR_ARGUMENT;
     if (strlen(path) + 5U >= sizeof(temporary)) return AMG_ERR_LIMIT;
     snprintf(temporary,sizeof(temporary),"%s.new",path);
-    file=fopen(temporary,"wb");if(!file){amg_error_set(error,AMG_ERR_IO,T("Kontodatei konnte nicht geschrieben werden.", "Account file could not be written."));return AMG_ERR_IO;}
+    file=fopen(temporary,"wb");if(!file){amg_error_set(error,AMG_ERR_IO,T(MSG_ACCOUNT_FILE_COULD_NOT_BE_WRITTEN, "Account file could not be written."));return AMG_ERR_IO;}
     amg_buffer_init(&plain);amg_buffer_init(&cipher);fprintf(file,"%s",STORAGE_HEADER_V2);
     if(write_hex_line(file,"display_name",(const unsigned char*)account->display_name,strlen(account->display_name))!=AMG_OK||
        write_hex_line(file,"email",(const unsigned char*)account->email,strlen(account->email))!=AMG_OK||
@@ -274,7 +273,7 @@ int amg_storage_save_account(const char *path,const AmgAccount *account,const ch
     if(result!=AMG_OK)discard_file(temporary);
     if(result==AMG_OK)amg_error_set(error,AMG_OK,"");
     else if(!error||error->code==AMG_OK)
-        amg_error_set(error,result,T("Kontodatei konnte nicht sicher gespeichert werden.", "Account file could not be saved securely."));
+        amg_error_set(error,result,T(MSG_ACCOUNT_FILE_COULD_NOT_BE_SAVED_SECURELY, "Account file could not be saved securely."));
     return result;
 }
 
@@ -352,8 +351,7 @@ static int read_account_salt(const char *path, unsigned char salt[16],
     (void)length;
     if (!data) {
         amg_error_set(error, AMG_ERR_IO,
-                      T("Kontodatei wurde nicht gefunden.",
-                        "Account file was not found."));
+                      T(MSG_ACCOUNT_FILE_WAS_NOT_FOUND, "Account file was not found."));
         return AMG_ERR_IO;
     }
     amg_buffer_init(&decoded);
@@ -371,8 +369,7 @@ static int read_account_salt(const char *path, unsigned char salt[16],
     free(data);
     if (result != AMG_OK)
         amg_error_set(error, result,
-                      T("Kontodatei enthält keinen gültigen Verschlüsselungsschlüssel.",
-                        "Account file does not contain valid encryption data."));
+                      T(MSG_ACCOUNT_FILE_DOES_NOT_CONTAIN_VALID_ENCRYPTION_DATA, "Account file does not contain valid encryption data."));
     return result;
 }
 #endif
@@ -408,8 +405,7 @@ static int read_account_iterations(const char *path,
     free(data);
     if (result != AMG_OK)
         amg_error_set(error, result,
-                      T("Kontodatei enthält ungültige KDF-Daten.",
-                        "Account file contains invalid KDF data."));
+                      T(MSG_ACCOUNT_FILE_CONTAINS_INVALID_KDF_DATA, "Account file contains invalid KDF data."));
     return result;
 }
 
@@ -476,14 +472,12 @@ int amg_storage_cache_session_key(const char *account_path,
     if (result == AMG_OK) amg_error_set(error, AMG_OK, "");
     else if (!error || error->code == AMG_OK)
         amg_error_set(error, result,
-                      T("Sitzungsschlüssel konnte nicht in ENV: gespeichert werden.",
-                        "Session key could not be stored in ENV:."));
+                      T(MSG_SESSION_KEY_COULD_NOT_BE_STORED_IN_ENV, "Session key could not be stored in ENV:."));
     return result;
 #else
     (void)account_path; (void)session_path; (void)master_password;
     amg_error_set(error, AMG_ERR_UNSUPPORTED,
-                  T("Sitzungsschlüssel werden nur unter AmigaOS verwendet.",
-                    "Session keys are only used on AmigaOS."));
+                  T(MSG_SESSION_KEYS_ARE_ONLY_USED_ON_AMIGAOS, "Session keys are only used on AmigaOS."));
     return AMG_ERR_UNSUPPORTED;
 #endif
 }
@@ -504,14 +498,13 @@ static int load_account_internal(const char *path, const char *master_password,
     (void)length;
     if (!data) {
         amg_error_set(error, AMG_ERR_IO,
-                      T("Kontodatei wurde nicht gefunden.",
-                        "Account file was not found."));
+                      T(MSG_ACCOUNT_FILE_WAS_NOT_FOUND, "Account file was not found."));
         return AMG_ERR_IO;
     }
     if (!storage_header_version(data)) {
         free(data);
         amg_error_set(error, AMG_ERR_PARSE,
-                      T("Kontodatei ist ungültig.", "Account file is invalid."));
+                      T(MSG_ACCOUNT_FILE_IS_INVALID, "Account file is invalid."));
         return AMG_ERR_PARSE;
     }
     amg_account_init(account);
@@ -669,11 +662,10 @@ static int load_account_internal(const char *path, const char *master_password,
     if (result == AMG_OK) amg_error_set(error, AMG_OK, "");
     else if (result == AMG_ERR_AUTH)
         amg_error_set(error, result,
-                      T("Master-Passwort fehlt oder ist falsch.",
-                        "Master password is missing or incorrect."));
+                      T(MSG_MASTER_PASSWORD_IS_MISSING_OR_INCORRECT, "Master password is missing or incorrect."));
     else if (!error || error->code == AMG_OK)
         amg_error_set(error, result,
-                      T("Kontodatei ist ungültig.", "Account file is invalid."));
+                      T(MSG_ACCOUNT_FILE_IS_INVALID, "Account file is invalid."));
     return result;
 }
 
@@ -702,8 +694,7 @@ int amg_storage_load_account_session(const char *account_path,
     (void)length;
     if (!data) {
         amg_error_set(error, AMG_ERR_AUTH,
-                      T("Für diese Amiga-Sitzung ist das Konto noch gesperrt.",
-                        "The account is not yet unlocked for this Amiga session."));
+                      T(MSG_THE_ACCOUNT_IS_NOT_YET_UNLOCKED_FOR_THIS, "The account is not yet unlocked for this Amiga session."));
         return AMG_ERR_AUTH;
     }
     amg_buffer_init(&decoded);
@@ -738,15 +729,13 @@ done:
         amg_storage_forget_session_key(session_path);
         if (result == AMG_ERR_AUTH)
             amg_error_set(error, result,
-                          T("Sitzungsschlüssel ist abgelaufen oder ungültig.",
-                            "Session key has expired or is invalid."));
+                          T(MSG_SESSION_KEY_HAS_EXPIRED_OR_IS_INVALID, "Session key has expired or is invalid."));
     }
     return result;
 #else
     (void)account_path; (void)session_path; (void)account;
     amg_error_set(error, AMG_ERR_UNSUPPORTED,
-                  T("Sitzungsschlüssel werden nur unter AmigaOS verwendet.",
-                    "Session keys are only used on AmigaOS."));
+                  T(MSG_SESSION_KEYS_ARE_ONLY_USED_ON_AMIGAOS, "Session keys are only used on AmigaOS."));
     return AMG_ERR_UNSUPPORTED;
 #endif
 }

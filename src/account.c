@@ -1,7 +1,7 @@
 #include "account.h"
 #include "i18n.h"
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 #include <ctype.h>
 #include <stdlib.h>
@@ -216,22 +216,19 @@ int amg_account_validate(const AmgAccount *account, AmgError *error)
 {
     if (!account || !valid_email(account->email)) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Bitte eine gültige E-Mail-Adresse eingeben.",
-                        "Please enter a valid email address."));
+                      T(MSG_PLEASE_ENTER_A_VALID_EMAIL_ADDRESS, "Please enter a valid email address."));
         return AMG_ERR_ARGUMENT;
     }
     if (!account->imap_host[0] || !account->smtp_host[0] ||
         !account->imap_port || !account->smtp_port) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("IMAP-/SMTP-Server oder Port fehlt.",
-                        "IMAP/SMTP server or port is missing."));
+                      T(MSG_IMAP_SMTP_SERVER_OR_PORT_IS_MISSING, "IMAP/SMTP server or port is missing."));
         return AMG_ERR_ARGUMENT;
     }
     if (!valid_login(amg_account_imap_user(account)) ||
         !valid_login(amg_account_smtp_user(account))) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("IMAP-/SMTP-Benutzername ist ungültig.",
-                        "IMAP/SMTP user name is invalid."));
+                      T(MSG_IMAP_SMTP_USER_NAME_IS_INVALID, "IMAP/SMTP user name is invalid."));
         return AMG_ERR_ARGUMENT;
     }
     if (!valid_optional_mailbox(account->sent_mailbox) ||
@@ -240,65 +237,56 @@ int amg_account_validate(const AmgAccount *account, AmgError *error)
         !valid_optional_mailbox(account->spam_mailbox) ||
         !valid_optional_mailbox(account->trash_mailbox)) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Eine manuelle Systemordner-Zuordnung ist ungültig.",
-                        "A manual system-folder mapping is invalid."));
+                      T(MSG_A_MANUAL_SYSTEM_FOLDER_MAPPING_IS_INVALID, "A manual system-folder mapping is invalid."));
         return AMG_ERR_ARGUMENT;
     }
     if (account->fetch_days < 1U || account->fetch_days > 3650U) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Der Abruf-Zeitraum muss zwischen 1 und 3650 Tagen liegen.",
-                        "The fetch period must be between 1 and 3650 days."));
+                      T(MSG_THE_FETCH_PERIOD_MUST_BE_BETWEEN_1_AND, "The fetch period must be between 1 and 3650 days."));
         return AMG_ERR_ARGUMENT;
     }
     if (amg_account_is_google_host(account->imap_host) &&
         (account->imap_starttls || account->imap_port != 993U)) {
         amg_error_set(
             error, AMG_ERR_UNSUPPORTED,
-            T("Gmail-IMAP verwendet direktes TLS auf Port 993. Bitte IMAP STARTTLS ausschalten und Port 993 verwenden.",
-              "Gmail IMAP uses direct TLS on port 993. Disable IMAP STARTTLS and use port 993."));
+            T(MSG_GMAIL_IMAP_USES_DIRECT_TLS_ON_PORT_993, "Gmail IMAP uses direct TLS on port 993. Disable IMAP STARTTLS and use port 993."));
         return AMG_ERR_UNSUPPORTED;
     }
     if (amg_account_is_google_host(account->smtp_host)) {
         if (account->smtp_starttls && account->smtp_port != 587U) {
             amg_error_set(
                 error, AMG_ERR_UNSUPPORTED,
-                T("Gmail-SMTP mit STARTTLS verwendet Port 587.",
-                  "Gmail SMTP with STARTTLS uses port 587."));
+                T(MSG_GMAIL_SMTP_WITH_STARTTLS_USES_PORT_587, "Gmail SMTP with STARTTLS uses port 587."));
             return AMG_ERR_UNSUPPORTED;
         }
         if (!account->smtp_starttls && account->smtp_port != 465U) {
             amg_error_set(
                 error, AMG_ERR_UNSUPPORTED,
-                T("Gmail-SMTP mit direktem TLS verwendet Port 465; f\303\274r STARTTLS Port 587 und STARTTLS aktivieren.",
-                  "Gmail SMTP with direct TLS uses port 465; for STARTTLS use port 587 and enable STARTTLS."));
+                T(MSG_GMAIL_SMTP_WITH_DIRECT_TLS_USES_PORT_465, "Gmail SMTP with direct TLS uses port 465; for STARTTLS use port 587 and enable STARTTLS."));
             return AMG_ERR_UNSUPPORTED;
         }
     }
     if (account->auth_mode == AMG_AUTH_PASSWORD) {
         if (!account->imap_password || !account->imap_password[0]) {
             amg_error_set(error, AMG_ERR_AUTH,
-                          T("Das IMAP-Passwort fehlt.",
-                            "The IMAP password is missing."));
+                          T(MSG_THE_IMAP_PASSWORD_IS_MISSING, "The IMAP password is missing."));
             return AMG_ERR_AUTH;
         }
         if (!amg_account_smtp_password(account) ||
             !amg_account_smtp_password(account)[0]) {
             amg_error_set(error, AMG_ERR_AUTH,
-                          T("Das SMTP-Passwort fehlt.",
-                            "The SMTP password is missing."));
+                          T(MSG_THE_SMTP_PASSWORD_IS_MISSING, "The SMTP password is missing."));
             return AMG_ERR_AUTH;
         }
     } else if (account->auth_mode == AMG_AUTH_OAUTH2_GOOGLE) {
         if (!account->refresh_token) {
             amg_error_set(error, AMG_ERR_AUTH,
-                          T("Die Google-OAuth-Autorisierung wurde noch nicht abgeschlossen.",
-                            "Google OAuth authorization has not been completed yet."));
+                          T(MSG_GOOGLE_OAUTH_AUTHORIZATION_HAS_NOT_BEEN_COMPLETED_YET, "Google OAuth authorization has not been completed yet."));
             return AMG_ERR_AUTH;
         }
     } else {
         amg_error_set(error, AMG_ERR_UNSUPPORTED,
-                      T("Die gewählte Anmeldemethode wird nicht unterstützt.",
-                        "The selected authentication method is not supported."));
+                      T(MSG_THE_SELECTED_AUTHENTICATION_METHOD_IS_NOT_SUPPORTED, "The selected authentication method is not supported."));
         return AMG_ERR_UNSUPPORTED;
     }
     amg_error_set(error, AMG_OK, "");

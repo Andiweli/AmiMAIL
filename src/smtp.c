@@ -3,7 +3,7 @@
 #include "tls.h"
 #include "i18n.h"
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 #include <ctype.h>
 #include <stdio.h>
@@ -106,7 +106,7 @@ int amg_smtp_build_reply(const AmgReplyDraft *draft, AmgBuffer *output,
         !header_safe(draft->to) || !header_safe(draft->subject) ||
         !header_safe(draft->date_rfc2822) || !header_safe(draft->message_id)) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Ung\303\274ltige Mailadresse oder Kopfzeile.", "Invalid mail address or header line."));
+                      T(MSG_INVALID_MAIL_ADDRESS_OR_HEADER_LINE, "Invalid mail address or header line."));
         return AMG_ERR_ARGUMENT;
     }
     amg_buffer_init(&subject);
@@ -148,7 +148,7 @@ int amg_smtp_build_reply(const AmgReplyDraft *draft, AmgBuffer *output,
     amg_error_set(error, result,
                   result == AMG_OK
                       ? ""
-                      : T("Antwortnachricht konnte nicht erstellt werden.", "Reply message could not be created."));
+                      : T(MSG_REPLY_MESSAGE_COULD_NOT_BE_CREATED, "Reply message could not be created."));
     return result;
 }
 
@@ -173,15 +173,13 @@ static int smtp_response_capture_code(AmgTlsConnection *connection,
         }
         if (!saw_newline) {
             amg_error_set(error, AMG_ERR_LIMIT,
-                          T("SMTP-Antwortzeile ist zu lang.",
-                            "SMTP response line is too long."));
+                          T(MSG_SMTP_RESPONSE_LINE_IS_TOO_LONG, "SMTP response line is too long."));
             return AMG_ERR_LIMIT;
         }
         line[used] = 0;
         if (capture && amg_buffer_append(capture, line, used) != AMG_OK) {
             amg_error_set(error, AMG_ERR_MEMORY,
-                          T("Nicht genug Speicher für die SMTP-Antwort.",
-                            "Not enough memory for the SMTP response."));
+                          T(MSG_NOT_ENOUGH_MEMORY_FOR_THE_SMTP_RESPONSE, "Not enough memory for the SMTP response."));
             return AMG_ERR_MEMORY;
         }
         if (used < 4U || !isdigit((unsigned char)line[0]) ||
@@ -189,8 +187,7 @@ static int smtp_response_capture_code(AmgTlsConnection *connection,
             !isdigit((unsigned char)line[2]) ||
             (line[3] != '-' && line[3] != ' ')) {
             amg_error_set(error, AMG_ERR_PROTOCOL,
-                          T("Ungültige SMTP-Antwort.",
-                            "Invalid SMTP response."));
+                          T(MSG_INVALID_SMTP_RESPONSE, "Invalid SMTP response."));
             return AMG_ERR_PROTOCOL;
         }
         code = (line[0] - '0') * 100 +
@@ -445,9 +442,7 @@ static int smtp_auth_plain(AmgTlsConnection *connection,
 
     if (result == AMG_OK && code / 100 != 2) {
         char message[192];
-        amg_tr_snprintf(message, sizeof(message),
-                        "SMTP-Anmeldung abgelehnt (Code %d).",
-                        "SMTP authentication rejected (code %d).", code);
+        amg_tr_snprintf(message, sizeof(message), MSG_SMTP_AUTHENTICATION_REJECTED_CODE_VALUE, "SMTP authentication rejected (code %d).", code);
         amg_error_set(error, AMG_ERR_AUTH, message);
         result = AMG_ERR_AUTH;
     }
@@ -475,8 +470,7 @@ static int smtp_auth_xoauth2(AmgTlsConnection *connection,
     amg_buffer_init(&command);
     if (!access_token || !*access_token) {
         amg_error_set(error, AMG_ERR_AUTH,
-                      T("OAuth-Zugriffstoken fehlt.",
-                        "OAuth access token is missing."));
+                      T(MSG_OAUTH_ACCESS_TOKEN_IS_MISSING, "OAuth access token is missing."));
         result = AMG_ERR_AUTH;
     }
     if (result == AMG_OK)
@@ -514,10 +508,7 @@ static int smtp_auth_xoauth2(AmgTlsConnection *connection,
     }
     if (result == AMG_OK && code / 100 != 2) {
         char message[192];
-        amg_tr_snprintf(message, sizeof(message),
-                        "SMTP-OAuth-Anmeldung abgelehnt (Code %d).",
-                        "SMTP OAuth authentication rejected (code %d).",
-                        code);
+        amg_tr_snprintf(message, sizeof(message), MSG_SMTP_OAUTH_AUTHENTICATION_REJECTED_CODE_VALUE, "SMTP OAuth authentication rejected (code %d).", code);
         amg_error_set(error, AMG_ERR_AUTH, message);
         result = AMG_ERR_AUTH;
     }
@@ -546,8 +537,7 @@ static int smtp_authenticate(AmgTlsConnection *connection,
     if (account->auth_mode == AMG_AUTH_OAUTH2_GOOGLE) {
         if (!has_xoauth2) {
             amg_error_set(error, AMG_ERR_UNSUPPORTED,
-                          T("Der SMTP-Server bietet AUTH XOAUTH2 nicht an.",
-                            "The SMTP server does not advertise AUTH XOAUTH2."));
+                          T(MSG_THE_SMTP_SERVER_DOES_NOT_ADVERTISE_AUTH_XOAUTH2, "The SMTP server does not advertise AUTH XOAUTH2."));
             return AMG_ERR_UNSUPPORTED;
         }
         return smtp_auth_xoauth2(connection, account, access_token, error);
@@ -566,8 +556,7 @@ static int smtp_authenticate(AmgTlsConnection *connection,
         return smtp_auth_login(connection, account, error);
 
     amg_error_set(error, AMG_ERR_UNSUPPORTED,
-                  T("Der SMTP-Server bietet weder AUTH PLAIN noch AUTH LOGIN an.",
-                    "The SMTP server advertises neither AUTH PLAIN nor AUTH LOGIN."));
+                  T(MSG_THE_SMTP_SERVER_ADVERTISES_NEITHER_AUTH_PLAIN_NOR, "The SMTP server advertises neither AUTH PLAIN nor AUTH LOGIN."));
     return AMG_ERR_UNSUPPORTED;
 }
 
@@ -600,8 +589,7 @@ static AmgTlsConnection *smtp_open(const AmgAccount *account,
         if (!amg_smtp_response_has_capability(&ehlo_response, "STARTTLS")) {
             amg_error_set(
                 error, AMG_ERR_UNSUPPORTED,
-                T("Der SMTP-Server bietet STARTTLS nicht an.",
-                  "The SMTP server does not advertise STARTTLS."));
+                T(MSG_THE_SMTP_SERVER_DOES_NOT_ADVERTISE_STARTTLS, "The SMTP server does not advertise STARTTLS."));
             result = AMG_ERR_UNSUPPORTED;
         } else {
             result = smtp_command(connection, "STARTTLS\r\n", 2, error);
@@ -710,7 +698,7 @@ static int smtp_begin_data(AmgTlsConnection *connection, const char *from,
         result = smtp_recipient_list(connection, bcc, &recipients, error);
     if (result == AMG_OK && !recipients) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Mindestens ein Empf\303\244nger fehlt.", "At least one recipient is required."));
+                      T(MSG_AT_LEAST_ONE_RECIPIENT_IS_REQUIRED, "At least one recipient is required."));
         result = AMG_ERR_ARGUMENT;
     }
     if (result == AMG_OK)
@@ -764,7 +752,7 @@ static int validate_attachments(const AmgMailDraft *draft, AmgError *error)
     size_t i;
     unsigned long total = 0;
     if (draft->attachment_count > AMG_MAIL_MAX_ATTACHMENTS) {
-        amg_error_set(error, AMG_ERR_LIMIT, T("Zu viele Dateianlagen.", "Too many attachments."));
+        amg_error_set(error, AMG_ERR_LIMIT, T(MSG_TOO_MANY_ATTACHMENTS, "Too many attachments."));
         return AMG_ERR_LIMIT;
     }
     for (i = 0; i < draft->attachment_count; ++i) {
@@ -773,12 +761,12 @@ static int validate_attachments(const AmgMailDraft *draft, AmgError *error)
             !draft->attachments[i].name_utf8 ||
             attachment_file_size(draft->attachments[i].path, &size) != AMG_OK) {
             amg_error_set(error, AMG_ERR_IO,
-                          T("Eine Dateianlage konnte nicht gelesen werden.", "An attachment could not be read."));
+                          T(MSG_AN_ATTACHMENT_COULD_NOT_BE_READ, "An attachment could not be read."));
             return AMG_ERR_IO;
         }
         if (size > AMG_MAIL_MAX_ATTACHMENT_TOTAL - total) {
             amg_error_set(error, AMG_ERR_LIMIT,
-                          T("Dateianlagen d\303\274rfen zusammen h\303\266chstens 10 MB gro\303\237 sein.", "Attachments may total no more than 10 MB."));
+                          T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8, "Attachments may total no more than 10 MB."));
             return AMG_ERR_LIMIT;
         }
         total += size;
@@ -881,7 +869,7 @@ static int smtp_write_attachment(AmgTlsConnection *connection,
     file = fopen(attachment->path, "rb");
     if (!file) {
         amg_error_set(error, AMG_ERR_IO,
-                      T("Eine Dateianlage konnte nicht ge\303\266ffnet werden.", "An attachment could not be opened."));
+                      T(MSG_AN_ATTACHMENT_COULD_NOT_BE_OPENED, "An attachment could not be opened."));
         return AMG_ERR_IO;
     }
     amg_buffer_init(&header);
@@ -913,7 +901,7 @@ static int smtp_write_attachment(AmgTlsConnection *connection,
     amg_buffer_free(&encoded);
     if (result != AMG_OK && error && error->code == AMG_OK)
         amg_error_set(error, result,
-                      T("Eine Dateianlage konnte nicht gesendet werden.", "An attachment could not be sent."));
+                      T(MSG_AN_ATTACHMENT_COULD_NOT_BE_SENT, "An attachment could not be sent."));
     return result;
 }
 
@@ -933,8 +921,7 @@ static int append_attachment_to_buffer(const AmgAttachmentInput *attachment,
     file = fopen(attachment->path, "rb");
     if (!file) {
         amg_error_set(error, AMG_ERR_IO,
-                      T("Eine Dateianlage konnte nicht ge\303\266ffnet werden.",
-                        "An attachment could not be opened."));
+                      T(MSG_AN_ATTACHMENT_COULD_NOT_BE_OPENED, "An attachment could not be opened."));
         return AMG_ERR_IO;
     }
 
@@ -969,8 +956,7 @@ static int append_attachment_to_buffer(const AmgAttachmentInput *attachment,
 
     if (result != AMG_OK && error && error->code == AMG_OK)
         amg_error_set(error, result,
-                      T("Eine Dateianlage konnte nicht in den Entwurf geschrieben werden.",
-                        "An attachment could not be written to the draft."));
+                      T(MSG_AN_ATTACHMENT_COULD_NOT_BE_WRITTEN_TO_THE, "An attachment could not be written to the draft."));
     return result;
 }
 
@@ -992,8 +978,7 @@ int amg_smtp_build_mail(const AmgMailDraft *draft, int include_bcc,
         !header_safe(draft->in_reply_to ? draft->in_reply_to : "") ||
         !header_safe(draft->references ? draft->references : "")) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Ung\303\274ltige Mailadresse oder Kopfzeile.",
-                        "Invalid mail address or header line."));
+                      T(MSG_INVALID_MAIL_ADDRESS_OR_HEADER_LINE, "Invalid mail address or header line."));
         return AMG_ERR_ARGUMENT;
     }
 
@@ -1018,8 +1003,7 @@ int amg_smtp_build_mail(const AmgMailDraft *draft, int include_bcc,
     }
     if (result != AMG_OK && error && error->code == AMG_OK)
         amg_error_set(error, result,
-                      T("Mailentwurf konnte nicht erstellt werden.",
-                        "Mail draft could not be created."));
+                      T(MSG_MAIL_DRAFT_COULD_NOT_BE_CREATED, "Mail draft could not be created."));
     return result;
 }
 
@@ -1040,7 +1024,7 @@ int amg_smtp_send_mail(const AmgAccount *account, const char *access_token,
         !header_safe(draft->in_reply_to ? draft->in_reply_to : "") ||
         !header_safe(draft->references ? draft->references : "")) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Ung\303\274ltige Mailadresse oder Kopfzeile.", "Invalid mail address or header line."));
+                      T(MSG_INVALID_MAIL_ADDRESS_OR_HEADER_LINE, "Invalid mail address or header line."));
         return AMG_ERR_ARGUMENT;
     }
     result = validate_attachments(draft, error);

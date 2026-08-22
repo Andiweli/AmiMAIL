@@ -16,7 +16,7 @@
 #include <reaction/reaction_macros.h>
 
 #define GUI_PERIODIC_FETCH_SECONDS 300UL
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 static void periodic_timer_clear_signal(AmgGui *gui)
 {
@@ -150,8 +150,7 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
     gui->window = RA_OpenWindow(gui->window_object);
     if (!gui->window) {
         amg_error_set(error, AMG_ERR_IO,
-                      T("Workbench-Fenster konnte nicht ge\303\266ffnet werden.",
-                        "Workbench window could not be opened."));
+                      T(MSG_WORKBENCH_WINDOW_COULD_NOT_BE_OPENED, "Workbench window could not be opened."));
         return AMG_ERR_IO;
     }
     gui->iconified = 0;
@@ -173,16 +172,13 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
             int unlock_result = unlock_account_dialog(gui, error);
             if (unlock_result == 1)
                 status_local(gui,
-                    T("Konto ist f\374r diese Amiga-Sitzung entsperrt.",
-                      "Account is unlocked for this Amiga session."));
+                    T(MSG_ACCOUNT_IS_UNLOCKED_FOR_THIS_AMIGA_SESSION, "Account is unlocked for this Amiga session."));
             else if (unlock_result == 2)
                 status_local(gui,
-                    T("Konto ist entsperrt; Sitzungsschl\374ssel konnte nicht in ENV: gespeichert werden.",
-                      "Account is unlocked; session key could not be stored in ENV:."));
+                    T(MSG_ACCOUNT_IS_UNLOCKED_SESSION_KEY_COULD_NOT_BE, "Account is unlocked; session key could not be stored in ENV:."));
             else
                 status_local(gui,
-                    T("Konto ist gesperrt. Konto-Einstellungen zum Entsperren \366ffnen.",
-                      "Account is locked. Open Account settings to unlock."));
+                    T(MSG_ACCOUNT_IS_LOCKED_OPEN_ACCOUNT_SETTINGS_TO_UNLOCK, "Account is locked. Open Account settings to unlock."));
         } else {
             account_dialog(gui, error);
         }
@@ -191,8 +187,7 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
 
     if (!periodic_timer_init(gui) && gui->account->periodic_fetch)
         status_local(gui,
-            T("Periodischer Abruf ist nicht verf\374gbar (timer.device).",
-              "Periodic fetch is unavailable (timer.device)."));
+            T(MSG_PERIODIC_FETCH_IS_UNAVAILABLE_TIMER_DEVICE, "Periodic fetch is unavailable (timer.device)."));
 
     if (!account_is_locked(gui->account) && gui->account->fetch_on_start) {
         /* Do not let the GitHub check jump ahead of the initial mail/folder
@@ -207,8 +202,7 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
         (void)open_mailto_compose(gui, startup_mailto, error);
     else if (startup_mailto)
         status_local(gui,
-            T("mailto:-Link abgebrochen: Mail-Konto ist gesperrt.",
-              "mailto: link cancelled: mail account is locked."));
+            T(MSG_MAILTO_LINK_CANCELLED_MAIL_ACCOUNT_IS_LOCKED, "mailto: link cancelled: mail account is locked."));
 
     while (gui->running) {
         ULONG window_signal = 0UL;

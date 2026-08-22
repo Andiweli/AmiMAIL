@@ -269,8 +269,7 @@ static Object *splash_create_window_object(void)
     struct Library *saved_button_base = ButtonBase;
     const char *client_line = "AmiMAIL " AMIMAIL_VERSION;
     const char *description_line =
-        amg_tr("Mail-Client f\374r AmigaOS 3.2",
-               "Mail client for AmigaOS 3.2");
+        amg_tr(MSG_MAIL_CLIENT_FOR_AMIGAOS_3_2, "Mail client for AmigaOS 3.2");
     const char *copyright_line = "\251 Andreas St\374rmer";
 
     /* The class GetClass() entry points use the conventional global class

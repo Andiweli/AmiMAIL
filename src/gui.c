@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define T(de,en) amg_tr((de),(en))
+#define T(id, en) amg_tr((id), (en))
 #if AMIGMAIL_AMIGA
 #include <clib/alib_protos.h>
 #include <classes/window.h>
@@ -186,7 +186,7 @@ void set_string(struct Gadget *gadget, struct Window *window,
         amg_buffer_terminate(&local) == AMG_OK)
         set_string(gadget, window, (const char *)local.data);
     else
-        set_string(gadget, window, T("Fehler", "Error"));
+        set_string(gadget, window, T(MSG_ERROR, "Error"));
     amg_buffer_free(&local);
 }
 
@@ -468,7 +468,7 @@ AmgGui *amg_gui_create(AmgAccount *account, AmgError *error)
         close_classes();
         amg_error_set(
             error, AMG_ERR_UNSUPPORTED,
-            T("Erforderliche ReAction-Klassen fehlen. AmiMail ben\303\266tigt AmigaOS 3.2.", "Required ReAction classes are missing. AmiMail requires AmigaOS 3.2."));
+            T(MSG_REQUIRED_REACTION_CLASSES_ARE_MISSING_AMIMAIL_REQUIRES_AMIGAOS, "Required ReAction classes are missing. AmiMail requires AmigaOS 3.2."));
         return NULL;
     }
     gui = (AmgGui *)calloc(1, sizeof(*gui));
@@ -539,7 +539,7 @@ void amg_gui_destroy(AmgGui *gui)
 
 #else
 struct AmgGui { int unavailable; };
-AmgGui *amg_gui_create(AmgAccount *account, AmgError *error){(void)account;amg_error_set(error,AMG_ERR_UNSUPPORTED,T("ReAction ist nur im AmigaOS-Build verf\303\274gbar.", "ReAction is available only in the AmigaOS build."));return NULL;}
+AmgGui *amg_gui_create(AmgAccount *account, AmgError *error){(void)account;amg_error_set(error,AMG_ERR_UNSUPPORTED,T(MSG_REACTION_IS_AVAILABLE_ONLY_IN_THE_AMIGAOS_BUILD, "ReAction is available only in the AmigaOS build."));return NULL;}
 int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
                 const char *startup_mailto, AmgError *error)
 {
@@ -547,8 +547,7 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
     (void)mailto_server;
     (void)startup_mailto;
     amg_error_set(error, AMG_ERR_UNSUPPORTED,
-                  T("ReAction ist nur im AmigaOS-Build verf\303\274gbar.",
-                    "ReAction is available only in the AmigaOS build."));
+                  T(MSG_REACTION_IS_AVAILABLE_ONLY_IN_THE_AMIGAOS_BUILD, "ReAction is available only in the AmigaOS build."));
     return AMG_ERR_UNSUPPORTED;
 }
 void amg_gui_destroy(AmgGui *gui){free(gui);}

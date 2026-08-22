@@ -1,7 +1,7 @@
 #include "mime.h"
 #include "i18n.h"
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 #include "codec.h"
 
 #include <ctype.h>
@@ -473,7 +473,7 @@ int amg_mime_extract_text(const char *message, size_t length, AmgBuffer *output,
     int result;
     if (!message || !output) return AMG_ERR_ARGUMENT;
     result = extract_entity(message, length, 0U, output);
-    if (result != AMG_OK) amg_error_set(error, result, T("Kein darstellbarer Textteil in der Nachricht gefunden.", "No displayable text part was found in the message."));
+    if (result != AMG_OK) amg_error_set(error, result, T(MSG_NO_DISPLAYABLE_TEXT_PART_WAS_FOUND_IN_THE, "No displayable text part was found in the message."));
     else amg_error_set(error, AMG_OK, "");
     return result;
 }
@@ -486,7 +486,7 @@ int amg_mime_attachment_summary(const char *message, size_t length,
     result = collect_attachment_entity(message, length, 0U, output, NULL);
     if (result != AMG_OK)
         amg_error_set(error, result,
-                      T("Dateianh\303\244nge konnten nicht ausgewertet werden.", "Attachments could not be parsed."));
+                      T(MSG_ATTACHMENTS_COULD_NOT_BE_PARSED, "Attachments could not be parsed."));
     else
         amg_error_set(error, AMG_OK, "");
     return result;
@@ -504,7 +504,7 @@ int amg_mime_attachment_count(const char *message, size_t length,
         amg_error_set(error, AMG_OK, "");
     } else {
         amg_error_set(error, result,
-                      T("Dateianh\303\244nge konnten nicht ausgewertet werden.", "Attachments could not be parsed."));
+                      T(MSG_ATTACHMENTS_COULD_NOT_BE_PARSED, "Attachments could not be parsed."));
     }
     return result;
 }
@@ -649,10 +649,10 @@ int amg_mime_extract_attachment(const char *message, size_t length,
                                        name_utf8, data);
     if (result == AMG_ERR_CANCELLED) {
         result = AMG_ERR_ARGUMENT;
-        amg_error_set(error, result, T("Dateianhang wurde nicht gefunden.", "Attachment was not found."));
+        amg_error_set(error, result, T(MSG_ATTACHMENT_WAS_NOT_FOUND, "Attachment was not found."));
     } else if (result != AMG_OK) {
         amg_error_set(error, result,
-                      T("Dateianhang konnte nicht dekodiert werden.", "Attachment could not be decoded."));
+                      T(MSG_ATTACHMENT_COULD_NOT_BE_DECODED, "Attachment could not be decoded."));
     } else {
         amg_error_set(error, AMG_OK, "");
     }

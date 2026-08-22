@@ -14,7 +14,7 @@
 #include <utility/tagitem.h>
 
 #define UPDATE_TEST_VAR "AmiMAILUpdateTest"
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 static int update_test_enabled(void)
 {
@@ -33,10 +33,10 @@ void gui_update_refresh_gadget(AmgGui *gui)
     LONG text_pen;
     if (!gui || !gui->update_gadget) return;
     if (gui->update_available) {
-        text = T("Neues Update", "new Update");
+        text = T(MSG_NEW_UPDATE, "new Update");
         text_pen = gui->update_pen;
     } else {
-        text = T("Aktuelle Version", "Up to date");
+        text = T(MSG_UP_TO_DATE, "Up to date");
         text_pen = gui->text_pen;
     }
     if (gui->window) {
@@ -104,8 +104,7 @@ void gui_update_start_download(AmgGui *gui, AmgError *error)
     written = snprintf(destination, sizeof(destination),
                        "RAM:AmiMAIL-%s.lha", gui->update_tag);
     if (written < 0 || (size_t)written >= sizeof(destination)) {
-        status_local(gui, T("Update-Dateiname ist zu lang.",
-                            "Update filename is too long."));
+        status_local(gui, T(MSG_UPDATE_FILENAME_IS_TOO_LONG, "Update filename is too long."));
         return;
     }
     if (!amg_network_is_running(gui->network)) {
@@ -120,8 +119,7 @@ void gui_update_start_download(AmgGui *gui, AmgError *error)
                                  destination, error);
     if (result == AMG_OK) {
         gui->update_download_pending = 1;
-        status_local(gui, T("Update wird nach RAM: geladen...",
-                            "Downloading update to RAM:..."));
+        status_local(gui, T(MSG_DOWNLOADING_UPDATE_TO_RAM, "Downloading update to RAM:..."));
     } else if (error && error->message[0]) {
         status_utf8(gui, error->message);
     }
@@ -134,10 +132,7 @@ void gui_update_handle_download(AmgGui *gui,
     if (!gui || !event) return;
     gui->update_download_pending = 0;
     if (event->result != AMG_OK) return;
-    amg_tr_snprintf(message, sizeof(message),
-                    "Update wurde nach %s geladen. Bitte manuell entpacken.",
-                    "Update downloaded to %s. Please extract it manually.",
-                    event->argument2[0] ? event->argument2 : "RAM:");
+    amg_tr_snprintf(message, sizeof(message), MSG_UPDATE_DOWNLOADED_TO_VALUE_PLEASE_EXTRACT_IT_MANUALLY, "Update downloaded to %s. Please extract it manually.", event->argument2[0] ? event->argument2 : "RAM:");
     status_local(gui, message);
 }
 

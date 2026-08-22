@@ -1,7 +1,7 @@
 #include "oauth.h"
 #include "i18n.h"
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 #include "codec.h"
 #include "crypto.h"
 #include "tls.h"
@@ -25,7 +25,7 @@ int amg_oauth_generate_pkce(char verifier[129], char challenge[129], char state[
     int result;
     if (!verifier || !challenge || !state) return AMG_ERR_ARGUMENT;
     result = amg_random_bytes(random, sizeof(random));
-    if (result != AMG_OK) { amg_error_set(error, result, T("Sichere Zufallswerte konnten nicht erzeugt werden.", "Secure random values could not be generated.")); return result; }
+    if (result != AMG_OK) { amg_error_set(error, result, T(MSG_SECURE_RANDOM_VALUES_COULD_NOT_BE_GENERATED, "Secure random values could not be generated.")); return result; }
     amg_buffer_init(&encoded);
     result = amg_base64url_encode(random, 48U, &encoded);
     if (result == AMG_OK && encoded.length < 129U) { memcpy(verifier, encoded.data, encoded.length); verifier[encoded.length] = 0; }
@@ -42,7 +42,7 @@ int amg_oauth_generate_pkce(char verifier[129], char challenge[129], char state[
     if (result == AMG_OK && encoded.length < 65U) { memcpy(state, encoded.data, encoded.length); state[encoded.length] = 0; }
     else result = AMG_ERR_LIMIT;
     amg_buffer_free(&encoded); amg_secure_clear(random, sizeof(random));
-    amg_error_set(error, result, result == AMG_OK ? "" : T("PKCE-Daten konnten nicht erzeugt werden.", "PKCE data could not be generated."));
+    amg_error_set(error, result, result == AMG_OK ? "" : T(MSG_PKCE_DATA_COULD_NOT_BE_GENERATED, "PKCE data could not be generated."));
     return result;
 }
 
@@ -113,7 +113,7 @@ int amg_oauth_parse_token_json(const char *json, AmgOAuthTokens *tokens, AmgErro
     if (found > 0) { amg_error_set(error, AMG_ERR_AUTH, oauth_error); free(oauth_error); return AMG_ERR_AUTH; }
     if (found < 0 || json_string(json, "access_token", &parsed.access_token) <= 0 ||
         json_ulong(json, "expires_in", &parsed.expires_in) <= 0) {
-        amg_oauth_tokens_clear(&parsed); amg_error_set(error, AMG_ERR_PARSE, T("Ungültige OAuth-Tokenantwort.", "Invalid OAuth token response.")); return AMG_ERR_PARSE;
+        amg_oauth_tokens_clear(&parsed); amg_error_set(error, AMG_ERR_PARSE, T(MSG_INVALID_OAUTH_TOKEN_RESPONSE, "Invalid OAuth token response.")); return AMG_ERR_PARSE;
     }
     found = json_string(json, "refresh_token", &parsed.refresh_token);
     if (found < 0) { amg_oauth_tokens_clear(&parsed); return AMG_ERR_PARSE; }

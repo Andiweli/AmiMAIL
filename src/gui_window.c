@@ -95,27 +95,12 @@ static void load_iconify_disk_object(AmgGui *gui)
 #define ButtonObject NewObject(NULL, (CONST_STRPTR)"button.gadget"
 
 #define GUI_MESSAGE_FLAG_COLUMN_WIDTH 16
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 /* LAYOUT_FillPattern uses the classic two-row, 16-bit area pattern. */
 static UWORD solid_fill_pattern[2] = {0xffffU, 0xffffU};
 
-static struct NewMenu menus_de[] = {
-    {NM_TITLE, (STRPTR)"Datei", NULL, 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Konto-Einstellungen...", (STRPTR)"E", 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"\334ber AmiMail...", NULL, 0, 0, NULL},
-    {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Beenden", (STRPTR)"Q", 0, 0, NULL},
-    {NM_TITLE, (STRPTR)"Bearbeiten", NULL, 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Kontaktverwaltung", (STRPTR)"K", 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Signatur", NULL, 0, 0, NULL},
-    {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Papierkorb leeren...", NULL, 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Spam leeren...", NULL, 0, 0, NULL},
-    {NM_END, NULL, NULL, 0, 0, NULL}
-};
-
-static struct NewMenu menus_en[] = {
+static struct NewMenu menus[] = {
     {NM_TITLE, (STRPTR)"File", NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Account settings...", (STRPTR)"E", 0, 0, NULL},
     {NM_ITEM, (STRPTR)"About AmiMail...", NULL, 0, 0, NULL},
@@ -129,6 +114,18 @@ static struct NewMenu menus_en[] = {
     {NM_ITEM, (STRPTR)"Empty Spam...", NULL, 0, 0, NULL},
     {NM_END, NULL, NULL, 0, 0, NULL}
 };
+static void localize_menus(void)
+{
+    menus[0].nm_Label=(STRPTR)T(MSG_FILE, "File");
+    menus[1].nm_Label=(STRPTR)T(MSG_ACCOUNT_SETTINGS, "Account settings...");
+    menus[2].nm_Label=(STRPTR)T(MSG_ABOUT_AMIMAIL_38B2, "About AmiMail...");
+    menus[4].nm_Label=(STRPTR)T(MSG_QUIT, "Quit");
+    menus[5].nm_Label=(STRPTR)T(MSG_EDIT_A8FE, "Edit");
+    menus[6].nm_Label=(STRPTR)T(MSG_CONTACT_MANAGEMENT, "Contact management");
+    menus[7].nm_Label=(STRPTR)T(MSG_SIGNATURE, "Signature");
+    menus[9].nm_Label=(STRPTR)T(MSG_EMPTY_TRASH, "Empty Trash...");
+    menus[10].nm_Label=(STRPTR)T(MSG_EMPTY_SPAM, "Empty Spam...");
+}
 
 static ULONG compact_text_render_subentry(struct Hook *hook,
                                           struct Node *node, APTR message)
@@ -521,8 +518,7 @@ int create_window(AmgGui *gui, AmgError *error)
         gui->app_port = CreateMsgPort();
         if (!gui->app_port) {
             amg_error_set(error, AMG_ERR_MEMORY,
-                          T("Workbench-AppPort konnte nicht angelegt werden.",
-                            "Workbench AppPort could not be created."));
+                          T(MSG_WORKBENCH_APPPORT_COULD_NOT_BE_CREATED, "Workbench AppPort could not be created."));
             return AMG_ERR_MEMORY;
         }
     }
@@ -530,7 +526,7 @@ int create_window(AmgGui *gui, AmgError *error)
     gui->screen = LockPubScreen(NULL);
     if (!gui->screen) {
         amg_error_set(error, AMG_ERR_IO,
-                      T("Workbench-Bildschirm konnte nicht gesperrt werden.", "Workbench screen could not be locked."));
+                      T(MSG_WORKBENCH_SCREEN_COULD_NOT_BE_LOCKED, "Workbench screen could not be locked."));
         return AMG_ERR_IO;
     }
     gui_state_prepare_window(gui);
@@ -547,7 +543,7 @@ int create_window(AmgGui *gui, AmgError *error)
     rebuild_label_lists(gui);
     if (!create_label_tree_images(gui)) {
         amg_error_set(error, AMG_ERR_MEMORY,
-                      T("Label-Symbole konnten nicht angelegt werden.", "Label symbols could not be created."));
+                      T(MSG_LABEL_SYMBOLS_COULD_NOT_BE_CREATED, "Label symbols could not be created."));
         return AMG_ERR_MEMORY;
     }
 
@@ -576,8 +572,8 @@ int create_window(AmgGui *gui, AmgError *error)
                 GA_ID, GID_UPDATE,
                 GA_RelVerify, TRUE,
                 GA_ReadOnly, TRUE,
-                GA_Text, T("Aktuelle Version", "Up to date"),
-                BUTTON_DomainString, T("Aktuelle Version", "Up to date"),
+                GA_Text, T(MSG_UP_TO_DATE, "Up to date"),
+                BUTTON_DomainString, T(MSG_UP_TO_DATE, "Up to date"),
                 BUTTON_BevelStyle, BVS_THIN,
                 BUTTON_Transparent, FALSE,
                 BUTTON_Justification, BCJ_CENTER,
@@ -592,7 +588,7 @@ int create_window(AmgGui *gui, AmgError *error)
     EndObject;
     if (!banner_row) {
         amg_error_set(error, AMG_ERR_MEMORY,
-                      T("Grafikzeile konnte nicht angelegt werden.", "Banner row could not be created."));
+                      T(MSG_BANNER_ROW_COULD_NOT_BE_CREATED, "Banner row could not be created."));
         return AMG_ERR_MEMORY;
     }
 
@@ -603,26 +599,26 @@ int create_window(AmgGui *gui, AmgError *error)
         LBCIA_Width, GUI_MESSAGE_FLAG_COLUMN_WIDTH,
         LBCIA_Flags, CIF_FIXED | CIF_CENTER,
         LBCIA_Column, 1,
-        LBCIA_Title, (ULONG)(uintptr_t)T("Absender", "Sender"),
+        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_SENDER_F4D4, "Sender"),
         LBCIA_Weight, 27,
         LBCIA_AutoSort, TRUE,
         LBCIA_SortArrow, TRUE,
         LBCIA_DraggableSeparator, TRUE,
         LBCIA_Column, 2,
-        LBCIA_Title, (ULONG)(uintptr_t)T("Betreff", "Subject"),
+        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_SUBJECT_5C24, "Subject"),
         LBCIA_Weight, 37,
         LBCIA_AutoSort, TRUE,
         LBCIA_SortArrow, TRUE,
         LBCIA_DraggableSeparator, TRUE,
         LBCIA_Column, 3,
-        LBCIA_Title, (ULONG)(uintptr_t)T("Datum", "Date"),
+        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_DATE_B264, "Date"),
         LBCIA_Weight, 23,
         LBCIA_AutoSort, TRUE,
         LBCIA_SortArrow, TRUE,
         LBCIA_SortDirection, LBMSORT_REVERSE,
         LBCIA_DraggableSeparator, TRUE,
         LBCIA_Column, 4,
-        LBCIA_Title, (ULONG)(uintptr_t)T("Gr\366\337e", "Size"),
+        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_SIZE, "Size"),
         LBCIA_Weight, 13,
         LBCIA_AutoSort, TRUE,
         LBCIA_SortArrow, TRUE,
@@ -630,7 +626,7 @@ int create_window(AmgGui *gui, AmgError *error)
         TAG_DONE);
     if (!gui->columns) {
         amg_error_set(error, AMG_ERR_MEMORY,
-                      T("Spalten konnten nicht angelegt werden.", "Columns could not be created."));
+                      T(MSG_COLUMNS_COULD_NOT_BE_CREATED, "Columns could not be created."));
         return AMG_ERR_MEMORY;
     }
 
@@ -648,11 +644,13 @@ int create_window(AmgGui *gui, AmgError *error)
         FreeLBColumnInfo(gui->columns);
         gui->columns = NULL;
         amg_error_set(error, AMG_ERR_MEMORY,
-                      T("Scrollbar konnte nicht angelegt werden.", "Scrollbar could not be created."));
+                      T(MSG_SCROLLBAR_COULD_NOT_BE_CREATED, "Scrollbar could not be created."));
         return AMG_ERR_MEMORY;
     }
 
     load_iconify_disk_object(gui);
+
+    localize_menus();
 
     gui->window_object = WindowObject,
         WA_Title, "AmiMail",
@@ -681,7 +679,7 @@ int create_window(AmgGui *gui, AmgError *error)
         WINDOW_IconifyGadget, TRUE,
         gui->window_state_valid ? TAG_IGNORE : WINDOW_Position,
             WPOS_CENTERSCREEN,
-        WINDOW_NewMenu, amg_i18n_is_german() ? menus_de : menus_en,
+        WINDOW_NewMenu, menus,
         WINDOW_ParentGroup, VGroupObject,
             LAYOUT_SpaceOuter, FALSE,
             LAYOUT_SpaceInner, FALSE,
@@ -707,7 +705,7 @@ int create_window(AmgGui *gui, AmgError *error)
                         gui->new_mail_gadget = (struct Gadget *)ButtonObject,
                         GA_ID, GID_NEW_MAIL,
                         GA_RelVerify, TRUE,
-                        GA_Text, T("_Neue Mail", "_New mail"),
+                        GA_Text, T(MSG_NEW_MAIL, "_New mail"),
                     EndObject,
                     CHILD_MinWidth, 92,
                     CHILD_WeightedWidth, 100,
@@ -718,7 +716,7 @@ int create_window(AmgGui *gui, AmgError *error)
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_FETCH,
                         GA_RelVerify, TRUE,
-                        GA_Text, T("_Abrufen", "_Fetch"),
+                        GA_Text, T(MSG_FETCH, "_Fetch"),
                     EndObject,
                     CHILD_MinWidth, 92,
                     CHILD_WeightedWidth, 100,
@@ -731,8 +729,8 @@ int create_window(AmgGui *gui, AmgError *error)
                         GA_ID, GID_REPLY,
                         GA_RelVerify, TRUE,
                         GA_Text, window_current_mailbox_is_drafts(gui)
-                            ? T("_Bearbeiten", "_Edit")
-                            : T("A_ntworten", "_Reply"),
+                            ? T(MSG_EDIT, "_Edit")
+                            : T(MSG_REPLY, "_Reply"),
                     EndObject,
                     CHILD_MinWidth, 92,
                     CHILD_WeightedWidth, 100,
@@ -755,7 +753,7 @@ int create_window(AmgGui *gui, AmgError *error)
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_DELETE,
                         GA_RelVerify, TRUE,
-                        GA_Text, T("_L\366schen", "_Delete"),
+                        GA_Text, T(MSG_DELETE, "_Delete"),
                     EndObject,
                     CHILD_MinWidth, 92,
                     CHILD_WeightedWidth, 100,
@@ -766,7 +764,7 @@ int create_window(AmgGui *gui, AmgError *error)
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_MOVE,
                         GA_RelVerify, TRUE,
-                        GA_Text, T("_Verschieben", "_Move"),
+                        GA_Text, T(MSG_MOVE, "_Move"),
                     EndObject,
                     CHILD_MinWidth, 92,
                     CHILD_WeightedWidth, 100,
@@ -777,7 +775,7 @@ int create_window(AmgGui *gui, AmgError *error)
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_SEEN,
                         GA_RelVerify, TRUE,
-                        GA_Text, T("_Un/Gelesen", "_Read/Unread"),
+                        GA_Text, T(MSG_READ_UNREAD, "_Read/Unread"),
                     EndObject,
                     CHILD_MinWidth, 92,
                     CHILD_WeightedWidth, 100,
@@ -904,7 +902,7 @@ int create_window(AmgGui *gui, AmgError *error)
                                     GA_TEXTEDITOR_DoubleClickHook,
                                         &gui->preview_url_hook,
                                     GA_TEXTEDITOR_Contents,
-                                        T("W\344hlen Sie nach dem Abruf eine Nachricht aus.", "Select a message after fetching."),
+                                        T(MSG_SELECT_A_MESSAGE_AFTER_FETCHING, "Select a message after fetching."),
                                 EndObject,
                             LAYOUT_AddChild, gui->preview_scroller,
                             CHILD_MinWidth, GUI_SCROLLBAR_WIDTH,
@@ -925,7 +923,7 @@ int create_window(AmgGui *gui, AmgError *error)
                                     GA_ID, GID_SAVE_ATTACHMENTS,
                                     GA_RelVerify, TRUE,
                                     GA_Disabled, TRUE,
-                                    GA_Text, T("_Anh\344nge speichern...", "Save _attachments..."),
+                                    GA_Text, T(MSG_SAVE_ATTACHMENTS_08AF, "Save _attachments..."),
                                 EndObject,
                             CHILD_WeightedWidth, 0,
                         EndObject,
@@ -942,7 +940,7 @@ int create_window(AmgGui *gui, AmgError *error)
                     gui->status_gadget = (struct Gadget *)StringObject,
                         GA_ID, GID_STATUS,
                         GA_ReadOnly, TRUE,
-                        STRINGA_TextVal, T("Bereit", "Ready"),
+                        STRINGA_TextVal, T(MSG_READY, "Ready"),
                     EndObject,
                 CHILD_WeightedHeight, 0,
             EndObject,

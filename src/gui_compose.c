@@ -51,7 +51,7 @@
 #endif
 #define ButtonObject NewObject(NULL, (CONST_STRPTR)"button.gadget"
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 enum ComposeGadgetId {
     GID_COMPOSE_TO = 200,
@@ -129,8 +129,7 @@ static int write_compose_attachment_temp(ComposeAttachment *attachment,
     file = fopen(attachment->path, "wb");
     if (!file) {
         amg_error_set(error, AMG_ERR_IO,
-                      T("Tempor\344re Anlage konnte nicht angelegt werden.",
-                        "Temporary attachment could not be created."));
+                      T(MSG_TEMPORARY_ATTACHMENT_COULD_NOT_BE_CREATED, "Temporary attachment could not be created."));
         return AMG_ERR_IO;
     }
     if (length && fwrite(data, 1U, length, file) != length)
@@ -140,8 +139,7 @@ static int write_compose_attachment_temp(ComposeAttachment *attachment,
         delete_compose_temp_file(attachment->path);
         attachment->path[0] = 0;
         amg_error_set(error, result,
-                      T("Tempor\344re Anlage konnte nicht geschrieben werden.",
-                        "Temporary attachment could not be written."));
+                      T(MSG_TEMPORARY_ATTACHMENT_COULD_NOT_BE_WRITTEN, "Temporary attachment could not be written."));
         return result;
     }
 
@@ -198,8 +196,7 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
     if (result <= 0) {
         result = result < 0 ? result : AMG_ERR_PARSE;
         amg_error_set(error, result,
-                      T("Entwurf konnte nicht ausgewertet werden.",
-                        "Draft could not be parsed."));
+                      T(MSG_DRAFT_COULD_NOT_BE_PARSED, "Draft could not be parsed."));
         return result;
     }
 
@@ -239,8 +236,7 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
     if (body_local.length >= sizeof(seed->body_local)) {
         result = AMG_ERR_LIMIT;
         amg_error_set(error, result,
-                      T("Entwurfstext ist zu gro\337 zum Bearbeiten.",
-                        "Draft body is too large to edit."));
+                      T(MSG_DRAFT_BODY_IS_TOO_LARGE_TO_EDIT, "Draft body is too large to edit."));
         goto done;
     }
     memcpy(seed->body_local, body_local.data, body_local.length + 1U);
@@ -252,8 +248,7 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
     if (attachment_count > AMG_MAIL_MAX_ATTACHMENTS) {
         result = AMG_ERR_LIMIT;
         amg_error_set(error, result,
-                      T("Der Entwurf enth\344lt mehr als 8 Anlagen.",
-                        "The draft contains more than 8 attachments."));
+                      T(MSG_THE_DRAFT_CONTAINS_MORE_THAN_8_ATTACHMENTS, "The draft contains more than 8 attachments."));
         goto done;
     }
 
@@ -270,8 +265,7 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
                           attachment_total_bytes) {
             result = AMG_ERR_LIMIT;
             amg_error_set(error, result,
-                          T("Entwurfsanlagen sind zusammen gr\366\337er als 10 MB.",
-                            "Draft attachments total more than 10 MB."));
+                          T(MSG_DRAFT_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Draft attachments total more than 10 MB."));
         }
         if (result == AMG_OK)
             result = write_compose_attachment_temp(
@@ -314,7 +308,7 @@ int prepare_reply_payload(AmgGui *gui, const unsigned char *payload,
                                         &position, &record);
     if (result <= 0) {
         amg_error_set(error, result < 0 ? result : AMG_ERR_PARSE,
-                      T("Antwortdaten konnten nicht ausgewertet werden.", "Reply data could not be parsed."));
+                      T(MSG_REPLY_DATA_COULD_NOT_BE_PARSED, "Reply data could not be parsed."));
         return result < 0 ? result : AMG_ERR_PARSE;
     }
     amg_mail_headers_init(&headers);
@@ -334,7 +328,7 @@ int prepare_reply_payload(AmgGui *gui, const unsigned char *payload,
                     sizeof(gui->reply_to_local));
     gui->reply_cc_local[0] = 0;
     header_to_local(amg_mail_header_get(&headers, "From"),
-                    T("Absender", "sender"), from_local, sizeof(from_local));
+                    T(MSG_SENDER, "sender"), from_local, sizeof(from_local));
     header_to_local(subject, "", subject_local, sizeof(subject_local));
     header_to_local(date, "", date_local, sizeof(date_local));
     if (!subject_local[0])
@@ -374,31 +368,8 @@ int prepare_reply_payload(AmgGui *gui, const unsigned char *payload,
     if (result != AMG_OK) goto done;
 
     gui->reply_body_local[0] = 0;
-    if (amg_i18n_is_german()) {
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local), "\n\nAm ");
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local),
-                             date_local[0] ? date_local : "unbekanntem Datum");
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local), " schrieb ");
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local), from_local);
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local), ":\n");
-    } else {
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local), "\n\nOn ");
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local),
-                             date_local[0] ? date_local : "an unknown date");
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local), ", ");
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local), from_local);
-        append_local_limited(gui->reply_body_local,
-                             sizeof(gui->reply_body_local), " wrote:\n");
-    }
+    amg_tr_snprintf(gui->reply_body_local, sizeof(gui->reply_body_local), MSG_ON_VALUE_VALUE_WROTE, "\n\nOn %s, %s wrote:\n", date_local[0] ? date_local :
+                        T(MSG_AN_UNKNOWN_DATE, "an unknown date"), from_local);
     cursor = (const char *)body_local.data;
     while (*cursor && strlen(gui->reply_body_local) + 4U <
                          sizeof(gui->reply_body_local)) {
@@ -421,7 +392,7 @@ int prepare_reply_payload(AmgGui *gui, const unsigned char *payload,
 done:
     if (result != AMG_OK && error && !error->message[0])
         amg_error_set(error, result,
-                      T("Antwort konnte nicht vorbereitet werden.", "Reply could not be prepared."));
+                      T(MSG_REPLY_COULD_NOT_BE_PREPARED, "Reply could not be prepared."));
     amg_mail_headers_free(&headers);
     amg_buffer_free(&body_utf8);
     amg_buffer_free(&body_local);
@@ -593,8 +564,7 @@ int prepare_reply_all_payload(AmgGui *gui, const unsigned char *payload,
     if (result <= 0) {
         result = result < 0 ? result : AMG_ERR_PARSE;
         amg_error_set(error, result,
-                      T("Antwort an alle konnte nicht ausgewertet werden.",
-                        "Reply-to-all data could not be parsed."));
+                      T(MSG_REPLY_TO_ALL_DATA_COULD_NOT_BE_PARSED, "Reply-to-all data could not be parsed."));
         return result;
     }
     amg_mail_headers_init(&headers);
@@ -604,8 +574,7 @@ int prepare_reply_all_payload(AmgGui *gui, const unsigned char *payload,
         amg_mail_headers_free(&headers);
         if (error && !error->message[0])
             amg_error_set(error, result,
-                          T("Antwort an alle konnte nicht vorbereitet werden.",
-                            "Reply to all could not be prepared."));
+                          T(MSG_REPLY_TO_ALL_COULD_NOT_BE_PREPARED, "Reply to all could not be prepared."));
         return result;
     }
 
@@ -679,8 +648,7 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
     if (result <= 0) {
         result = result < 0 ? result : AMG_ERR_PARSE;
         amg_error_set(error, result,
-                      T("Weiterleitung konnte nicht ausgewertet werden.",
-                        "Forward data could not be parsed."));
+                      T(MSG_FORWARD_DATA_COULD_NOT_BE_PARSED, "Forward data could not be parsed."));
         return result;
     }
 
@@ -692,7 +660,7 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
     if (result != AMG_OK) goto done;
 
     header_to_local(amg_mail_header_get(&headers, "From"),
-                    T("Unbekannter Absender", "Unknown sender"),
+                    T(MSG_UNKNOWN_SENDER, "Unknown sender"),
                     from_local, sizeof(from_local));
     header_to_local(amg_mail_header_get(&headers, "Date"), "",
                     date_local, sizeof(date_local));
@@ -723,28 +691,26 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
 
     seed->body_local[0] = 0;
     append_local_limited(seed->body_local, sizeof(seed->body_local),
-        amg_i18n_is_german()
-            ? "---------- Weitergeleitete Nachricht ----------\n"
-            : "---------- Forwarded message ----------\n");
+        T(MSG_FORWARDED_MESSAGE, "---------- Forwarded message ----------\n"));
     append_local_limited(seed->body_local, sizeof(seed->body_local),
-                         T("Von: ", "From: "));
+                         T(MSG_FROM, "From: "));
     append_local_limited(seed->body_local, sizeof(seed->body_local), from_local);
     append_local_limited(seed->body_local, sizeof(seed->body_local), "\n");
     if (date_local[0]) {
         append_local_limited(seed->body_local, sizeof(seed->body_local),
-                             T("Datum: ", "Date: "));
+                             T(MSG_DATE, "Date: "));
         append_local_limited(seed->body_local, sizeof(seed->body_local), date_local);
         append_local_limited(seed->body_local, sizeof(seed->body_local), "\n");
     }
     if (subject_local[0]) {
         append_local_limited(seed->body_local, sizeof(seed->body_local),
-                             T("Betreff: ", "Subject: "));
+                             T(MSG_SUBJECT, "Subject: "));
         append_local_limited(seed->body_local, sizeof(seed->body_local), subject_local);
         append_local_limited(seed->body_local, sizeof(seed->body_local), "\n");
     }
     if (to_local[0]) {
         append_local_limited(seed->body_local, sizeof(seed->body_local),
-                             T("An: ", "To: "));
+                             T(MSG_TO, "To: "));
         append_local_limited(seed->body_local, sizeof(seed->body_local), to_local);
         append_local_limited(seed->body_local, sizeof(seed->body_local), "\n");
     }
@@ -764,8 +730,7 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
     if (attachment_count > AMG_MAIL_MAX_ATTACHMENTS) {
         result = AMG_ERR_LIMIT;
         amg_error_set(error, result,
-                      T("Die Nachricht enth\344lt mehr als 8 Anlagen.",
-                        "The message contains more than 8 attachments."));
+                      T(MSG_THE_MESSAGE_CONTAINS_MORE_THAN_8_ATTACHMENTS, "The message contains more than 8 attachments."));
         goto done;
     }
     for (i = 0U; i < attachment_count; ++i) {
@@ -781,8 +746,7 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
                           attachment_total_bytes) {
             result = AMG_ERR_LIMIT;
             amg_error_set(error, result,
-                          T("Anlagen sind zusammen gr\366\337er als 10 MB.",
-                            "Attachments total more than 10 MB."));
+                          T(MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Attachments total more than 10 MB."));
         }
         if (result == AMG_OK)
             result = write_compose_attachment_temp(
@@ -863,10 +827,7 @@ static void update_compose_status(struct Gadget *status_gadget,
 {
     char text[160];
     unsigned long total = attachment_total(attachments, count);
-    amg_tr_snprintf(text, sizeof(text),
-                    "%lu Anlage(n), %lu KB von 10240 KB",
-                    "%lu attachment(s), %lu KB of 10240 KB",
-                    (unsigned long)count, (total + 1023UL) / 1024UL);
+    amg_tr_snprintf(text, sizeof(text), MSG_VALUE_ATTACHMENT_S_VALUE_KB_OF_10240_KB, "%lu attachment(s), %lu KB of 10240 KB", (unsigned long)count, (total + 1023UL) / 1024UL);
     set_string(status_gadget, window, text);
 }
 
@@ -880,19 +841,19 @@ static int add_attachment(struct Window *window, struct Gadget *list_gadget,
     size_t i;
     if (*count >= AMG_MAIL_MAX_ATTACHMENTS) {
         set_string(status_gadget, window,
-                   T("H\366chstens 8 Anlagen sind m\366glich.", "A maximum of 8 attachments is allowed."));
+                   T(MSG_A_MAXIMUM_OF_8_ATTACHMENTS_IS_ALLOWED, "A maximum of 8 attachments is allowed."));
         return 0;
     }
     request = (struct FileRequester *)AllocAslRequestTags(
         ASL_FileRequest,
-        ASLFR_TitleText, (ULONG)(uintptr_t)T("Dateianlage ausw\344hlen", "Select attachment"),
+        ASLFR_TitleText, (ULONG)(uintptr_t)T(MSG_SELECT_ATTACHMENT, "Select attachment"),
         ASLFR_Window, (ULONG)(uintptr_t)window,
         ASLFR_SleepWindow, TRUE,
         ASLFR_RejectIcons, TRUE,
         TAG_DONE);
     if (!request) {
         set_string(status_gadget, window,
-                   T("Dateiauswahl konnte nicht ge\366ffnet werden.", "File requester could not be opened."));
+                   T(MSG_FILE_REQUESTER_COULD_NOT_BE_OPENED, "File requester could not be opened."));
         return 0;
     }
     if (!AslRequest(request, NULL)) {
@@ -905,28 +866,28 @@ static int add_attachment(struct Window *window, struct Gadget *list_gadget,
     if (!AddPart((STRPTR)path, request->rf_File,
                  (LONG)sizeof(path))) {
         FreeAslRequest(request);
-        set_string(status_gadget, window, T("Dateipfad ist zu lang.", "File path is too long."));
+        set_string(status_gadget, window, T(MSG_FILE_PATH_IS_TOO_LONG, "File path is too long."));
         return 0;
     }
     for (i = 0; i < *count; ++i) {
         if (!strcmp(attachments[i].path, path)) {
             FreeAslRequest(request);
             set_string(status_gadget, window,
-                       T("Diese Datei ist bereits angeh\344ngt.", "This file is already attached."));
+                       T(MSG_THIS_FILE_IS_ALREADY_ATTACHED, "This file is already attached."));
             return 0;
         }
     }
     if (selected_file_size(path, &size) != AMG_OK) {
         FreeAslRequest(request);
         set_string(status_gadget, window,
-                   T("Datei konnte nicht gelesen werden.", "File could not be read."));
+                   T(MSG_FILE_COULD_NOT_BE_READ, "File could not be read."));
         return 0;
     }
     total = attachment_total(attachments, *count);
     if (size > AMG_MAIL_MAX_ATTACHMENT_TOTAL - total) {
         FreeAslRequest(request);
         set_string(status_gadget, window,
-                   T("Anlagen d\374rfen zusammen h\366chstens 10 MB gro\337 sein.", "Attachments may total no more than 10 MB."));
+                   T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_LOCAL, "Attachments may total no more than 10 MB."));
         return 0;
     }
     strncpy(attachments[*count].path, path,
@@ -959,7 +920,7 @@ static void remove_attachment(struct Window *window, struct Gadget *list_gadget,
     GetAttr(LISTBROWSER_Selected, (Object *)list_gadget, &selected);
     if (selected == (ULONG)~0UL || selected >= *count) {
         set_string(status_gadget, window,
-                   T("Bitte zuerst eine Anlage ausw\344hlen.", "Please select an attachment first."));
+                   T(MSG_PLEASE_SELECT_AN_ATTACHMENT_FIRST, "Please select an attachment first."));
         return;
     }
     if (attachments[selected].temporary && attachments[selected].path[0])
@@ -1066,7 +1027,7 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
     if (!save_as_draft && !*string_text(to_gadget) &&
         !*string_text(cc_gadget) && !*string_text(bcc_gadget)) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
-                      T("Mindestens ein Empf\303\244nger fehlt.", "At least one recipient is required."));
+                      T(MSG_AT_LEAST_ONE_RECIPIENT_IS_REQUIRED, "At least one recipient is required."));
         return AMG_ERR_ARGUMENT;
     }
     if (local_to_utf8(string_text(to_gadget), to_utf8,
@@ -1077,14 +1038,14 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
                       sizeof(bcc_utf8)) != AMG_OK ||
         local_to_utf8(string_text(subject_gadget), subject_utf8,
                       sizeof(subject_utf8)) != AMG_OK) {
-        amg_error_set(error, AMG_ERR_LIMIT, T("Eine Kopfzeile ist zu lang.", "A header line is too long."));
+        amg_error_set(error, AMG_ERR_LIMIT, T(MSG_A_HEADER_LINE_IS_TOO_LONG, "A header line is too long."));
         return AMG_ERR_LIMIT;
     }
     body_local = (STRPTR)(uintptr_t)DoGadgetMethod(
         body_gadget, window, NULL, GM_TEXTEDITOR_ExportText, 0UL);
     if (!body_local) {
         amg_error_set(error, AMG_ERR_MEMORY,
-                      T("Nachrichtentext konnte nicht gelesen werden.", "Message text could not be read."));
+                      T(MSG_MESSAGE_TEXT_COULD_NOT_BE_READ, "Message text could not be read."));
         return AMG_ERR_MEMORY;
     }
     amg_buffer_init(&body_utf8);
@@ -1104,7 +1065,7 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
     if (result != AMG_OK) {
         amg_buffer_free(&body_utf8);
         FreeVec(body_local);
-        amg_error_set(error, result, T("Mailtext ist zu gro\303\237.", "Mail text is too large."));
+        amg_error_set(error, result, T(MSG_MAIL_TEXT_IS_TOO_LARGE, "Mail text is too large."));
         return result;
     }
     for (i = 0; i < attachment_count; ++i) {
@@ -1117,7 +1078,7 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
         amg_buffer_free(&body_utf8);
         FreeVec(body_local);
         amg_error_set(error, AMG_ERR_IO,
-                      T("Datum der Nachricht konnte nicht erzeugt werden.", "Message date could not be generated."));
+                      T(MSG_MESSAGE_DATE_COULD_NOT_BE_GENERATED, "Message date could not be generated."));
         return AMG_ERR_IO;
     }
     if (mode == COMPOSE_MODE_EDIT_DRAFT && seed &&
@@ -1281,7 +1242,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
             DisposeObject((Object *)attachments_scroller);
         if (body_scroller) DisposeObject((Object *)body_scroller);
         amg_error_set(error, AMG_ERR_MEMORY,
-                      T("Scrollbar konnte nicht angelegt werden.", "Scrollbar could not be created."));
+                      T(MSG_SCROLLBAR_COULD_NOT_BE_CREATED, "Scrollbar could not be created."));
         cleanup_compose_attachments(attachments, attachment_count);
         return 0;
     }
@@ -1319,12 +1280,12 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
 
     dialog = WindowObject,
         WA_Title, edit_draft
-            ? T("AmiMail - Entwurf bearbeiten", "AmiMail - Edit draft")
+            ? T(MSG_AMIMAIL_EDIT_DRAFT, "AmiMail - Edit draft")
             : (reply_mode
-                ? T("AmiMail - Antworten", "AmiMail - Reply")
+                ? T(MSG_AMIMAIL_REPLY, "AmiMail - Reply")
                 : (forward_mode
-                    ? T("AmiMail - Weiterleiten", "AmiMail - Forward")
-                    : T("AmiMail - Neue Mail", "AmiMail - New mail"))),
+                    ? T(MSG_AMIMAIL_FORWARD, "AmiMail - Forward")
+                    : T(MSG_AMIMAIL_NEW_MAIL, "AmiMail - New mail"))),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                       WFLG_SIZEGADGET | WFLG_ACTIVATE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
@@ -1341,7 +1302,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
 
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("An:", "To:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_TO_6B77, "To:")),
                 CHILD_MinWidth, 70,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -1413,7 +1374,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
 
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Betreff:", "Subject:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_SUBJECT_DF0D, "Subject:")),
                 CHILD_MinWidth, 70,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
@@ -1429,7 +1390,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
 
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Nachricht:", "Message:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_MESSAGE, "Message:")),
                 CHILD_MinWidth, 70,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild, HGroupObject,
@@ -1459,7 +1420,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
 
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceInner, TRUE,
-                LAYOUT_AddChild, static_text_label(T("Anlagen:", "Attachments:")),
+                LAYOUT_AddChild, static_text_label(T(MSG_ATTACHMENTS, "Attachments:")),
                 CHILD_MinWidth, 70,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild, HGroupObject,
@@ -1487,12 +1448,12 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                         LAYOUT_AddChild, ButtonObject,
                             GA_ID, GID_COMPOSE_ADD_ATTACHMENT,
                             GA_RelVerify, TRUE,
-                            GA_Text, T("_Anlage...", "_Attachment..."),
+                            GA_Text, T(MSG_ATTACHMENT, "_Attachment..."),
                         EndObject,
                         LAYOUT_AddChild, ButtonObject,
                             GA_ID, GID_COMPOSE_REMOVE_ATTACHMENT,
                             GA_RelVerify, TRUE,
-                            GA_Text, T("Ent_fernen", "_Remove"),
+                            GA_Text, T(MSG_REMOVE, "_Remove"),
                         EndObject,
                     EndObject,
                     CHILD_WeightedWidth, 25,
@@ -1504,7 +1465,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                 compose_status = (struct Gadget *)StringObject,
                     GA_ID, GID_COMPOSE_STATUS,
                     GA_ReadOnly, TRUE,
-                    STRINGA_TextVal, T("0 Anlagen, 0 KB von 10240 KB", "0 attachments, 0 KB of 10240 KB"),
+                    STRINGA_TextVal, T(MSG_0_ATTACHMENTS_0_KB_OF_10240_KB, "0 attachments, 0 KB of 10240 KB"),
                 EndObject,
             CHILD_WeightedHeight, 0,
 
@@ -1513,12 +1474,12 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_COMPOSE_SEND,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("_Senden", "_Send"),
+                    GA_Text, T(MSG_SEND, "_Send"),
                 EndObject,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_COMPOSE_CANCEL,
                     GA_RelVerify, TRUE,
-                    GA_Text, T("Ab_brechen", "_Cancel"),
+                    GA_Text, T(MSG_CANCEL, "_Cancel"),
                 EndObject,
             EndObject,
             CHILD_WeightedHeight, 0,
@@ -1527,7 +1488,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
 
     if (!dialog) {
         amg_error_set(error, AMG_ERR_MEMORY,
-                      T("Fenster f\303\274r neue Mail konnte nicht erzeugt werden.", "New mail window could not be created."));
+                      T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_CREATED, "New mail window could not be created."));
         cleanup_compose_attachments(attachments, attachment_count);
         free(initial_body_with_signature);
         return 0;
@@ -1536,7 +1497,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     if (!window) {
         DisposeObject(dialog);
         amg_error_set(error, AMG_ERR_IO,
-                      T("Fenster f\303\274r neue Mail konnte nicht ge\303\266ffnet werden.", "New mail window could not be opened."));
+                      T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_OPENED, "New mail window could not be opened."));
         cleanup_compose_attachments(attachments, attachment_count);
         free(initial_body_with_signature);
         return 0;
@@ -1578,8 +1539,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                             case GID_COMPOSE_CANCEL:
                                 if (confirm_question_dialog_for_window(
                                         gui, window,
-                                        T("Wollen Sie den Entwurf speichern?",
-                                          "Do you want to save the draft?"),
+                                        T(MSG_DO_YOU_WANT_TO_SAVE_THE_DRAFT, "Do you want to save the draft?"),
                                         NULL, 310L)) {
                                     if (queue_composed_mail(
                                             gui, window, to_gadget, cc_gadget,
@@ -1670,9 +1630,9 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         cleanup_compose_attachments(attachments, attachment_count);
     free(initial_body_with_signature);
     if (sent_queued)
-        status_local(gui, T("Mail wird gesendet...", "Sending mail..."));
+        status_local(gui, T(MSG_SENDING_MAIL, "Sending mail..."));
     else if (submitted)
-        status_local(gui, T("Entwurf wird gespeichert...", "Saving draft..."));
+        status_local(gui, T(MSG_SAVING_DRAFT, "Saving draft..."));
     return submitted;
 }
 

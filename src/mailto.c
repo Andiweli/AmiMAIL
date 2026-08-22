@@ -15,7 +15,7 @@
 #include <proto/exec.h>
 #endif
 
-#define T(de, en) amg_tr((de), (en))
+#define T(id, en) amg_tr((id), (en))
 
 #define AMG_MAILTO_SCHEME "mailto:"
 #define AMG_MAILTO_SCHEME_LENGTH 7U
@@ -84,7 +84,7 @@ static int decode_component(const char *source, size_t length,
     *output = NULL;
     decoded = (char *)malloc(length + 1U);
     if (!decoded) {
-        amg_error_set(error, AMG_ERR_MEMORY, T("Nicht genug Speicher f\303\274r mailto:-URL.", "Not enough memory for mailto URL."));
+        amg_error_set(error, AMG_ERR_MEMORY, T(MSG_NOT_ENOUGH_MEMORY_FOR_MAILTO_URL, "Not enough memory for mailto URL."));
         return AMG_ERR_MEMORY;
     }
     for (in_pos = 0U; in_pos < length; ++in_pos) {
@@ -93,21 +93,21 @@ static int decode_component(const char *source, size_t length,
             int hi, lo;
             if (in_pos + 2U >= length) {
                 free(decoded);
-                amg_error_set(error, AMG_ERR_PARSE, T("Ung\303\274ltige Prozent-Kodierung in mailto:-URL.", "Invalid percent escape in mailto URL."));
+                amg_error_set(error, AMG_ERR_PARSE, T(MSG_INVALID_PERCENT_ESCAPE_IN_MAILTO_URL, "Invalid percent escape in mailto URL."));
                 return AMG_ERR_PARSE;
             }
             hi = hex_value((unsigned char)source[in_pos + 1U]);
             lo = hex_value((unsigned char)source[in_pos + 2U]);
             if (hi < 0 || lo < 0) {
                 free(decoded);
-                amg_error_set(error, AMG_ERR_PARSE, T("Ung\303\274ltige Prozent-Kodierung in mailto:-URL.", "Invalid percent escape in mailto URL."));
+                amg_error_set(error, AMG_ERR_PARSE, T(MSG_INVALID_PERCENT_ESCAPE_IN_MAILTO_URL, "Invalid percent escape in mailto URL."));
                 return AMG_ERR_PARSE;
             }
             c = (unsigned char)((hi << 4) | lo);
             in_pos += 2U;
             if (c == 0U) {
                 free(decoded);
-                amg_error_set(error, AMG_ERR_PARSE, T("NUL-Byte ist in einer mailto:-URL nicht erlaubt.", "NUL byte is not allowed in mailto URL."));
+                amg_error_set(error, AMG_ERR_PARSE, T(MSG_NUL_BYTE_IS_NOT_ALLOWED_IN_MAILTO_URL, "NUL byte is not allowed in mailto URL."));
                 return AMG_ERR_PARSE;
             }
         }
@@ -132,7 +132,7 @@ static int append_recipient(char **destination, const char *value,
         free(*destination);
         *destination = duplicate_text(value);
         if (!*destination) {
-            amg_error_set(error, AMG_ERR_MEMORY, T("Nicht genug Speicher f\303\274r mailto:-Empf\303\244nger.", "Not enough memory for mailto recipient."));
+            amg_error_set(error, AMG_ERR_MEMORY, T(MSG_NOT_ENOUGH_MEMORY_FOR_MAILTO_RECIPIENT, "Not enough memory for mailto recipient."));
             return AMG_ERR_MEMORY;
         }
         return AMG_OK;
@@ -141,12 +141,12 @@ static int append_recipient(char **destination, const char *value,
     old_length = strlen(*destination);
     value_length = strlen(value);
     if (old_length > (size_t)-1 - value_length - 3U) {
-        amg_error_set(error, AMG_ERR_LIMIT, T("mailto:-Empf\303\244ngerliste ist zu lang.", "mailto recipient list is too long."));
+        amg_error_set(error, AMG_ERR_LIMIT, T(MSG_MAILTO_RECIPIENT_LIST_IS_TOO_LONG, "mailto recipient list is too long."));
         return AMG_ERR_LIMIT;
     }
     combined = (char *)malloc(old_length + value_length + 3U);
     if (!combined) {
-        amg_error_set(error, AMG_ERR_MEMORY, T("Nicht genug Speicher f\303\274r mailto:-Empf\303\244nger.", "Not enough memory for mailto recipients."));
+        amg_error_set(error, AMG_ERR_MEMORY, T(MSG_NOT_ENOUGH_MEMORY_FOR_MAILTO_RECIPIENTS, "Not enough memory for mailto recipients."));
         return AMG_ERR_MEMORY;
     }
     memcpy(combined, *destination, old_length);
@@ -183,11 +183,11 @@ int amg_mailto_parse(const char *url, AmgMailtoRequest *request,
     char *decoded = NULL;
 
     if (!url || !request || !ascii_prefix_nocase(url, AMG_MAILTO_SCHEME)) {
-        amg_error_set(error, AMG_ERR_ARGUMENT, T("Eine mailto:-URL wurde erwartet.", "Expected a mailto: URL."));
+        amg_error_set(error, AMG_ERR_ARGUMENT, T(MSG_EXPECTED_A_MAILTO_URL, "Expected a mailto: URL."));
         return AMG_ERR_ARGUMENT;
     }
     if (strlen(url) > AMG_MAILTO_IPC_MAX) {
-        amg_error_set(error, AMG_ERR_LIMIT, T("mailto:-URL ist zu lang.", "mailto: URL is too long."));
+        amg_error_set(error, AMG_ERR_LIMIT, T(MSG_MAILTO_URL_IS_TOO_LONG, "mailto: URL is too long."));
         return AMG_ERR_LIMIT;
     }
     amg_mailto_request_clear(request);
@@ -409,20 +409,20 @@ static char *load_mailto_temp_file(const char *path, AmgError *error)
     if (fseek(file, 0, SEEK_END) != 0 || (size = ftell(file)) < 0 ||
         size > (long)AMG_MAILTO_IPC_MAX || fseek(file, 0, SEEK_SET) != 0) {
         fclose(file);
-        amg_error_set(error, AMG_ERR_IO, T("mailto:-\303\234bergabedatei konnte nicht gelesen werden.", "Could not read mailto hand-off file."));
+        amg_error_set(error, AMG_ERR_IO, T(MSG_COULD_NOT_READ_MAILTO_HAND_OFF_FILE, "Could not read mailto hand-off file."));
         return NULL;
     }
     url = (char *)malloc((size_t)size + 1U);
     if (!url) {
         fclose(file);
-        amg_error_set(error, AMG_ERR_MEMORY, T("Nicht genug Speicher f\303\274r mailto:-URL.", "Not enough memory for mailto URL."));
+        amg_error_set(error, AMG_ERR_MEMORY, T(MSG_NOT_ENOUGH_MEMORY_FOR_MAILTO_URL, "Not enough memory for mailto URL."));
         return NULL;
     }
     length = fread(url, 1U, (size_t)size, file);
     fclose(file);
     if (length != (size_t)size) {
         free(url);
-        amg_error_set(error, AMG_ERR_IO, T("mailto:-\303\234bergabedatei konnte nicht gelesen werden.", "Could not read mailto hand-off file."));
+        amg_error_set(error, AMG_ERR_IO, T(MSG_COULD_NOT_READ_MAILTO_HAND_OFF_FILE, "Could not read mailto hand-off file."));
         return NULL;
     }
     url[length] = 0;
@@ -430,7 +430,7 @@ static char *load_mailto_temp_file(const char *path, AmgError *error)
         url[--length] = 0;
     if (!ascii_prefix_nocase(url, AMG_MAILTO_SCHEME)) {
         free(url);
-        amg_error_set(error, AMG_ERR_PARSE, T("Ung\303\274ltige mailto:-\303\234bergabedatei.", "Invalid mailto hand-off file."));
+        amg_error_set(error, AMG_ERR_PARSE, T(MSG_INVALID_MAILTO_HAND_OFF_FILE, "Invalid mailto hand-off file."));
         return NULL;
     }
     (void)remove(path);
@@ -452,7 +452,7 @@ char *amg_mailto_startup_url(int argc, char **argv, const char *raw_args,
         char *url;
         if (!path) {
             amg_error_set(error, AMG_ERR_MEMORY,
-                          T("Nicht genug Speicher f\303\274r mailto:-\303\234bergabepfad.", "Not enough memory for mailto hand-off path."));
+                          T(MSG_NOT_ENOUGH_MEMORY_FOR_MAILTO_HAND_OFF_PATH, "Not enough memory for mailto hand-off path."));
             return NULL;
         }
         url = load_mailto_temp_file(path, error);
@@ -467,7 +467,7 @@ char *amg_mailto_startup_url(int argc, char **argv, const char *raw_args,
         copy = copy_argument_token(found, found, 0);
         if (!copy)
             amg_error_set(error, AMG_ERR_MEMORY,
-                          T("Nicht genug Speicher f\303\274r mailto:-URL.", "Not enough memory for mailto URL."));
+                          T(MSG_NOT_ENOUGH_MEMORY_FOR_MAILTO_URL, "Not enough memory for mailto URL."));
         return copy;
     }
 
@@ -480,7 +480,7 @@ char *amg_mailto_startup_url(int argc, char **argv, const char *raw_args,
         copy = copy_argument_token(raw_args, found, 1);
         if (!copy)
             amg_error_set(error, AMG_ERR_MEMORY,
-                          T("Nicht genug Speicher f\303\274r mailto:-URL.", "Not enough memory for mailto URL."));
+                          T(MSG_NOT_ENOUGH_MEMORY_FOR_MAILTO_URL, "Not enough memory for mailto URL."));
         return copy;
     }
     return NULL;

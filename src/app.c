@@ -24,7 +24,7 @@ static void print_local_error(const char *message)
         amg_buffer_terminate(&local) == AMG_OK)
         fprintf(stderr, "AmiMail: %s\n", (const char *)local.data);
     else
-        fprintf(stderr, "AmiMail: %s\n", amg_tr("Fehler", "Error"));
+        fprintf(stderr, "AmiMail: %s\n", amg_tr(MSG_ERROR, "Error"));
     amg_buffer_free(&local);
 }
 
@@ -48,6 +48,7 @@ int amg_app_run(int argc, char **argv)
 
     memset(&error, 0, sizeof(error));
     amg_i18n_init();
+    (void)atexit(amg_i18n_cleanup);
 #if AMIGMAIL_AMIGA
     raw_arguments = (const char *)GetArgStr();
 #endif
