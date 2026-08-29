@@ -129,6 +129,7 @@ struct AmgGui {
     UWORD *label_show_image_data;
     UWORD *label_hide_image_data;
     ULONG label_image_data_bytes;
+    struct Hook window_post_refresh_hook;
     struct Hook preview_url_hook;
     char pending_preview_url[GUI_URL_MAX];
     int pending_preview_url_ready;

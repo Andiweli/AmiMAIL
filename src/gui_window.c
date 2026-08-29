@@ -3,6 +3,7 @@
 #include "iconified_data.h"
 #include "i18n.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #if AMIGMAIL_AMIGA
@@ -107,13 +108,16 @@ static struct NewMenu menus[] = {
     {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, NULL},
     {NM_TITLE, (STRPTR)"Edit", NULL, 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Contact management", (STRPTR)"C", 0, 0, NULL},
-    {NM_ITEM, (STRPTR)"Signature", NULL, 0, 0, NULL},
+    {NM_ITEM, (STRPTR)"Contact management...", (STRPTR)"C", 0, 0, NULL},
+    {NM_ITEM, (STRPTR)"Signature...", NULL, 0, 0, NULL},
     {NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Empty Trash...", NULL, 0, 0, NULL},
     {NM_ITEM, (STRPTR)"Empty Spam...", NULL, 0, 0, NULL},
     {NM_END, NULL, NULL, 0, 0, NULL}
 };
+static char menu_contact_management_label[128];
+static char menu_signature_label[128];
+
 static void localize_menus(void)
 {
     menus[0].nm_Label=(STRPTR)T(MSG_FILE, "File");
@@ -121,8 +125,12 @@ static void localize_menus(void)
     menus[2].nm_Label=(STRPTR)T(MSG_ABOUT_AMIMAIL_38B2, "About AmiMail...");
     menus[4].nm_Label=(STRPTR)T(MSG_QUIT, "Quit");
     menus[5].nm_Label=(STRPTR)T(MSG_EDIT_A8FE, "Edit");
-    menus[6].nm_Label=(STRPTR)T(MSG_CONTACT_MANAGEMENT, "Contact management");
-    menus[7].nm_Label=(STRPTR)T(MSG_SIGNATURE, "Signature");
+    snprintf(menu_contact_management_label, sizeof(menu_contact_management_label),
+             "%s...", T(MSG_CONTACT_MANAGEMENT, "Contact management"));
+    snprintf(menu_signature_label, sizeof(menu_signature_label),
+             "%s...", T(MSG_SIGNATURE, "Signature"));
+    menus[6].nm_Label=(STRPTR)menu_contact_management_label;
+    menus[7].nm_Label=(STRPTR)menu_signature_label;
     menus[9].nm_Label=(STRPTR)T(MSG_EMPTY_TRASH, "Empty Trash...");
     menus[10].nm_Label=(STRPTR)T(MSG_EMPTY_SPAM, "Empty Spam...");
 }
@@ -510,6 +518,39 @@ void draw_window_overlays(AmgGui *gui)
     draw_message_flag_header(gui);
 }
 
+/* The banner, version string and the custom flag-column heading are drawn
+ * directly into the window RastPort rather than by ReAction gadgets.  The
+ * main window uses Smart Refresh so obscured pixels survive normal window
+ * overlap.  This post-refresh hook remains as the redraw path for genuine
+ * refresh damage such as resizing.  Do not call RefreshGList() or any of
+ * the scrollbar synchronisation helpers from this hook. */
+static ULONG window_post_refresh_subentry(struct Hook *hook,
+                                          APTR object, APTR message)
+{
+    AmgGui *gui = hook ? (AmgGui *)hook->h_Data : NULL;
+    (void)object;
+    (void)message;
+    if (!gui || !gui->window) return 0UL;
+
+    draw_banner(gui);
+    draw_version_text(gui);
+    draw_message_flag_header(gui);
+    return 0UL;
+}
+
+static void init_window_post_refresh_hook(AmgGui *gui)
+{
+    if (!gui) return;
+    memset(&gui->window_post_refresh_hook, 0,
+           sizeof(gui->window_post_refresh_hook));
+    gui->window_post_refresh_hook.h_Entry =
+        (__typeof__(gui->window_post_refresh_hook.h_Entry))HookEntry;
+    gui->window_post_refresh_hook.h_SubEntry =
+        (__typeof__(gui->window_post_refresh_hook.h_SubEntry))
+            window_post_refresh_subentry;
+    gui->window_post_refresh_hook.h_Data = gui;
+}
+
 int create_window(AmgGui *gui, AmgError *error)
 {
     Object *banner_row;
@@ -537,6 +578,7 @@ int create_window(AmgGui *gui, AmgError *error)
     init_preview_url_hook(gui);
     init_label_tree_render_hook(gui);
     init_compact_list_render_hooks(gui);
+    init_window_post_refresh_hook(gui);
     /* default_labels() wird vor dem LockPubScreen() aufgebaut. Jetzt sind
      * Font und RenderHook bekannt, daher erzeugen wir nur die Label-Nodes
      * erneut; die Hierarchie- und Persistenzdaten selbst bleiben erhalten. */
@@ -656,8 +698,17 @@ int create_window(AmgGui *gui, AmgError *error)
         WA_Title, "AmiMail",
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                       WFLG_SIZEGADGET | WFLG_ACTIVATE,
+        /* The banner/logo, version text and flag heading are drawn directly
+         * into the window RastPort.  With Simple Refresh those pixels are
+         * discarded while another window covers them.  Smart Refresh keeps
+         * the obscured pixels in the layer backing store, so Intuition can
+         * restore them immediately when the area is exposed again.  The
+         * post-refresh hook remains useful for genuine resize damage. */
+        WA_SmartRefresh, TRUE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_MENUPICK |
                       IDCMP_RAWKEY | IDCMP_NEWSIZE | IDCMP_REFRESHWINDOW,
+        WINDOW_PostRefreshHook,
+            (ULONG)(uintptr_t)&gui->window_post_refresh_hook,
         gui->window_state_valid ? WA_Left : TAG_IGNORE,
             (ULONG)gui->saved_window_left,
         gui->window_state_valid ? WA_Top : TAG_IGNORE,

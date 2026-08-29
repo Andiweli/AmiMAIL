@@ -589,20 +589,50 @@ int amg_imap_connect(AmgImapSession *session, const AmgAccount *account,
     AmgBuffer response;
     int result;
     int preauthenticated = 0;
+    int attempt;
     if (!session || !account) return AMG_ERR_ARGUMENT;
     configure_special_mailboxes(session, account);
 
-    if (account->imap_starttls)
-        session->connection = amg_tls_connect_plain(
-            account->imap_host, account->imap_port, 30U, error);
-    else
-        session->connection = amg_tls_connect(
-            account->imap_host, account->imap_port, 30U, error);
-    if (!session->connection)
-        return error ? error->code : AMG_ERR_TLS;
+    /* No IMAP command has been sent before the greeting.  If a provider or
+     * frontend resets this brand-new connection, retry once with a fresh
+     * socket/TLS session.  Authentication and all state-changing commands
+     * remain strictly single-shot. */
+    for (attempt = 0; attempt < 2; ++attempt) {
+        if (account->imap_starttls)
+            session->connection = amg_tls_connect_plain(
+                account->imap_host, account->imap_port, 30U, error);
+        else if (attempt == 0)
+            session->connection = amg_tls_connect(
+                account->imap_host, account->imap_port, 30U, error);
+        else
+            session->connection = amg_tls_connect_tls12(
+                account->imap_host, account->imap_port, 30U, error);
 
-    result = read_greeting(session, &preauthenticated, error);
-    if (result != AMG_OK) goto fail;
+        if (!session->connection) {
+            /* For implicit TLS, retry a connection reset once with an
+             * explicit TLS 1.2 profile.  This keeps the normal modern TLS
+             * path first while providing a compatibility path for legacy
+             * AmiSSL/TCP-stack combinations. */
+            if (!account->imap_starttls && attempt == 0 && error &&
+                strstr(error->message, "SSL_ERROR_SYSCALL") &&
+                strstr(error->message, "connection reset by peer")) {
+                amg_error_set(error, AMG_OK, "");
+                continue;
+            }
+            return error ? error->code : AMG_ERR_TLS;
+        }
+
+        preauthenticated = 0;
+        result = read_greeting(session, &preauthenticated, error);
+        if (result == AMG_OK) break;
+        if (attempt == 0 && result == AMG_ERR_IO) {
+            amg_tls_close(session->connection);
+            session->connection = NULL;
+            amg_error_set(error, AMG_OK, "");
+            continue;
+        }
+        goto fail;
+    }
     if (preauthenticated && account->imap_starttls) {
         amg_error_set(
             error, AMG_ERR_UNSUPPORTED,

@@ -1,5 +1,17 @@
 # Changelog
 
+## AmiMail 1.4 - 2026-08-29
+
+- update the program, package and release-asset version to 1.4
+- update the binary `$VER:` date to 29.08.2026
+- fix unnecessary main-window overlay redraws on normal mouse and keyboard input, eliminating the visible header flicker reported on some systems
+- fix loss of the directly drawn header artwork and version text after another window covered the AmiMail header by using Smart Refresh and a ReAction post-refresh redraw path
+- improve AmiSSL/TLS diagnostics with `SSL_get_error()` results, AmiSSL error-queue details, socket errors such as `connection reset by peer`, and the negotiated TLS version/cipher where available
+- improve TCP connection robustness by trying all IPv4 addresses returned for a server instead of failing after the first endpoint
+- add one safe reconnect when the initial IMAP greeting fails before any credentials or IMAP commands have been sent
+- add a TLS 1.2 compatibility retry for implicit-TLS IMAP connections only when an early `SSL_ERROR_SYSCALL`/connection-reset case occurs; normal TLS negotiation and STARTTLS configurations remain unchanged
+- add Amiga Style Guide ellipses to **Contact management...** and **Signature...**, including localized menu labels
+
 ## AmiMail 1.3 - 2026-08-22
 
 - update the program, package and release-asset version to 1.3

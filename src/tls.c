@@ -38,15 +38,107 @@ struct AmgTlsConnection {
     SSL *ssl;
 };
 
+static const char *socket_error_text(int value)
+{
+#ifdef ECONNRESET
+    if (value == ECONNRESET) return "connection reset by peer";
+#endif
+#ifdef ETIMEDOUT
+    if (value == ETIMEDOUT) return "connection timed out";
+#endif
+#ifdef ECONNREFUSED
+    if (value == ECONNREFUSED) return "connection refused";
+#endif
+#ifdef EHOSTUNREACH
+    if (value == EHOSTUNREACH) return "host unreachable";
+#endif
+#ifdef ENETUNREACH
+    if (value == ENETUNREACH) return "network unreachable";
+#endif
+#ifdef EPIPE
+    if (value == EPIPE) return "broken pipe";
+#endif
+#ifdef EAGAIN
+    if (value == EAGAIN) return "operation would block or timed out";
+#endif
+#ifdef EWOULDBLOCK
+#if !defined(EAGAIN) || EWOULDBLOCK != EAGAIN
+    if (value == EWOULDBLOCK) return "operation would block or timed out";
+#endif
+#endif
+    return "socket error";
+}
+
+static const char *ssl_error_text(int value)
+{
+    switch (value) {
+        case SSL_ERROR_NONE: return "SSL_ERROR_NONE";
+        case SSL_ERROR_ZERO_RETURN: return "SSL_ERROR_ZERO_RETURN";
+        case SSL_ERROR_WANT_READ: return "SSL_ERROR_WANT_READ";
+        case SSL_ERROR_WANT_WRITE: return "SSL_ERROR_WANT_WRITE";
+        case SSL_ERROR_SYSCALL: return "SSL_ERROR_SYSCALL";
+        case SSL_ERROR_SSL: return "SSL_ERROR_SSL";
+        default: return "SSL_ERROR_UNKNOWN";
+    }
+}
+
 static void ssl_error(AmgError *error, int code, const char *prefix)
 {
     unsigned long value = ERR_get_error();
     char detail[160], combined[256];
     if (value)
         ERR_error_string_n(value, detail, sizeof(detail));
+    else if (errno)
+        snprintf(detail, sizeof(detail), "%s (socket errno %d)",
+                 socket_error_text(errno), errno);
     else
-        amg_tr_snprintf(detail, sizeof(detail), MSG_NO_AMISSL_ERROR_TEXT_SOCKET_ERRNO_VALUE, "no AmiSSL error text (socket errno %d)", errno);
+        snprintf(detail, sizeof(detail), "no AmiSSL error text");
     snprintf(combined, sizeof(combined), "%s: %s", prefix, detail);
+    amg_error_set(error, code, combined);
+}
+
+static void ssl_operation_error(AmgError *error, int code,
+                                const char *prefix, SSL *ssl,
+                                int io_result, int ssl_result,
+                                int socket_error)
+{
+    unsigned long value = ERR_get_error();
+    const char *tls_version = ssl ? SSL_get_version(ssl) : NULL;
+    const char *cipher = ssl ? SSL_get_cipher_name(ssl) : NULL;
+    char detail[176], combined[256];
+
+    if (value) {
+        char ami_detail[128];
+        ERR_error_string_n(value, ami_detail, sizeof(ami_detail));
+        snprintf(detail, sizeof(detail), "%s: %s",
+                 ssl_error_text(ssl_result), ami_detail);
+    } else if (ssl_result == SSL_ERROR_SYSCALL) {
+        if (socket_error)
+            snprintf(detail, sizeof(detail),
+                     "%s: %s (socket errno %d)",
+                     ssl_error_text(ssl_result),
+                     socket_error_text(socket_error), socket_error);
+        else if (io_result == 0)
+            snprintf(detail, sizeof(detail),
+                     "%s: peer closed the connection without TLS close_notify",
+                     ssl_error_text(ssl_result));
+        else
+            snprintf(detail, sizeof(detail), "%s: no socket error reported",
+                     ssl_error_text(ssl_result));
+    } else if (ssl_result == SSL_ERROR_ZERO_RETURN) {
+        snprintf(detail, sizeof(detail),
+                 "%s: peer closed the TLS connection",
+                 ssl_error_text(ssl_result));
+    } else {
+        snprintf(detail, sizeof(detail), "%s (socket errno %d)",
+                 ssl_error_text(ssl_result), socket_error);
+    }
+
+    if (tls_version && *tls_version && cipher && *cipher)
+        snprintf(combined, sizeof(combined), "%s: %s [TLS %s, %s]",
+                 prefix, detail, tls_version, cipher);
+    else
+        snprintf(combined, sizeof(combined), "%s: %s", prefix, detail);
     amg_error_set(error, code, combined);
 }
 
@@ -92,37 +184,73 @@ void amg_tls_global_cleanup(void)
     if (SocketBase) { CloseLibrary(SocketBase); SocketBase = NULL; }
 }
 
-static int open_socket(const char *host, unsigned short port, unsigned long timeout, AmgError *error)
+static int open_socket(const char *host, unsigned short port,
+                       unsigned long timeout, AmgError *error)
 {
     const struct hostent *entry;
+    char **address_cursor;
     struct sockaddr_in address;
     struct timeval tv;
-    int fd;
+    int fd = -1;
+    int last_error = 0;
+
     entry = gethostbyname((STRPTR)host);
     if (!entry || !entry->h_addr_list || !entry->h_addr_list[0]) {
         char message[256];
-        amg_tr_snprintf(message, sizeof(message), MSG_SERVER_NAME_VALUE_COULD_NOT_BE_RESOLVED, "Server name %.190s could not be resolved.", host);
-        amg_error_set(error, AMG_ERR_IO, message); return -1;
+        amg_tr_snprintf(message, sizeof(message),
+                        MSG_SERVER_NAME_VALUE_COULD_NOT_BE_RESOLVED,
+                        "Server name %.190s could not be resolved.", host);
+        amg_error_set(error, AMG_ERR_IO, message);
+        return -1;
     }
-    fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        char message[256];
-        amg_tr_snprintf(message, sizeof(message), MSG_SOCKET_COULD_NOT_BE_OPENED_ERRNO_VALUE, "Socket could not be opened (errno %d).", errno);
-        amg_error_set(error, AMG_ERR_IO, message); return -1;
-    }
-    tv.tv_sec = (long)timeout; tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&tv, sizeof(tv));
-    memset(&address, 0, sizeof(address)); address.sin_family = AF_INET; address.sin_port = htons(port);
-    memcpy(&address.sin_addr, entry->h_addr_list[0], (size_t)entry->h_length);
-    if (connect(fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        char message[256];
-        int socket_error = errno;
+
+    tv.tv_sec = (long)(timeout ? timeout : 30U);
+    tv.tv_usec = 0;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_port = htons(port);
+
+    /* Try every IPv4 address returned by DNS instead of failing on the first
+     * endpoint.  Gmail and many other providers publish multiple frontends,
+     * and a single stale/unreachable address must not make the whole account
+     * look offline. */
+    for (address_cursor = entry->h_addr_list; *address_cursor;
+         ++address_cursor) {
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) {
+            char message[256];
+            amg_tr_snprintf(message, sizeof(message),
+                            MSG_SOCKET_COULD_NOT_BE_OPENED_ERRNO_VALUE,
+                            "Socket could not be opened (errno %d).", errno);
+            amg_error_set(error, AMG_ERR_IO, message);
+            return -1;
+        }
+
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                         (char *)&tv, sizeof(tv));
+        (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
+                         (char *)&tv, sizeof(tv));
+        memcpy(&address.sin_addr, *address_cursor,
+               (size_t)entry->h_length);
+
+        errno = 0;
+        if (connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0)
+            return fd;
+
+        last_error = errno;
         CloseSocket(fd);
-        amg_tr_snprintf(message, sizeof(message), MSG_TCP_CONNECTION_TO_VALUE_VALUE_FAILED_ERRNO_VALUE, "TCP connection to %.175s:%u failed (errno %d).", host, (unsigned)port, socket_error);
-        amg_error_set(error, AMG_ERR_IO, message); return -1;
+        fd = -1;
     }
-    return fd;
+
+    {
+        char message[256];
+        amg_tr_snprintf(message, sizeof(message),
+                        MSG_TCP_CONNECTION_TO_VALUE_VALUE_FAILED_ERRNO_VALUE,
+                        "TCP connection to %.175s:%u failed (errno %d).",
+                        host, (unsigned)port, last_error);
+        amg_error_set(error, AMG_ERR_IO, message);
+    }
+    return -1;
 }
 
 AmgTlsConnection *amg_tls_connect_plain(const char *host, unsigned short port,
@@ -148,8 +276,8 @@ AmgTlsConnection *amg_tls_connect_plain(const char *host, unsigned short port,
     return connection;
 }
 
-int amg_tls_starttls(AmgTlsConnection *connection, const char *host,
-                     AmgError *error)
+static int amg_tls_starttls_internal(AmgTlsConnection *connection, const char *host,
+                                      int force_tls12, AmgError *error)
 {
     if (!connection || connection->socket_fd < 0 || !host || !*host)
         return AMG_ERR_ARGUMENT;
@@ -159,6 +287,19 @@ int amg_tls_starttls(AmgTlsConnection *connection, const char *host,
     if (!connection->context) {
         ssl_error(error, AMG_ERR_TLS, T(MSG_TLS_CONTEXT, "TLS context"));
         goto fail;
+    }
+    if (force_tls12) {
+#ifdef TLS1_2_VERSION
+        if (SSL_CTX_set_min_proto_version(connection->context, TLS1_2_VERSION) != 1 ||
+            SSL_CTX_set_max_proto_version(connection->context, TLS1_2_VERSION) != 1) {
+            ssl_error(error, AMG_ERR_TLS, "TLS 1.2 compatibility mode");
+            goto fail;
+        }
+#else
+        amg_error_set(error, AMG_ERR_TLS,
+                      "TLS 1.2 compatibility mode is unavailable in this AmiSSL build.");
+        goto fail;
+#endif
     }
     SSL_CTX_set_mode(connection->context, SSL_MODE_AUTO_RETRY);
     SSL_CTX_set_verify(connection->context, SSL_VERIFY_PEER, NULL);
@@ -179,10 +320,23 @@ int amg_tls_starttls(AmgTlsConnection *connection, const char *host,
         ssl_error(error, AMG_ERR_TLS, "TLS-Hostname");
         goto fail;
     }
-    SSL_set_fd(connection->ssl, connection->socket_fd);
-    if (SSL_connect(connection->ssl) != 1) {
-        ssl_error(error, AMG_ERR_TLS, "TLS-Handshake");
+    if (SSL_set_fd(connection->ssl, connection->socket_fd) != 1) {
+        ssl_error(error, AMG_ERR_TLS, "TLS socket binding");
         goto fail;
+    }
+    {
+        int handshake_result, ssl_result, socket_error;
+        ERR_clear_error();
+        errno = 0;
+        handshake_result = SSL_connect(connection->ssl);
+        socket_error = errno;
+        if (handshake_result != 1) {
+            ssl_result = SSL_get_error(connection->ssl, handshake_result);
+            ssl_operation_error(error, AMG_ERR_TLS, "TLS-Handshake",
+                                connection->ssl, handshake_result,
+                                ssl_result, socket_error);
+            goto fail;
+        }
     }
     if (SSL_get_verify_result(connection->ssl) != X509_V_OK) {
         amg_error_set(error, AMG_ERR_TLS,
@@ -203,17 +357,38 @@ fail:
     return error && error->code != AMG_OK ? error->code : AMG_ERR_TLS;
 }
 
-AmgTlsConnection *amg_tls_connect(const char *host, unsigned short port,
-                                  unsigned long timeout_seconds, AmgError *error)
+int amg_tls_starttls(AmgTlsConnection *connection, const char *host,
+                     AmgError *error)
+{
+    return amg_tls_starttls_internal(connection, host, 0, error);
+}
+
+static AmgTlsConnection *amg_tls_connect_internal(const char *host,
+                                                   unsigned short port,
+                                                   unsigned long timeout_seconds,
+                                                   int force_tls12,
+                                                   AmgError *error)
 {
     AmgTlsConnection *connection =
         amg_tls_connect_plain(host, port, timeout_seconds, error);
     if (!connection) return NULL;
-    if (amg_tls_starttls(connection, host, error) != AMG_OK) {
+    if (amg_tls_starttls_internal(connection, host, force_tls12, error) != AMG_OK) {
         amg_tls_close(connection);
         return NULL;
     }
     return connection;
+}
+
+AmgTlsConnection *amg_tls_connect(const char *host, unsigned short port,
+                                  unsigned long timeout_seconds, AmgError *error)
+{
+    return amg_tls_connect_internal(host, port, timeout_seconds, 0, error);
+}
+
+AmgTlsConnection *amg_tls_connect_tls12(const char *host, unsigned short port,
+                                        unsigned long timeout_seconds, AmgError *error)
+{
+    return amg_tls_connect_internal(host, port, timeout_seconds, 1, error);
 }
 
 static int wait_for_tls_socket(AmgTlsConnection *connection, int write_ready,
@@ -263,7 +438,7 @@ static int socket_errno_is_timeout(int value)
 long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length,
                   AmgError *error)
 {
-    int result, ssl_result;
+    int result, ssl_result, socket_error;
     if (!connection || connection->socket_fd < 0 || !data || !length)
         return AMG_ERR_ARGUMENT;
 
@@ -292,9 +467,11 @@ long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length,
             !wait_for_tls_socket(connection, 0, error))
             return AMG_ERR_IO;
         ERR_clear_error();
+        errno = 0;
         result = SSL_read(connection->ssl, data,
                           length > 0x7fffffffU ? 0x7fffffff : (int)length);
         if (result > 0) return result;
+        socket_error = errno;
         ssl_result = SSL_get_error(connection->ssl, result);
         if (ssl_result == SSL_ERROR_WANT_READ) {
             if (!wait_for_tls_socket(connection, 0, error))
@@ -310,8 +487,10 @@ long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length,
             amg_error_set(error, AMG_ERR_IO,
                           T(MSG_THE_SERVER_CLOSED_THE_TLS_CONNECTION, "The server closed the TLS connection."));
         else
-            ssl_error(error, AMG_ERR_IO,
-                      T(MSG_TLS_READ_ERROR, "TLS read error"));
+            ssl_operation_error(error, AMG_ERR_IO,
+                                T(MSG_TLS_READ_ERROR, "TLS read error"),
+                                connection->ssl, result, ssl_result,
+                                socket_error);
         return AMG_ERR_IO;
     }
 }
@@ -319,7 +498,7 @@ long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length,
 long amg_tls_write(AmgTlsConnection *connection, const void *data,
                    size_t length, AmgError *error)
 {
-    int result, ssl_result;
+    int result, ssl_result, socket_error;
     if (!connection || connection->socket_fd < 0 || (!data && length))
         return AMG_ERR_ARGUMENT;
     if (!length) return 0;
@@ -345,9 +524,11 @@ long amg_tls_write(AmgTlsConnection *connection, const void *data,
         if (!wait_for_tls_socket(connection, 1, error))
             return AMG_ERR_IO;
         ERR_clear_error();
+        errno = 0;
         result = SSL_write(connection->ssl, data,
                            length > 0x7fffffffU ? 0x7fffffff : (int)length);
         if (result > 0) return result;
+        socket_error = errno;
         ssl_result = SSL_get_error(connection->ssl, result);
         if (ssl_result == SSL_ERROR_WANT_READ) {
             if (!wait_for_tls_socket(connection, 0, error))
@@ -359,7 +540,10 @@ long amg_tls_write(AmgTlsConnection *connection, const void *data,
                 return AMG_ERR_IO;
             continue;
         }
-        ssl_error(error, AMG_ERR_IO, T(MSG_TLS_WRITE_ERROR, "TLS write error"));
+        ssl_operation_error(error, AMG_ERR_IO,
+                            T(MSG_TLS_WRITE_ERROR, "TLS write error"),
+                            connection->ssl, result, ssl_result,
+                            socket_error);
         return AMG_ERR_IO;
     }
 }
@@ -383,6 +567,8 @@ AmgTlsConnection *amg_tls_connect_plain(const char *host, unsigned short port, u
 int amg_tls_starttls(AmgTlsConnection *connection, const char *host, AmgError *error)
 { (void)connection; (void)host; amg_error_set(error, AMG_ERR_UNSUPPORTED, T(MSG_HOST_BUILD_WITHOUT_AMISSL_NETWORKING, "Host build without AmiSSL networking.")); return AMG_ERR_UNSUPPORTED; }
 AmgTlsConnection *amg_tls_connect(const char *host, unsigned short port, unsigned long timeout, AmgError *error)
+{ (void)host; (void)port; (void)timeout; amg_error_set(error, AMG_ERR_UNSUPPORTED, T(MSG_HOST_BUILD_WITHOUT_AMISSL_NETWORKING, "Host build without AmiSSL networking.")); return NULL; }
+AmgTlsConnection *amg_tls_connect_tls12(const char *host, unsigned short port, unsigned long timeout, AmgError *error)
 { (void)host; (void)port; (void)timeout; amg_error_set(error, AMG_ERR_UNSUPPORTED, T(MSG_HOST_BUILD_WITHOUT_AMISSL_NETWORKING, "Host build without AmiSSL networking.")); return NULL; }
 long amg_tls_read(AmgTlsConnection *c, void *d, size_t l, AmgError *e)
 { (void)c;(void)d;(void)l;amg_error_set(e,AMG_ERR_UNSUPPORTED,T(MSG_HOST_BUILD_WITHOUT_TLS, "Host build without TLS."));return AMG_ERR_UNSUPPORTED; }

@@ -251,9 +251,17 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
         if ((window_signal && (signals & window_signal)) ||
             (app_signal && (signals & app_signal))) {
             ULONG result;
+            int redraw_overlays = 0;
             UWORD code = 0U;
             while ((result = RA_HandleInput(gui->window_object, &code)) !=
                    WMHI_LASTMSG) {
+                /* IDCMP_REFRESHWINDOW is handled by window.class itself.
+                 * The WINDOW_PostRefreshHook restores our direct RastPort
+                 * artwork after ReAction has redrawn its gadgets.  WMHI_IGNORE
+                 * can also represent unrelated ignored input, so it must not
+                 * trigger a full overlay redraw here. */
+                if (result == (ULONG)WMHI_IGNORE)
+                    continue;
                 switch (result & WMHI_CLASSMASK) {
                     case WMHI_CLOSEWINDOW:
                         gui->running = 0;
@@ -268,6 +276,9 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
                         handle_main_gadget(gui, result & WMHI_GADGETMASK,
                                            error);
                         break;
+                    case WMHI_NEWSIZE:
+                        redraw_overlays = 1;
+                        break;
                     case WMHI_MENUPICK:
                         handle_menu(gui, result & 0xffffUL, error);
                         break;
@@ -277,7 +288,8 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
                         break;
                 }
             }
-            draw_window_overlays(gui);
+            if (redraw_overlays && gui->window)
+                draw_window_overlays(gui);
         }
         if (gui->pending_preview_url_ready)
             open_pending_preview_url(gui);

@@ -6,7 +6,7 @@
 static const char client_identification[] __attribute__((used)) =
     "AmiMail Client " AMIMAIL_VERSION " by Andreas 'Andiweli' St\374rmer";
 static const char version[] __attribute__((used)) =
-    "$VER: AmiMail " AMIMAIL_VERSION " (22.08.2026)";
+    "$VER: AmiMail " AMIMAIL_VERSION " (29.08.2026)";
 
 int main(int argc, char **argv)
 {
