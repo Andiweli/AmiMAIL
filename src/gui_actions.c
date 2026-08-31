@@ -232,7 +232,11 @@ static void signature_dialog(AmgGui *gui)
                         done = 1;
                         break;
                     case WMHI_RAWKEY:
-                        if (rawkey_is_cancel(result)) done = 1;
+                        if (rawkey_is_help(result)) {
+                            about_dialog(gui);
+                        } else if (rawkey_is_cancel(result)) {
+                            done = 1;
+                        }
                         break;
                     case WMHI_GADGETUP:
                         if ((result & WMHI_GADGETMASK) ==
@@ -413,7 +417,7 @@ static void update_reply_button_mode(AmgGui *gui)
     drafts = current_mailbox_is_drafts(gui);
     text = drafts
         ? T(MSG_EDIT, "_Edit")
-        : T(MSG_REPLY, "_Reply");
+        : T(MSG_REPLY, "Reply");
     if (gui->window) {
         SetGadgetAttrs(gui->reply_gadget, gui->window, NULL,
                        GA_Text, (ULONG)(uintptr_t)text,
@@ -438,6 +442,19 @@ static void update_reply_button_mode(AmgGui *gui)
     set_reply_menu_arrow(gui, 0);
 }
 
+static void label_without_shortcut(const char *source, char *target,
+                                   size_t capacity)
+{
+    size_t used = 0U;
+    if (!target || !capacity) return;
+    if (!source) source = "";
+    while (*source && used + 1U < capacity) {
+        if (*source != '_') target[used++] = *source;
+        ++source;
+    }
+    target[used] = 0;
+}
+
 static int reply_action_popup(AmgGui *gui)
 {
     Object *popup;
@@ -447,10 +464,17 @@ static int reply_action_popup(AmgGui *gui)
     int selection = 0;
     int done = 0;
     int inactive = 0;
+    char reply_all_label[96];
+    char forward_label[96];
 
     if (!gui || !gui->window || !gui->reply_gadget ||
         !gui->reply_menu_gadget || current_mailbox_is_drafts(gui))
         return 0;
+
+    label_without_shortcut(T(MSG_REPLY_ALL, "Reply All"),
+                           reply_all_label, sizeof(reply_all_label));
+    label_without_shortcut(T(MSG_FORWARD, "Forward"),
+                           forward_label, sizeof(forward_label));
 
     /* The drop-down buttons deliberately use the exact width and height of
      * the normal Reply button. With zero inner/outer layout spacing and a
@@ -489,7 +513,7 @@ static int reply_action_popup(AmgGui *gui)
             LAYOUT_AddChild, ButtonObject,
                 GA_ID, GID_REPLY_MENU_REPLY_ALL,
                 GA_RelVerify, TRUE,
-                GA_Text, T(MSG_REPLY_ALL, "Reply _All"),
+                GA_Text, reply_all_label,
             EndObject,
             CHILD_MinWidth, width,
             CHILD_MaxWidth, width,
@@ -500,7 +524,7 @@ static int reply_action_popup(AmgGui *gui)
             LAYOUT_AddChild, ButtonObject,
                 GA_ID, GID_REPLY_MENU_FORWARD,
                 GA_RelVerify, TRUE,
-                GA_Text, T(MSG_FORWARD, "_Forward"),
+                GA_Text, forward_label,
             EndObject,
             CHILD_MinWidth, width,
             CHILD_MaxWidth, width,
@@ -1552,11 +1576,35 @@ void fetch_mail(AmgGui *gui, AmgError *error)
     }
 }
 
+static int focus_open_compose_window(AmgGui *gui)
+{
+    if (!gui || !gui->compose_open) return 0;
+    if (gui->compose_window) {
+        WindowToFront(gui->compose_window);
+        ActivateWindow(gui->compose_window);
+    }
+    return 1;
+}
+
+void handle_main_shortcut(AmgGui *gui, char letter, AmgError *error)
+{
+    if (!gui) return;
+
+    switch (letter) {
+        case 'W': case 'w':
+            if (current_mailbox_is_drafts(gui)) return;
+            if (focus_open_compose_window(gui)) return;
+            request_message(gui, MESSAGE_ACTION_REPLY, error);
+            break;
+    }
+}
+
 void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
                                AmgError *error)
 {
     switch (gadget_id) {
         case GID_NEW_MAIL:
+            if (focus_open_compose_window(gui)) break;
             if (ensure_account(gui, error))
                 compose_dialog(gui, COMPOSE_MODE_NEW, NULL, error);
             break;
@@ -1576,6 +1624,8 @@ void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
             handle_labels_scroller(gui);
             break;
         case GID_MESSAGES:
+            if (!input_event_has_multiselect_qualifier(gui->window_object))
+                normalize_message_selection_for_click(gui);
             request_message(gui, MESSAGE_ACTION_PREVIEW, error);
             break;
         case GID_MESSAGES_SCROLL:
@@ -1588,12 +1638,14 @@ void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
             save_current_attachments(gui);
             break;
         case GID_REPLY:
+            if (focus_open_compose_window(gui)) break;
             request_message(gui, current_mailbox_is_drafts(gui)
                                      ? MESSAGE_ACTION_EDIT_DRAFT
                                      : MESSAGE_ACTION_REPLY,
                             error);
             break;
         case GID_REPLY_MENU:
+            if (focus_open_compose_window(gui)) break;
             if (suppress_next_reply_menu_click) {
                 suppress_next_reply_menu_click = 0;
                 break;

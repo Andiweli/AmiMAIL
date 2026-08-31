@@ -158,7 +158,60 @@ static void trim_local_text(char *text)
     *end = 0;
 }
 
-static void sender_name_only(char *sender, size_t capacity)
+static int current_mailbox_is_sent(const AmgGui *gui)
+{
+    size_t i;
+    if (!gui || !gui->current_mailbox_utf8[0]) return 0;
+
+    for (i = 0U; i < gui->label_count; ++i) {
+        const GuiLabel *label = &gui->labels[i];
+        if (!(label->special_use & AMG_LABEL_SENT)) continue;
+        if ((label->mailbox_utf8[0] &&
+             !strcmp(gui->current_mailbox_utf8, label->mailbox_utf8)) ||
+            (label->server_mailbox_utf8[0] &&
+             !strcmp(gui->current_mailbox_utf8,
+                     label->server_mailbox_utf8)))
+            return 1;
+    }
+
+    /* Keep manually configured Sent folders working even if the server did
+     * not advertise a SPECIAL-USE \Sent attribute. */
+    if (gui->account && gui->account->sent_mailbox[0] &&
+        !strcmp(gui->current_mailbox_utf8, gui->account->sent_mailbox))
+        return 1;
+
+    return 0;
+}
+
+static const char *message_party_header(const AmgGui *gui,
+                                        const AmgMailHeaders *headers)
+{
+    const char *value;
+    if (!headers) return NULL;
+    if (!current_mailbox_is_sent(gui))
+        return amg_mail_header_get(headers, "From");
+
+    value = amg_mail_header_get(headers, "To");
+    if (value && *value) return value;
+    value = amg_mail_header_get(headers, "Cc");
+    if (value && *value) return value;
+    return amg_mail_header_get(headers, "Bcc");
+}
+
+static void update_message_party_column_title(AmgGui *gui)
+{
+    const char *title;
+    if (!gui || !gui->columns) return;
+    title = current_mailbox_is_sent(gui)
+        ? T(MSG_RECIPIENT, "Recipient")
+        : T(MSG_SENDER_F4D4, "Sender");
+    SetLBColumnInfoAttrs(gui->columns,
+                         LBCIA_Column, 1,
+                         LBCIA_Title, (ULONG)(uintptr_t)title,
+                         TAG_DONE);
+}
+
+static void address_name_only(char *sender, size_t capacity)
 {
     char name[513];
     char *angle, *close_angle, *open_parenthesis;
@@ -223,6 +276,7 @@ static void sender_name_only(char *sender, size_t capacity)
 static void attach_messages_default_date_sort(AmgGui *gui)
 {
     if (!gui || !gui->messages_gadget) return;
+    update_message_party_column_title(gui);
     if (gui->columns) {
         SetLBColumnInfoAttrs(
             gui->columns,
@@ -260,6 +314,7 @@ static void attach_messages_default_date_sort(AmgGui *gui)
     NewList(&gui->messages_list);
     node = message_placeholder_node(text);
     if (node) AddTail(&gui->messages_list, node);
+    update_message_party_column_title(gui);
     attach_listbrowser(gui->messages_gadget, gui->window,
                        &gui->messages_list);
 }
@@ -366,7 +421,7 @@ size_t update_messages_from_payload(AmgGui *gui,
            (result = amg_imap_fetch_record_next(
                 payload, length, &position, &record)) > 0) {
         AmgMailHeaders headers;
-        const char *from_header, *subject_header, *date_header;
+        const char *party_header, *subject_header, *date_header;
         char from[513], subject[769], date[160];
         struct Node *node;
         if (record.deleted) continue;
@@ -377,12 +432,16 @@ size_t update_messages_from_payload(AmgGui *gui,
             amg_mail_headers_free(&headers);
             continue;
         }
-        from_header = amg_mail_header_get(&headers, "From");
+        party_header = message_party_header(gui, &headers);
         subject_header = amg_mail_header_get(&headers, "Subject");
         date_header = amg_mail_header_get(&headers, "Date");
-        header_to_local(from_header, T(MSG_UNKNOWN_SENDER_CCD6, "(Unknown sender)"),
-                        from, sizeof(from));
-        sender_name_only(from, sizeof(from));
+        header_to_local(
+            party_header,
+            current_mailbox_is_sent(gui)
+                ? ""
+                : T(MSG_UNKNOWN_SENDER_CCD6, "(Unknown sender)"),
+            from, sizeof(from));
+        address_name_only(from, sizeof(from));
         header_to_local(subject_header, T(MSG_NO_SUBJECT, "(No subject)"),
                         subject, sizeof(subject));
         format_mail_date(date_header, date, sizeof(date));
@@ -477,7 +536,7 @@ size_t update_messages_from_payload(AmgGui *gui,
            (result = amg_imap_fetch_record_next(
                 payload, length, &position, &record)) > 0) {
         AmgMailHeaders headers;
-        const char *from_header, *subject_header, *date_header;
+        const char *party_header, *subject_header, *date_header;
         char from[513], subject[769], date[160];
         if (record.deleted) continue;
         if (find_node_by_user_data(&gui->messages_list, record.uid))
@@ -489,13 +548,16 @@ size_t update_messages_from_payload(AmgGui *gui,
             amg_mail_headers_free(&headers);
             continue;
         }
-        from_header = amg_mail_header_get(&headers, "From");
+        party_header = message_party_header(gui, &headers);
         subject_header = amg_mail_header_get(&headers, "Subject");
         date_header = amg_mail_header_get(&headers, "Date");
-        header_to_local(from_header,
-                        T(MSG_UNKNOWN_SENDER_CCD6, "(Unknown sender)"),
-                        from, sizeof(from));
-        sender_name_only(from, sizeof(from));
+        header_to_local(
+            party_header,
+            current_mailbox_is_sent(gui)
+                ? ""
+                : T(MSG_UNKNOWN_SENDER_CCD6, "(Unknown sender)"),
+            from, sizeof(from));
+        address_name_only(from, sizeof(from));
         header_to_local(subject_header,
                         T(MSG_NO_SUBJECT, "(No subject)"),
                         subject, sizeof(subject));
@@ -519,6 +581,7 @@ size_t update_messages_from_payload(AmgGui *gui,
         if (node) AddTail(&gui->messages_list, node);
     }
 
+    update_message_party_column_title(gui);
     if (gui->columns) {
         SetLBColumnInfoAttrs(gui->columns,
                              LBCIA_Column, 3,
@@ -549,6 +612,72 @@ size_t update_messages_from_payload(AmgGui *gui,
         set_message_selected_visual(gui, selected_uid);
     sync_messages_scroller(gui);
     return added;
+}
+
+
+void normalize_message_selection_for_click(AmgGui *gui)
+{
+    struct Node *target = NULL;
+    struct Node *node;
+    ULONG release_event = LBRE_NORMAL;
+    ULONG target_uid = 0UL;
+    int changed = 0;
+
+    if (!gui || !gui->messages_gadget) return;
+
+    GetAttr(LISTBROWSER_RelEvent, (Object *)gui->messages_gadget,
+            &release_event);
+    if (release_event == LBRE_TITLECLICK) return;
+
+    GetAttr(LISTBROWSER_CursorNode, (Object *)gui->messages_gadget,
+            (ULONG *)&target);
+    if (!target)
+        GetAttr(LISTBROWSER_SelectedNode, (Object *)gui->messages_gadget,
+                (ULONG *)&target);
+    if (!target) return;
+
+    GetListBrowserNodeAttrs(
+        target, LBNA_UserData, (ULONG)(uintptr_t)&target_uid, TAG_DONE);
+    if (!target_uid) return;
+
+    node = gui->messages_list.lh_Head;
+    while (node && node->ln_Succ) {
+        ULONG selected = FALSE;
+        ULONG desired = node == target ? TRUE : FALSE;
+        GetListBrowserNodeAttrs(
+            node, LBNA_Selected, (ULONG)(uintptr_t)&selected, TAG_DONE);
+        if (selected != desired) {
+            struct TagItem tags[2];
+            struct lbEditNode edit;
+            tags[0].ti_Tag = LBNA_Selected;
+            tags[0].ti_Data = desired;
+            tags[1].ti_Tag = TAG_DONE;
+            tags[1].ti_Data = 0UL;
+            edit.MethodID = LBM_EDITNODE;
+            edit.lbe_GInfo = NULL;
+            edit.lbe_Node = node;
+            edit.lbe_NodeAttrs = tags;
+            if (gui->window)
+                (void)DoGadgetMethodA(gui->messages_gadget, gui->window,
+                                      NULL, (Msg)&edit);
+            else
+                SetListBrowserNodeAttrsA(node, tags);
+            changed = 1;
+        }
+        node = node->ln_Succ;
+    }
+
+    if (gui->window) {
+        SetGadgetAttrs(gui->messages_gadget, gui->window, NULL,
+                       LISTBROWSER_SelectedNode, (ULONG)(uintptr_t)target,
+                       TAG_DONE);
+        if (changed)
+            RefreshGList(gui->messages_gadget, gui->window, NULL, 1);
+    } else {
+        SetAttrs((Object *)gui->messages_gadget,
+                 LISTBROWSER_SelectedNode, (ULONG)(uintptr_t)target,
+                 TAG_DONE);
+    }
 }
 
  size_t selected_message_uids(AmgGui *gui, ULONG *uids,

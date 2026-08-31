@@ -1,0 +1,311 @@
+@DATABASE AmiMAIL_EN.guide
+@$VER: AmiMAIL_EN.guide 1.5 (29.08.2026)
+
+@NODE MAIN "AmiMAIL 1.5 - Guide"
+AmiMAIL 1.5
+Native IMAP/SMTP mail client for AmigaOS 3.2+
+ReAction, IMAP, SMTP and AmiSSL
+
+Contents:
+
+@{"About AmiMAIL" LINK OVERVIEW}
+@{"Requirements" LINK REQUIREMENTS}
+@{"Installation" LINK INSTALL}
+@{"First start and account" LINK ACCOUNT}
+@{"IMAP/SMTP and TLS" LINK SERVERS}
+@{"Mapping system folders" LINK FOLDERS}
+@{"The main window" LINK MAINWINDOW}
+@{"Reading and managing mail" LINK READING}
+@{"Compose, reply and forward" LINK COMPOSE}
+@{"Drafts" LINK DRAFTS}
+@{"Attachments" LINK ATTACHMENTS}
+@{"HTML mail" LINK HTMLMAIL}
+@{"Contacts and signature" LINK CONTACTS}
+@{"Notifications and iconify" LINK NOTIFY}
+@{"mailto: and updates" LINK INTEGRATION}
+@{"Keyboard operation" LINK KEYBOARD}
+@{"Troubleshooting" LINK TROUBLE}
+@{"About / Copyright" LINK ABOUT}
+
+© 2026 Andreas "Andiweli" Stürmer
+@ENDNODE
+
+@NODE OVERVIEW "About AmiMAIL"
+AmiMAIL is a native general-purpose IMAP/SMTP mail client for AmigaOS 3.2+.
+Unlike AmiGmail, AmiMAIL is not restricted to Gmail and can be configured
+for normal IMAP/SMTP providers.
+
+AmiMAIL intentionally uses a single-account design. The interface is based
+on ReAction and encrypted network connections use AmiSSL.
+
+The focus is classic Amiga operation, modest resource requirements and a
+robust plain-text-oriented mail workflow.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE REQUIREMENTS "Requirements"
+- AmigaOS 3.2 or newer
+- 68020 or newer
+- working TCP/IP stack
+- AmiSSL 5
+- IMAP/SMTP account at a supported mail provider
+
+A generous Workbench stack is recommended. The supplied program icon uses a
+stack size of 100000 bytes.
+
+The Amiga date and time should be correct so TLS certificates can be
+validated reliably.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE INSTALL "Installation"
+Start the supplied Installer and select the existing drawer where AmiMAIL
+should be installed.
+
+After language selection, the Installer can optionally copy the whole
+Setup/Notifications drawer to SYS:Prefs/Presets/Notifications.
+
+AmiSSL 5 must already be installed correctly. The Installer does not replace
+or update AmiSSL.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE ACCOUNT "First start and account"
+On first use, open Account settings and enter the information supplied by
+your mail provider.
+
+- Name: visible sender name; it is sent as Name <address> in the From:
+  header.
+- E-mail address: the address used as the message sender.
+- IMAP server, port, username and password.
+- SMTP server, port and, if needed, separate SMTP credentials.
+
+AmiMAIL can use the same credentials for SMTP and IMAP, or retain separate
+SMTP credentials.
+
+Credentials are stored locally in protected form. A master password can be
+requested at startup. Optionally, AmiMAIL can persist a derived key so the
+master-password requester is skipped on later starts.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE SERVERS "IMAP/SMTP and TLS"
+AmiMAIL supports direct TLS connections and, depending on the configured
+service, STARTTLS. Required ports and TLS mode depend on your mail provider.
+
+For Gmail, the tested configuration is IMAP 993 with direct TLS and SMTP 587
+with STARTTLS. Other providers require their own settings.
+
+When connecting, AmiMAIL tries all IPv4 addresses returned for the server.
+TLS failures report the SSL error type, socket error and, where available,
+negotiated TLS version and cipher.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE FOLDERS "Mapping system folders"
+AmiMAIL is not tied to one provider's folder names. INBOX is the IMAP Inbox;
+Sent, Trash and Drafts can be mapped to the folders used by your server.
+
+Manual mapping is important for providers that use names such as Sent Items,
+Trash, Deleted Messages or different Drafts folders.
+
+The mapping affects draft storage, sent-message copies, deletion and the
+related main-window actions.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE MAINWINDOW "The main window"
+The folder list is on the left. The message list is in the upper-right area
+and the message preview is below it.
+
+The message list uses the native ListBrowser vertical ReAction prop. The
+preview is directly coupled to its ReAction scroller through BOOPSI. Both
+support mouse-wheel scrolling.
+
+The main window stays fully interactive while the Compose window is open.
+Message selection, preview updates, manual fetch and network events continue
+to be processed.
+
+Window position and size are saved on normal exit.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE READING "Reading and managing mail"
+Select a message to read it in the lower preview area. AmiMAIL supports the
+usual IMAP actions such as read/unread state, moving and deleting messages.
+
+If the server supports UID MOVE, AmiMAIL uses it. Older servers use safe
+COPY/DELETE variants without performing an unsafe mailbox-wide EXPUNGE.
+
+Reply, Reply All and Forward are available from the Reply button and its
+adjacent selection area.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE COMPOSE "Compose, reply and forward"
+New Mail opens the Compose window with To, CC, BCC, Subject, message body
+and attachments.
+
+The configured name is written as the visible sender name in the
+RFC-compliant From: header. The SMTP envelope still uses only the plain
+e-mail address.
+
+Reply All filters the user's own address and duplicate recipients. Forward
+creates a new message without prefilled recipients and can retain existing
+attachments.
+
+The main window remains active while composing.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE DRAFTS "Drafts"
+Drafts can be stored on the IMAP server and reopened later.
+
+To, CC, BCC, Subject, body text, thread references and attachments are
+restored when editing a draft.
+
+Saving first appends the replacement draft and only then removes the old
+one. Sending removes the old draft only after SMTP delivery succeeds.
+Cancelling leaves the server draft unchanged.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE ATTACHMENTS "Attachments"
+AmiMAIL supports up to 8 attachments per message. The combined attachment
+size is limited to 10 MB.
+
+Attachments from received messages can be saved from the preview. Existing
+attachments can be retained while forwarding or editing drafts.
+
+Inline images from HTML mail are not automatically loaded.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE HTMLMAIL "HTML mail"
+AmiMAIL does not contain a full HTML browser. A clean text/plain part is
+preferred when available.
+
+HTML-only messages are converted locally to plain text. Paragraphs, line
+breaks, lists and links are retained where practical.
+
+CSS, style/script/head content, tracking pixels and other external content
+are not loaded. HTML entities and numeric entities are decoded.
+
+For broken multipart/alternative messages whose supposed plain-text part is
+actually generated CSS/HTML debris, AmiMAIL can automatically use the HTML
+alternative and generate clean plain text from it.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE CONTACTS "Contacts and signature"
+Edit -> Contact management... opens the local address book. Contacts can be
+created, edited and deleted, and CSV or VCard files can be imported.
+
+Contacts can be added to To, CC and BCC from a multi-selection list in the
+Compose window.
+
+Edit -> Signature... manages the local signature. It is inserted
+automatically in new messages, replies, Reply All, forwards and mailto:
+drafts.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE NOTIFY "Notifications and iconify"
+AmiMAIL can play a configured notification sound through AmigaOS DataTypes
+when new mail arrives.
+
+The main window can be iconified. The network worker, periodic fetch and
+status handling continue in the background.
+
+The current Inbox state is exposed during runtime through the AmiMAILStatus
+environment variable.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE INTEGRATION "mailto: and updates"
+AmiMAIL supports mailto: URIs containing recipient, CC, BCC, Subject and
+Body. If AmiMAIL is already running, the URI is handed to the existing
+instance instead of starting a second mail session.
+
+The GitHub update check runs asynchronously and at most once per program
+start. An available release can be downloaded to RAM:; installation and
+unpacking remain manual.
+
+Browsers such as IBrowse can be configured to use AmiMAIL as an external
+mailto: handler.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE KEYBOARD "Keyboard operation"
+- Return/Enter confirms the primary OK/Apply action in requesters.
+- Escape closes or cancels dialogs that provide a cancel action.
+- TAB follows the ReAction focus order in input windows.
+- The mouse wheel scrolls the message list and message preview.
+
+The exact response of some keys also depends on the currently active
+ReAction gadget.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE TROUBLE "Troubleshooting"
+For connection errors, first compare server name, port, TLS mode and
+credentials with the settings supplied by the mail provider.
+
+- Verify TCP/IP connectivity and DNS resolution.
+- Check AmiSSL 5 and the system date/time.
+- Use a Google App Password when connecting to Gmail.
+- For SSL_ERROR_SYSCALL or connection reset by peer, test the same server
+  with openssl s_client.
+- For Sent/Trash/Drafts problems, verify the system-folder mapping.
+
+AmiMAIL provides detailed TLS diagnostics where possible. Include those
+details together with TCP/IP stack, AmiSSL version and server configuration
+in bug reports.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE
+
+@NODE ABOUT "About / Copyright"
+AmiMAIL 1.5 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
+
+© 2026 Andreas "Andiweli" Stürmer
+
+AmiMAIL uses ReAction, IMAP, SMTP and AmiSSL and intentionally follows a
+single-account design.
+
+
+@{"Back to contents" LINK MAIN}
+@ENDNODE

@@ -38,7 +38,7 @@ typedef struct AmgNetMessage {
     unsigned long uid;
     char argument1[768];
     char argument2[768];
-    char from[256];
+    char from[768];
     char to[768];
     char cc[768];
     char bcc[768];
@@ -837,7 +837,7 @@ static int request_mail_message(AmgNetwork *network,
     unsigned long total = 0;
     if (!network || !draft || !network->running) return AMG_ERR_ARGUMENT;
     if (draft->attachment_count > AMG_MAIL_MAX_ATTACHMENTS ||
-        !text_fits(draft->from, 256U) || !text_fits(draft->to, 768U) ||
+        !text_fits(draft->from, 768U) || !text_fits(draft->to, 768U) ||
         !text_fits(draft->cc, 768U) || !text_fits(draft->bcc, 768U) ||
         !text_fits(draft->subject, 512U) ||
         !text_fits(draft->body_utf8, AMG_NET_BODY_MAX) ||

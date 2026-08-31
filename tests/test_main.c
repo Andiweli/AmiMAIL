@@ -309,12 +309,69 @@ static void test_headers_and_rfc2047(void)
 static void test_mime(void)
 {
     const char *message="Content-Type: multipart/alternative; boundary=abc\r\n\r\n--abc\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\nHallo=20Welt\r\n--abc\r\nContent-Type: text/html\r\n\r\n<b>Hallo</b>\r\n--abc--\r\n";
+    const char *html_first="Content-Type: multipart/alternative; boundary=alt\r\n\r\n--alt\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<p>HTML version</p>\r\n--alt\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nPlain version\r\n--alt--\r\n";
+    const char *html_only="Content-Type: text/html; charset=UTF-8\r\n\r\n<html><head><style>.x{display:none}</style></head><body><h2>Hello</h2><p>Visit <a href=\"https://example.com/?a=1&amp;b=2\">our site</a>.</p><ul><li>One</li><li>Two</li></ul><script>evil()</script><!-- hidden --><img src=\"https://tracker.invalid/pixel.gif\"></body></html>";
     const char *with_attachment="Content-Type: multipart/mixed; boundary=mix\r\n\r\n--mix\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nHallo\r\n--mix\r\nContent-Type: application/pdf; name=\"rechnung.pdf\"\r\nContent-Disposition: attachment; filename=\"rechnung.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nQUJD\r\n--mix--\r\n";
     AmgBuffer output,name,data;AmgError error;size_t attachment_count=0;amg_buffer_init(&output);CHECK(amg_mime_extract_text(message,strlen(message),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Hallo Welt")!=NULL);amg_buffer_free(&output);
+    amg_buffer_init(&output);CHECK(amg_mime_extract_text(html_first,strlen(html_first),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Plain version")!=NULL);CHECK(strstr((char*)output.data,"HTML version")==NULL);amg_buffer_free(&output);
+    amg_buffer_init(&output);CHECK(amg_mime_extract_text(html_only,strlen(html_only),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Hello")!=NULL);CHECK(strstr((char*)output.data,"our site <https://example.com/?a=1&b=2>")!=NULL);CHECK(strstr((char*)output.data,"- One")!=NULL);CHECK(strstr((char*)output.data,"- Two")!=NULL);CHECK(strstr((char*)output.data,"evil")==NULL);CHECK(strstr((char*)output.data,"tracker.invalid")==NULL);amg_buffer_free(&output);
     amg_buffer_init(&output);CHECK(amg_mime_attachment_summary(with_attachment,strlen(with_attachment),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"rechnung.pdf")!=NULL);CHECK(strstr(text(&output),"application/pdf")!=NULL);amg_buffer_free(&output);
     CHECK(amg_mime_attachment_count(with_attachment,strlen(with_attachment),&attachment_count,&error)==AMG_OK);CHECK(attachment_count==1U);
     amg_buffer_init(&name);amg_buffer_init(&data);CHECK(amg_mime_extract_attachment(with_attachment,strlen(with_attachment),0U,&name,&data,&error)==AMG_OK);CHECK(!strcmp(text(&name),"rechnung.pdf"));CHECK(data.length==3U&&!memcmp(data.data,"ABC",3U));amg_buffer_free(&name);amg_buffer_free(&data);
-    amg_buffer_init(&output);CHECK(amg_html_to_text("<p>A &amp; B</p><script>evil()</script><br>C",47U,&output)==AMG_OK);CHECK(strstr(text(&output),"evil")==NULL);CHECK(strstr((char*)output.data,"A & B")!=NULL);amg_buffer_free(&output);
+    amg_buffer_init(&output);CHECK(amg_html_to_text("<p>A &amp; B</p><script>evil()</script><br>C",strlen("<p>A &amp; B</p><script>evil()</script><br>C"),&output)==AMG_OK);CHECK(strstr(text(&output),"evil")==NULL);CHECK(strstr((char*)output.data,"A & B")!=NULL);amg_buffer_free(&output);
+    amg_buffer_init(&output);CHECK(amg_html_to_text("<p>Mit freundlichen Gr&uuml;&szlig;en &Auml;&Ouml;&Uuml;</p>",strlen("<p>Mit freundlichen Gr&uuml;&szlig;en &Auml;&Ouml;&Uuml;</p>"),&output)==AMG_OK);CHECK(strstr(text(&output),"Mit freundlichen Gr\xC3\xBC\xC3\x9F" "en")!=NULL);CHECK(strstr(text(&output),"\xC3\x84\xC3\x96\xC3\x9C")!=NULL);CHECK(strstr(text(&output),"&uuml;")==NULL);amg_buffer_free(&output);
+    amg_buffer_init(&output);CHECK(amg_html_to_text("Hallo &lt;span class=&quot;x&quot;&gt;Welt&lt;/span&gt;!",strlen("Hallo &lt;span class=&quot;x&quot;&gt;Welt&lt;/span&gt;!"),&output)==AMG_OK);CHECK(strstr(text(&output),"<span")==NULL);CHECK(strstr(text(&output),"</span>")==NULL);CHECK(strstr(text(&output),"Hallo Welt!")!=NULL);amg_buffer_free(&output);
+    { const char *broken_plain="Content-Type: text/plain; charset=UTF-8\r\n\r\n<div>Hallo <span>Welt</span></div><p>Mit freundlichen Gr&uuml;&szlig;en</p>"; amg_buffer_init(&output);CHECK(amg_mime_extract_text(broken_plain,strlen(broken_plain),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"<div>")==NULL);CHECK(strstr(text(&output),"<span>")==NULL);CHECK(strstr(text(&output),"&uuml;")==NULL);CHECK(strstr(text(&output),"Hallo Welt")!=NULL);CHECK(strstr(text(&output),"Gr\xC3\xBC\xC3\x9F" "en")!=NULL);amg_buffer_free(&output); }
+    { const char *entity_plain="Content-Type: text/plain; charset=UTF-8\r\n\r\nMit freundlichen Gr&uuml;&szlig;en"; amg_buffer_init(&output);CHECK(amg_mime_extract_text(entity_plain,strlen(entity_plain),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"&uuml;")==NULL);CHECK(strstr(text(&output),"Gr\xC3\xBC\xC3\x9F" "en")!=NULL);amg_buffer_free(&output); }
+    {
+        const char *css_polluted_alternative =
+            "Content-Type: multipart/alternative; boundary=altcss\r\n\r\n"
+            "--altcss\r\n"
+            "Content-Type: text/plain; charset=UTF-8\r\n"
+            "Content-Transfer-Encoding: 8bit\r\n\r\n"
+            "#outlook a { padding:0; }\r\n"
+            "body { margin:0;padding:0;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%; }\r\n"
+            "table, td { border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt; }\r\n"
+            "@media only screen and (min-width:480px) { .mj-column-per-100 { width:100% !important; } }\r\n"
+            "Neuer Befund bei BefundPost.at\r\n"
+            "--altcss\r\n"
+            "Content-Type: multipart/related; boundary=relcss; type=\"text/html\"\r\n\r\n"
+            "--relcss\r\n"
+            "Content-Type: text/html; charset=UTF-8\r\n"
+            "Content-Transfer-Encoding: 8bit\r\n\r\n"
+            "<!doctype html><html><head><style>#outlook a{padding:0} body{margin:0}</style></head>"
+            "<body><h1>Neuer Befund bei BefundPost.at</h1>"
+            "<p>Sehr geehrte(r) Patient(in),</p>"
+            "<p>Ein neuer Befund steht unter <a href=\"https://ihrlabor.befundpost.at\">BefundPost</a> zur Verfügung.</p>"
+            "<div>Mit freundlichen Grüßen,<br>IHR Labor</div></body></html>\r\n"
+            "--relcss--\r\n"
+            "--altcss--\r\n";
+        amg_buffer_init(&output);
+        CHECK(amg_mime_extract_text(css_polluted_alternative,
+                                    strlen(css_polluted_alternative),
+                                    &output,&error)==AMG_OK);
+        CHECK(strstr(text(&output),"#outlook")==NULL);
+        CHECK(strstr(text(&output),"@media")==NULL);
+        CHECK(strstr(text(&output),"-webkit-text-size-adjust")==NULL);
+        CHECK(strstr(text(&output),"Neuer Befund bei BefundPost.at")!=NULL);
+        CHECK(strstr(text(&output),"BefundPost <https://ihrlabor.befundpost.at>")!=NULL);
+        CHECK(strstr(text(&output),"Mit freundlichen Grüße")!=NULL);
+        amg_buffer_free(&output);
+    }
+    {
+        const char *standalone_css_plain =
+            "Content-Type: text/plain; charset=UTF-8\r\n\r\n"
+            "#outlook a { padding:0; }\r\n"
+            "body { margin:0; }\r\n"
+            "@media only screen and (min-width:480px) { test }\r\n";
+        amg_buffer_init(&output);
+        CHECK(amg_mime_extract_text(standalone_css_plain,
+                                    strlen(standalone_css_plain),
+                                    &output,&error)==AMG_OK);
+        CHECK(strstr(text(&output),"#outlook a")!=NULL);
+        CHECK(strstr(text(&output),"@media")!=NULL);
+        amg_buffer_free(&output);
+    }
 }
 
 
@@ -548,7 +605,7 @@ static void test_sha256(void)
 static void test_account(void)
 {
     AmgAccount account;AmgError error;amg_account_init(&account);strcpy(account.email,"user@example.com");strcpy(account.imap_host,"imap.example.com");strcpy(account.smtp_host,"smtp.example.com");strcpy(account.imap_username,"imap-user");strcpy(account.smtp_username,"smtp-user");amg_account_set_secret(&account.imap_password,"short");
-    CHECK(amg_account_validate(&account,&error)==AMG_OK);CHECK(!strcmp(amg_account_imap_user(&account),"imap-user"));CHECK(!strcmp(amg_account_smtp_user(&account),"smtp-user"));CHECK(!strcmp(amg_account_smtp_password(&account),"short"));CHECK(amg_account_should_append_sent(&account)==1);account.save_sent_copy=0;CHECK(amg_account_should_append_sent(&account)==0);amg_account_set_secret(&account.imap_password,"");CHECK(amg_account_validate(&account,&error)==AMG_ERR_AUTH);amg_account_clear(&account);
+    CHECK(amg_account_validate(&account,&error)==AMG_OK);CHECK(!strcmp(amg_account_imap_user(&account),"imap-user"));CHECK(!strcmp(amg_account_smtp_user(&account),"imap-user"));CHECK(!strcmp(amg_account_smtp_password(&account),"short"));account.smtp_same_credentials=0;CHECK(!strcmp(amg_account_smtp_user(&account),"smtp-user"));CHECK(!strcmp(amg_account_smtp_password(&account),"short"));CHECK(amg_account_should_append_sent(&account)==1);account.save_sent_copy=0;CHECK(amg_account_should_append_sent(&account)==0);amg_account_set_secret(&account.imap_password,"");CHECK(amg_account_validate(&account,&error)==AMG_ERR_AUTH);amg_account_clear(&account);
 
     amg_account_init(&account);strcpy(account.email,"user@gmail.com");strcpy(account.imap_host,"imap.gmail.com");strcpy(account.smtp_host,"smtp.gmail.com");amg_account_set_secret(&account.imap_password,"abcdefghijklmnop");
     account.imap_port=143;account.imap_starttls=1;account.smtp_port=587;account.smtp_starttls=1;
@@ -669,8 +726,8 @@ static void test_update(void)
     CHECK(!amg_update_is_newer("v1.0-RC1", "1.0 RC1"));
     CHECK(!amg_update_is_newer("v1.0-RC1", "1.0"));
     CHECK(!amg_update_is_newer("v1.0-RC2", AMIMAIL_VERSION));
-    CHECK(amg_update_is_newer("v1.0-RC3", AMIMAIL_VERSION));
-    CHECK(amg_update_is_newer("v1.0", AMIMAIL_VERSION));
+    CHECK(!amg_update_is_newer("v1.0-RC3", AMIMAIL_VERSION));
+    CHECK(!amg_update_is_newer("v1.0", AMIMAIL_VERSION));
     CHECK(!amg_update_is_newer("v1.0-RC1", AMIMAIL_VERSION));
 
     memset(&info, 0, sizeof(info));

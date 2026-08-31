@@ -417,7 +417,7 @@ MSG_FOLDER (1822558669//)
 folder
 
 MSG_FORWARD (1550120807//)
-_Forward
+Forward
 
 MSG_FORWARDED_MESSAGE (596283605//)
 ---------- Forwarded message ----------\n
@@ -941,6 +941,9 @@ Really empty Spam?
 MSG_REALLY_EMPTY_TRASH (1058836236//)
 Really empty Trash?
 
+MSG_RECIPIENT (1794472426//)
+Recipient
+
 MSG_RECIPIENT_LIST_IS_TOO_LONG (1799484819//)
 Recipient list is too long.
 
@@ -957,10 +960,10 @@ MSG_REMOVING_STAR (1673414640//)
 Removing star...
 
 MSG_REPLY (911279480//)
-_Reply
+Reply
 
 MSG_REPLY_ALL (709873471//)
-Reply _All
+Reply All
 
 MSG_REPLY_COULD_NOT_BE_PREPARED (161089833//)
 Reply could not be prepared.

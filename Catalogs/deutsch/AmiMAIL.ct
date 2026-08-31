@@ -434,7 +434,7 @@ MSG_FOLDER
 Ordner
 
 MSG_FORWARD
-_Weiterleiten
+Weiterleiten
 
 MSG_FORWARDED_MESSAGE
 ---------- Weitergeleitete Nachricht ----------\n
@@ -992,6 +992,9 @@ Spam wirklich leeren?
 MSG_REALLY_EMPTY_TRASH
 Papierkorb wirklich leeren?
 
+MSG_RECIPIENT
+Empf\344nger
+
 MSG_RECIPIENT_LIST_IS_TOO_LONG
 Empf\344ngerliste ist zu lang.
 
@@ -1008,10 +1011,10 @@ MSG_REMOVING_STAR
 Sternmarkierung wird entfernt...
 
 MSG_REPLY
-A_ntworten
+Ant_worten
 
 MSG_REPLY_ALL
-Allen _Antworten
+Allen Antworten
 
 MSG_REPLY_COULD_NOT_BE_PREPARED
 Antwort konnte nicht vorbereitet werden.

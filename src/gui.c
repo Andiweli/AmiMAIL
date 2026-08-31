@@ -17,6 +17,7 @@
 #include <classes/window.h>
 #include <dos/dos.h>
 #include <devices/timer.h>
+#include <devices/inputevent.h>
 #include <datatypes/datatypes.h>
 #include <exec/io.h>
 #include <exec/libraries.h>
@@ -31,7 +32,9 @@
 #include <graphics/gfxbase.h>
 #include <graphics/view.h>
 #include <intuition/classes.h>
+#include <intuition/classusr.h>
 #include <intuition/intuition.h>
+#include <intuition/icclass.h>
 #include <libraries/asl.h>
 #include <libraries/gadtools.h>
 #include <proto/asl.h>
@@ -74,9 +77,64 @@ struct GfxBase *GfxBase=NULL;
 #define GUI_RAWKEY_KEYPAD_ENTER 0x43UL
 #define GUI_RAWKEY_RETURN 0x44UL
 #define GUI_RAWKEY_ESCAPE 0x45UL
+#define GUI_RAWKEY_A 0x20UL
+#define GUI_RAWKEY_W 0x11UL
+#define GUI_RAWKEY_DELETE 0x46UL
+#define GUI_RAWKEY_HELP 0x5FUL
 int rawkey_is_accept(ULONG result){ULONG key=result&WMHI_KEYMASK;return key==GUI_RAWKEY_KEYPAD_ENTER||key==GUI_RAWKEY_RETURN;}
 int rawkey_is_cancel(ULONG result){return (result&WMHI_KEYMASK)==GUI_RAWKEY_ESCAPE;}
- Object *static_text_label(const char *text)
+
+int rawkey_is_rcommand_letter(Object *window_object, ULONG result, char letter)
+{
+    ULONG input_event_value = 0UL;
+    struct InputEvent *input_event;
+    ULONG raw_key;
+
+    if (!window_object || (result & WMHI_CLASSMASK) != WMHI_RAWKEY)
+        return 0;
+
+    switch (letter) {
+        case 'A': case 'a': raw_key = GUI_RAWKEY_A; break;
+        case 'W': case 'w': raw_key = GUI_RAWKEY_W; break;
+        default: return 0;
+    }
+    if ((result & WMHI_KEYMASK) != raw_key)
+        return 0;
+
+    GetAttr(WINDOW_InputEvent, window_object, &input_event_value);
+    input_event = (struct InputEvent *)(uintptr_t)input_event_value;
+    return input_event &&
+           (input_event->ie_Qualifier & IEQUALIFIER_RCOMMAND) != 0;
+}
+
+int rawkey_is_delete(ULONG result)
+{
+    return (result & WMHI_CLASSMASK) == WMHI_RAWKEY &&
+           (result & WMHI_KEYMASK) == GUI_RAWKEY_DELETE;
+}
+
+int rawkey_is_help(ULONG result)
+{
+    return (result & WMHI_CLASSMASK) == WMHI_RAWKEY &&
+           (result & WMHI_KEYMASK) == GUI_RAWKEY_HELP;
+}
+
+int input_event_has_multiselect_qualifier(Object *window_object)
+{
+    ULONG input_event_value = 0UL;
+    struct InputEvent *input_event;
+    UWORD qualifiers;
+
+    if (!window_object) return 0;
+    GetAttr(WINDOW_InputEvent, window_object, &input_event_value);
+    input_event = (struct InputEvent *)(uintptr_t)input_event_value;
+    if (!input_event) return 0;
+
+    qualifiers = input_event->ie_Qualifier;
+    return (qualifiers & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT |
+                          IEQUALIFIER_CONTROL)) != 0;
+}
+Object *static_text_label(const char *text)
 {
     return NewObject(NULL, (CONST_STRPTR)"button.gadget",
                      GA_ReadOnly, TRUE,
@@ -308,6 +366,98 @@ void set_string(struct Gadget *gadget, struct Window *window,
         TAG_DONE);
 }
 
+
+/* texteditor.gadget exposes GA_TEXTEDITOR_Prop_First/Entries/Visible
+ * specifically for connecting a scrollbar. Use BOOPSI modelclass/icclass
+ * notifications so the editor and ReAction scroller stay synchronized
+ * while the user scrolls, rather than only after GADGETUP. */
+static struct TagItem texteditor_to_scroller_map[] = {
+    { GA_TEXTEDITOR_Prop_First, SCROLLER_Top },
+    { GA_TEXTEDITOR_Prop_Entries, SCROLLER_Total },
+    { GA_TEXTEDITOR_Prop_Visible, SCROLLER_Visible },
+    { TAG_DONE, 0 }
+};
+
+static struct TagItem scroller_to_texteditor_map[] = {
+    { SCROLLER_Top, GA_TEXTEDITOR_Prop_First },
+    { TAG_DONE, 0 }
+};
+
+void disconnect_texteditor_scroller(struct Gadget *editor,
+                                    struct Gadget *scroller,
+                                    TextEditorScrollLink *link)
+{
+    if (!link) return;
+
+    if (editor)
+        SetAttrs((Object *)editor, ICA_TARGET, 0UL, TAG_DONE);
+    if (scroller)
+        SetAttrs((Object *)scroller, ICA_TARGET, 0UL, TAG_DONE);
+
+    if (link->model && link->editor_to_scroller)
+        (void)DoMethod(link->model, OM_REMMEMBER,
+                       link->editor_to_scroller);
+    if (link->model && link->scroller_to_editor)
+        (void)DoMethod(link->model, OM_REMMEMBER,
+                       link->scroller_to_editor);
+
+    if (link->editor_to_scroller)
+        DisposeObject(link->editor_to_scroller);
+    if (link->scroller_to_editor)
+        DisposeObject(link->scroller_to_editor);
+    if (link->model)
+        DisposeObject(link->model);
+
+    memset(link, 0, sizeof(*link));
+}
+
+int connect_texteditor_scroller(struct Gadget *editor,
+                                struct Gadget *scroller,
+                                TextEditorScrollLink *link)
+{
+    Object *model;
+    Object *editor_to_scroller;
+    Object *scroller_to_editor;
+
+    if (!editor || !scroller || !link) return 0;
+    memset(link, 0, sizeof(*link));
+
+    model = NewObject(NULL, (CONST_STRPTR)MODELCLASS, TAG_DONE);
+    if (!model) return 0;
+
+    editor_to_scroller = NewObject(
+        NULL, (CONST_STRPTR)ICCLASS,
+        ICA_TARGET, (ULONG)(uintptr_t)scroller,
+        ICA_MAP, (ULONG)(uintptr_t)texteditor_to_scroller_map,
+        TAG_DONE);
+    scroller_to_editor = NewObject(
+        NULL, (CONST_STRPTR)ICCLASS,
+        ICA_TARGET, (ULONG)(uintptr_t)editor,
+        ICA_MAP, (ULONG)(uintptr_t)scroller_to_texteditor_map,
+        TAG_DONE);
+    if (!editor_to_scroller || !scroller_to_editor) {
+        if (editor_to_scroller) DisposeObject(editor_to_scroller);
+        if (scroller_to_editor) DisposeObject(scroller_to_editor);
+        DisposeObject(model);
+        return 0;
+    }
+
+    (void)DoMethod(model, OM_ADDMEMBER, editor_to_scroller);
+    (void)DoMethod(model, OM_ADDMEMBER, scroller_to_editor);
+
+    SetAttrs((Object *)editor,
+             ICA_TARGET, (ULONG)(uintptr_t)model,
+             TAG_DONE);
+    SetAttrs((Object *)scroller,
+             ICA_TARGET, (ULONG)(uintptr_t)model,
+             TAG_DONE);
+
+    link->model = model;
+    link->editor_to_scroller = editor_to_scroller;
+    link->scroller_to_editor = scroller_to_editor;
+    return 1;
+}
+
 static ULONG estimate_listbrowser_visible_nodes(struct Window *window,
                                                 struct Gadget *listbrowser)
 {
@@ -385,6 +535,12 @@ static ULONG estimate_listbrowser_visible_nodes(struct Window *window,
     RefreshGList(listbrowser, window, NULL, 1);
     sync_listbrowser_scroller(window, listbrowser, scroller);
 }
+
+/* Label-Scrollbar: Der hierarchische Ordnerbaum benutzt weiterhin einen
+ * externen Scroller. Die genaue Uebersetzung zwischen LISTBROWSER_Top (Position
+ * in der angehaengten Node-Liste) und der sichtbaren Zeilenposition erfolgt in
+ * gui_folders.c. Das ist wichtig, weil eingeklappte Kinder in der Node-Liste
+ * verbleiben und beide Koordinaten danach nicht mehr identisch sind. */
 
 static ULONG estimate_texteditor_visible_lines(struct Window *window,
                                                struct Gadget *editor)
@@ -502,6 +658,9 @@ void amg_gui_destroy(AmgGui *gui)
     gui_notify_cleanup(gui);
     free(gui->current_message_payload);
     gui->current_message_payload = NULL;
+    disconnect_texteditor_scroller(gui->preview_gadget,
+                                   gui->preview_scroller,
+                                   &gui->preview_scroll_link);
     if (gui->window_object) DisposeObject(gui->window_object);
     gui->window_object = NULL;
     if (gui->icon_iconified) FreeDiskObject(gui->icon_iconified);

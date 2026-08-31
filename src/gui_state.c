@@ -73,10 +73,13 @@ void gui_state_prepare_window(AmgGui *gui)
     FILE *file;
     char header[64];
     long left, top, inner_width, inner_height, outer_width, outer_height;
+    char line[96];
+    long split_percent = 50L;
     LONG screen_width, screen_height;
     LONG max_left, max_top;
     if (!gui || !gui->screen) return;
     gui->window_state_valid = 0;
+    gui->saved_split_percent = 50U;
     file = fopen(WINDOW_STATE_PATH, "rb");
     if (!file) return;
     if (!fgets(header, sizeof(header), file) ||
@@ -90,7 +93,22 @@ void gui_state_prepare_window(AmgGui *gui)
         fclose(file);
         return;
     }
+
+    /* The split is an optional extension of WINDOW-2, so old state files
+     * stay compatible.  Accept split_ratio from the abandoned experiments
+     * as input only, then clamp it back into the safe native range. */
+    while (fgets(line, sizeof(line), file)) {
+        long value;
+        if (sscanf(line, "split_percent=%ld", &value) == 1) {
+            split_percent = value;
+        } else if (sscanf(line, "split_ratio=%ld", &value) == 1) {
+            split_percent = (value + 50L) / 100L;
+        }
+    }
     fclose(file);
+    if (split_percent < 34L) split_percent = 34L;
+    if (split_percent > 66L) split_percent = 66L;
+    gui->saved_split_percent = (ULONG)split_percent;
 
     screen_width = (LONG)gui->screen->Width;
     screen_height = (LONG)gui->screen->Height;
@@ -133,14 +151,15 @@ void gui_state_save_window(const AmgGui *gui)
         if (inner_height < 1L) inner_height = 1L;
         if (fprintf(file,
                     "%s\nleft=%ld\ntop=%ld\ninner_width=%ld\ninner_height=%ld\n"
-                    "outer_width=%ld\nouter_height=%ld\n",
+                    "outer_width=%ld\nouter_height=%ld\nsplit_percent=%lu\n",
                     WINDOW_STATE_HEADER,
                     (long)gui->window->LeftEdge,
                     (long)gui->window->TopEdge,
                     (long)inner_width,
                     (long)inner_height,
                     (long)gui->window->Width,
-                    (long)gui->window->Height) < 0)
+                    (long)gui->window->Height,
+                    (unsigned long)gui_mail_split_current_percent(gui)) < 0)
             write_failed = 1;
     }
     if (fclose(file) != 0) write_failed = 1;

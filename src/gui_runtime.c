@@ -138,8 +138,130 @@ int gui_uniconify(AmgGui *gui)
     if (!window) return 0;
     gui->window = window;
     gui->iconified = 0;
+    gui_mail_split_update_limits(gui, 0);
     draw_window_overlays(gui);
     return 1;
+}
+
+
+ULONG gui_runtime_signal_mask(AmgGui *gui)
+{
+    ULONG window_signal = 0UL;
+    if (!gui) return 0UL;
+    if (gui->window_object)
+        GetAttr(WINDOW_SigMask, gui->window_object, &window_signal);
+    return window_signal |
+           app_port_signal_mask(gui) |
+           amg_network_signal_mask(gui->network) |
+           periodic_timer_signal_mask(gui) |
+           gui->preview_url_signal_mask |
+           gui_notify_signal_mask(gui);
+}
+
+void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
+                                 AmgError *error)
+{
+    ULONG window_signal = 0UL;
+    ULONG app_signal;
+    ULONG network_signal;
+    ULONG timer_signal;
+    ULONG notify_signal;
+
+    if (!gui) return;
+    app_signal = app_port_signal_mask(gui);
+    network_signal = amg_network_signal_mask(gui->network);
+    timer_signal = periodic_timer_signal_mask(gui);
+    notify_signal = gui_notify_signal_mask(gui);
+    if (gui->window_object)
+        GetAttr(WINDOW_SigMask, gui->window_object, &window_signal);
+
+    /* A completed sound is handled before network events.  Otherwise an old
+     * completion signal could dispose a newly-started notification object. */
+    if (notify_signal && (signals & notify_signal))
+        gui_notify_handle_signal(gui);
+
+    if (network_signal && (signals & network_signal)) {
+        handle_network(gui);
+        draw_window_overlays(gui);
+    }
+
+    if (timer_signal && (signals & timer_signal)) {
+        if (gui->periodic_timer_pending &&
+            CheckIO((struct IORequest *)gui->periodic_timer_request)) {
+            WaitIO((struct IORequest *)gui->periodic_timer_request);
+            gui->periodic_timer_pending = 0;
+            periodic_timer_clear_signal(gui);
+            periodic_timer_arm(gui);
+            periodic_fetch_mail(gui, error);
+        } else {
+            periodic_timer_clear_signal(gui);
+        }
+    }
+
+    if ((window_signal && (signals & window_signal)) ||
+        (app_signal && (signals & app_signal))) {
+        ULONG result;
+        int redraw_overlays = 0;
+        UWORD code = 0U;
+
+        while ((result = RA_HandleInput(gui->window_object, &code)) !=
+               WMHI_LASTMSG) {
+            /* window.class handles IDCMP_REFRESHWINDOW itself.  WMHI_IGNORE
+             * can also represent unrelated ignored input and must not cause
+             * an application-level redraw. */
+            if (result == (ULONG)WMHI_IGNORE)
+                continue;
+
+            switch (result & WMHI_CLASSMASK) {
+                case WMHI_CLOSEWINDOW:
+                    gui->running = 0;
+                    break;
+                case WMHI_ICONIFY:
+                    gui_iconify(gui);
+                    break;
+                case WMHI_UNICONIFY:
+                    (void)gui_uniconify(gui);
+                    break;
+                case WMHI_GADGETUP:
+                    handle_main_gadget(gui, result & WMHI_GADGETMASK, error);
+                    break;
+                case WMHI_NEWSIZE:
+                    /* ReAction has updated the ListBrowser domain at this
+                     * point. Refresh once, then recalculate the external
+                     * hierarchical folder scroller for the new height. */
+                    if (gui->window && gui->labels_gadget)
+                        RefreshGList(gui->labels_gadget, gui->window, NULL, 1);
+                    sync_labels_scroller(gui);
+                    gui_mail_split_update_limits(gui, 1);
+                    redraw_overlays = 1;
+                    break;
+                case WMHI_MENUPICK:
+                    handle_menu(gui, result & 0xffffUL, error);
+                    break;
+                case WMHI_RAWKEY:
+                    if (rawkey_is_rcommand_letter(
+                            gui->window_object, result, 'A')) {
+                        handle_main_gadget(gui, GID_FETCH, error);
+                    } else if (rawkey_is_rcommand_letter(
+                                   gui->window_object, result, 'W')) {
+                        handle_main_shortcut(gui, 'W', error);
+                    } else if (rawkey_is_delete(result)) {
+                        handle_main_gadget(gui, GID_DELETE, error);
+                    } else if (rawkey_is_help(result)) {
+                        about_dialog(gui);
+                    } else if (gui->move_pending && rawkey_is_cancel(result)) {
+                        cancel_pending_move(gui);
+                    }
+                    break;
+            }
+        }
+
+        if (redraw_overlays && gui->window)
+            draw_window_overlays(gui);
+    }
+
+    if (gui->pending_preview_url_ready)
+        open_pending_preview_url(gui);
 }
 
 int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
@@ -154,6 +276,7 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
         return AMG_ERR_IO;
     }
     gui->iconified = 0;
+    gui_mail_split_update_limits(gui, 0);
     draw_window_overlays(gui);
     mailto_signal = amg_mailto_server_signal_mask(mailto_server);
     gui->running = 1;
@@ -205,94 +328,20 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
             T(MSG_MAILTO_LINK_CANCELLED_MAIL_ACCOUNT_IS_LOCKED, "mailto: link cancelled: mail account is locked."));
 
     while (gui->running) {
-        ULONG window_signal = 0UL;
-        ULONG app_signal = app_port_signal_mask(gui);
-        ULONG network_signal = amg_network_signal_mask(gui->network);
-        ULONG timer_signal = periodic_timer_signal_mask(gui);
-        ULONG notify_signal = gui_notify_signal_mask(gui);
-        ULONG signals;
+        ULONG runtime_signal = gui_runtime_signal_mask(gui);
+        ULONG signals = Wait(runtime_signal | mailto_signal |
+                             SIGBREAKF_CTRL_C);
 
-        GetAttr(WINDOW_SigMask, gui->window_object, &window_signal);
-        signals = Wait(window_signal | app_signal | network_signal |
-                       timer_signal | mailto_signal |
-                       gui->preview_url_signal_mask | notify_signal |
-                       SIGBREAKF_CTRL_C);
-        if (signals & SIGBREAKF_CTRL_C) gui->running = 0;
+        if (signals & SIGBREAKF_CTRL_C)
+            gui->running = 0;
 
-        /* Handle a completed notification sound before network events.
-         * A sound preview from the modal configuration window can leave its
-         * completion bit in the Wait() result.  If a new-mail network event
-         * starts a fresh sound first, processing that old completion bit
-         * afterwards would immediately dispose the newly started object and
-         * make the first notification appear silent. */
-        if (notify_signal && (signals & notify_signal))
-            gui_notify_handle_signal(gui);
+        if (runtime_signal && (signals & runtime_signal))
+            gui_runtime_process_signals(gui, signals & runtime_signal, error);
 
-        if (network_signal && (signals & network_signal)) {
-            handle_network(gui);
-            draw_window_overlays(gui);
-        }
         if (mailto_signal && (signals & mailto_signal)) {
             handle_mailto_requests(gui, mailto_server, error);
             draw_window_overlays(gui);
         }
-        if (timer_signal && (signals & timer_signal)) {
-            if (gui->periodic_timer_pending &&
-                CheckIO((struct IORequest *)gui->periodic_timer_request)) {
-                WaitIO((struct IORequest *)gui->periodic_timer_request);
-                gui->periodic_timer_pending = 0;
-                periodic_timer_clear_signal(gui);
-                periodic_timer_arm(gui);
-                periodic_fetch_mail(gui, error);
-            } else {
-                periodic_timer_clear_signal(gui);
-            }
-        }
-        if ((window_signal && (signals & window_signal)) ||
-            (app_signal && (signals & app_signal))) {
-            ULONG result;
-            int redraw_overlays = 0;
-            UWORD code = 0U;
-            while ((result = RA_HandleInput(gui->window_object, &code)) !=
-                   WMHI_LASTMSG) {
-                /* IDCMP_REFRESHWINDOW is handled by window.class itself.
-                 * The WINDOW_PostRefreshHook restores our direct RastPort
-                 * artwork after ReAction has redrawn its gadgets.  WMHI_IGNORE
-                 * can also represent unrelated ignored input, so it must not
-                 * trigger a full overlay redraw here. */
-                if (result == (ULONG)WMHI_IGNORE)
-                    continue;
-                switch (result & WMHI_CLASSMASK) {
-                    case WMHI_CLOSEWINDOW:
-                        gui->running = 0;
-                        break;
-                    case WMHI_ICONIFY:
-                        gui_iconify(gui);
-                        break;
-                    case WMHI_UNICONIFY:
-                        (void)gui_uniconify(gui);
-                        break;
-                    case WMHI_GADGETUP:
-                        handle_main_gadget(gui, result & WMHI_GADGETMASK,
-                                           error);
-                        break;
-                    case WMHI_NEWSIZE:
-                        redraw_overlays = 1;
-                        break;
-                    case WMHI_MENUPICK:
-                        handle_menu(gui, result & 0xffffUL, error);
-                        break;
-                    case WMHI_RAWKEY:
-                        if (gui->move_pending && rawkey_is_cancel(result))
-                            cancel_pending_move(gui);
-                        break;
-                }
-            }
-            if (redraw_overlays && gui->window)
-                draw_window_overlays(gui);
-        }
-        if (gui->pending_preview_url_ready)
-            open_pending_preview_url(gui);
     }
 
     if (gui->preview_url_signal_bit >= 0) {

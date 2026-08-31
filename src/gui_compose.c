@@ -72,6 +72,63 @@ enum ComposeGadgetId {
     GID_COMPOSE_CANCEL
 };
 
+
+static int build_from_header(const AmgAccount *account,
+                             char *destination, size_t capacity,
+                             AmgError *error)
+{
+    char name_utf8[256];
+    AmgBuffer encoded;
+    int result;
+    int length;
+
+    if (!account || !destination || capacity == 0U)
+        return AMG_ERR_ARGUMENT;
+
+    if (!account->display_name[0]) {
+        length = snprintf(destination, capacity, "%s", account->email);
+        if (length < 0 || (size_t)length >= capacity) {
+            amg_error_set(error, AMG_ERR_LIMIT,
+                          T(MSG_A_HEADER_LINE_IS_TOO_LONG,
+                            "A header line is too long."));
+            return AMG_ERR_LIMIT;
+        }
+        return AMG_OK;
+    }
+
+    result = local_to_utf8(account->display_name, name_utf8,
+                           sizeof(name_utf8));
+    if (result != AMG_OK) {
+        amg_error_set(error, AMG_ERR_LIMIT,
+                      T(MSG_A_HEADER_LINE_IS_TOO_LONG,
+                        "A header line is too long."));
+        return result;
+    }
+
+    amg_buffer_init(&encoded);
+    result = amg_base64_encode((const unsigned char *)name_utf8,
+                               strlen(name_utf8), &encoded);
+    if (result == AMG_OK)
+        result = amg_buffer_terminate(&encoded);
+    if (result != AMG_OK) {
+        amg_buffer_free(&encoded);
+        amg_error_set(error, result,
+                      T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+        return result;
+    }
+
+    length = snprintf(destination, capacity, "=?UTF-8?B?%s?= <%s>",
+                      (const char *)encoded.data, account->email);
+    amg_buffer_free(&encoded);
+    if (length < 0 || (size_t)length >= capacity) {
+        amg_error_set(error, AMG_ERR_LIMIT,
+                      T(MSG_A_HEADER_LINE_IS_TOO_LONG,
+                        "A header line is too long."));
+        return AMG_ERR_LIMIT;
+    }
+    return AMG_OK;
+}
+
 static void append_local_limited(char *destination, size_t capacity,
                                  const char *source)
 {
@@ -1016,6 +1073,7 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
 {
     char to_utf8[1536], cc_utf8[1536], bcc_utf8[1536];
     char subject_utf8[1024];
+    char from_header[768];
     char date[96], message_id[256];
     AmgBuffer body_utf8;
     AmgAttachmentInput inputs[AMG_MAIL_MAX_ATTACHMENTS];
@@ -1041,6 +1099,10 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
         amg_error_set(error, AMG_ERR_LIMIT, T(MSG_A_HEADER_LINE_IS_TOO_LONG, "A header line is too long."));
         return AMG_ERR_LIMIT;
     }
+    if (build_from_header(gui->account, from_header, sizeof(from_header),
+                          error) != AMG_OK)
+        return error ? error->code : AMG_ERR_LIMIT;
+
     body_local = (STRPTR)(uintptr_t)DoGadgetMethod(
         body_gadget, window, NULL, GM_TEXTEDITOR_ExportText, 0UL);
     if (!body_local) {
@@ -1086,7 +1148,7 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
         strncpy(message_id, seed->message_id_utf8, sizeof(message_id) - 1U);
         message_id[sizeof(message_id) - 1U] = 0;
     }
-    draft.from = gui->account->email;
+    draft.from = from_header;
     draft.to = to_utf8;
     draft.cc = cc_utf8;
     draft.bcc = bcc_utf8;
@@ -1151,6 +1213,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     struct Window *window;
     struct Gadget *to_gadget, *cc_gadget, *bcc_gadget, *subject_gadget;
     struct Gadget *body_gadget, *body_scroller;
+    TextEditorScrollLink body_scroll_link;
     struct Gadget *attachments_gadget, *attachments_scroller;
     struct Gadget *compose_status;
     struct List attachment_list;
@@ -1168,6 +1231,15 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     int edit_draft = mode == COMPOSE_MODE_EDIT_DRAFT;
     int forward_mode = mode == COMPOSE_MODE_FORWARD;
     int done = 0, submitted = 0, sent_queued = 0;
+
+    memset(&body_scroll_link, 0, sizeof(body_scroll_link));
+    if (gui->compose_open) {
+        if (gui->compose_window) {
+            WindowToFront(gui->compose_window);
+            ActivateWindow(gui->compose_window);
+        }
+        return 0;
+    }
 
     memset(attachments, 0, sizeof(attachments));
     if (reply_mode) {
@@ -1448,7 +1520,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                         LAYOUT_AddChild, ButtonObject,
                             GA_ID, GID_COMPOSE_ADD_ATTACHMENT,
                             GA_RelVerify, TRUE,
-                            GA_Text, T(MSG_ATTACHMENT, "_Attachment..."),
+                            GA_Text, T(MSG_ATTACHMENT, "Attach_ment..."),
                         EndObject,
                         LAYOUT_AddChild, ButtonObject,
                             GA_ID, GID_COMPOSE_REMOVE_ATTACHMENT,
@@ -1493,8 +1565,21 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         free(initial_body_with_signature);
         return 0;
     }
+    if (!connect_texteditor_scroller(body_gadget, body_scroller,
+                                     &body_scroll_link)) {
+        DisposeObject(dialog);
+        amg_error_set(error, AMG_ERR_MEMORY,
+                      T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_CREATED,
+                        "New mail window could not be created."));
+        cleanup_compose_attachments(attachments, attachment_count);
+        free(initial_body_with_signature);
+        return 0;
+    }
+
     window = RA_OpenWindow(dialog);
     if (!window) {
+        disconnect_texteditor_scroller(body_gadget, body_scroller,
+                                       &body_scroll_link);
         DisposeObject(dialog);
         amg_error_set(error, AMG_ERR_IO,
                       T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_OPENED, "New mail window could not be opened."));
@@ -1502,10 +1587,11 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         free(initial_body_with_signature);
         return 0;
     }
-    /* A compose window is modal from AmiMail's point of view and must be the
-     * top/active window.  Do this explicitly instead of relying only on
-     * WFLG_ACTIVATE; this also avoids mailto startup races with the main
-     * window's Intuition requests. */
+    /* Keep the compose window independent from the main window.  Both
+     * window.class objects are serviced by the same task while compose is
+     * open, so the message list, preview and network refresh remain live. */
+    gui->compose_open = 1;
+    gui->compose_window = window;
     WindowToFront(window);
     ActivateWindow(window);
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
@@ -1520,9 +1606,17 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                               attachments_scroller);
 
     while (!done) {
-        ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
+        ULONG runtime_signal = gui_runtime_signal_mask(gui);
+        ULONG signals = Wait(signal_mask | runtime_signal |
+                             SIGBREAKF_CTRL_C);
         if (signals & SIGBREAKF_CTRL_C) done = 1;
-        if (signals & signal_mask) {
+
+        if (runtime_signal && (signals & runtime_signal)) {
+            gui_runtime_process_signals(gui, signals & runtime_signal, error);
+            if (!gui->running) done = 1;
+        }
+
+        if (!done && (signals & signal_mask)) {
             ULONG result;
             while ((result = RA_HandleInput(dialog, NULL)) != WMHI_LASTMSG) {
                 switch (result & WMHI_CLASSMASK) {
@@ -1531,7 +1625,11 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                         break;
 
                     case WMHI_RAWKEY:
-                        if (rawkey_is_cancel(result)) done = 1;
+                        if (rawkey_is_help(result)) {
+                            about_dialog(gui);
+                        } else if (rawkey_is_cancel(result)) {
+                            done = 1;
+                        }
                         break;
 
                     case WMHI_GADGETUP:
@@ -1624,6 +1722,10 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
             }
         }
     }
+    gui->compose_window = NULL;
+    gui->compose_open = 0;
+    disconnect_texteditor_scroller(body_gadget, body_scroller,
+                                   &body_scroll_link);
     DisposeObject(dialog);
     FreeListBrowserList(&attachment_list);
     if (!submitted)

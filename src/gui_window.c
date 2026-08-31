@@ -551,6 +551,98 @@ static void init_window_post_refresh_hook(AmgGui *gui)
     gui->window_post_refresh_hook.h_Data = gui;
 }
 
+/*
+ * Native ReAction split pane.
+ *
+ * The layout.gadget WeightBar owns mouse tracking, weight changes and drawing.
+ * Nothing in the application follows the mouse and no RethinkLayout() is
+ * issued while the bar is being dragged.  That is intentional: competing
+ * relayout/refresh calls from application code while layout.gadget is already
+ * processing the weight bar are what caused the earlier flicker and stale
+ * ListBrowser pixels.
+ *
+ * The only application-side operation is maintaining the documented child
+ * min/max domain after the window height changes.  Those invisible limits are
+ * then honoured by the next native WeightBar layout.
+ */
+static ULONG mail_split_clamp_percent(ULONG percent)
+{
+    /* ReAction documents weights in the 0..100 range.  Persist one-percent
+     * weights and keep restored positions just inside the exact third limits.
+     * The live pixel constraints still let the bar reach exact 1/3 and 2/3. */
+    if (percent < 34U) return 34U;
+    if (percent > 66U) return 66U;
+    return percent;
+}
+
+ULONG gui_mail_split_current_percent(const AmgGui *gui)
+{
+    const struct Gadget *top;
+    const struct Gadget *bottom;
+    ULONG top_height, bottom_height, total, percent;
+
+    if (!gui || !gui->message_list_group || !gui->preview_group)
+        return gui ? mail_split_clamp_percent(gui->saved_split_percent) : 50U;
+
+    top = (const struct Gadget *)gui->message_list_group;
+    bottom = (const struct Gadget *)gui->preview_group;
+    top_height = (ULONG)top->Height;
+    bottom_height = (ULONG)bottom->Height;
+    total = top_height + bottom_height;
+    if (!total)
+        return mail_split_clamp_percent(gui->saved_split_percent);
+
+    percent = (top_height * 100U + total / 2U) / total;
+    return mail_split_clamp_percent(percent);
+}
+
+void gui_mail_split_update_limits(AmgGui *gui, int relayout)
+{
+    const struct Gadget *top;
+    const struct Gadget *bottom;
+    ULONG usable_height, min_height, max_height;
+
+    if (!gui || !gui->window || !gui->mail_split_group ||
+        !gui->message_list_group || !gui->preview_group)
+        return;
+
+    top = (const struct Gadget *)gui->message_list_group;
+    bottom = (const struct Gadget *)gui->preview_group;
+
+    /* The sum of both child heights excludes the native WeightBar itself and
+     * theme-dependent layout spacing, so thirds are based on the actual area
+     * available to mail list + preview. */
+    usable_height = (ULONG)top->Height + (ULONG)bottom->Height;
+    if (usable_height < 3U) return;
+
+    min_height = (usable_height + 2U) / 3U; /* ceil(1/3) */
+    max_height = (usable_height * 2U) / 3U; /* floor(2/3) */
+    if (max_height < min_height) max_height = min_height;
+
+    /* With exactly two weighted children it is sufficient to constrain the
+     * upper child: top >= 1/3 and top <= 2/3 automatically keeps the preview
+     * in the same range.  LAYOUT_ModifyChild must go through SetGadgetAttrs()
+     * according to layout.gadget's contract.  We do NOT call RethinkLayout()
+     * here because geometry is intentionally left unchanged; these values are
+     * constraints for subsequent native layouts/WeightBar movement. */
+    SetGadgetAttrs((struct Gadget *)gui->mail_split_group,
+                   gui->window, NULL,
+                   LAYOUT_ModifyChild,
+                       (ULONG)(uintptr_t)gui->message_list_group,
+                   CHILD_MinHeight, min_height,
+                   CHILD_MaxHeight, max_height,
+                   TAG_DONE);
+
+    /* During an actual window resize, window.class may have performed its
+     * first layout using the limits from the previous window height.  A
+     * single sublayout rethink applies the freshly calculated limits while
+     * preserving layout.gadget's own WeightBar weights.  This never runs from
+     * WeightBar mouse tracking, so it cannot fight the native drag renderer. */
+    if (relayout)
+        RethinkLayout((struct Gadget *)gui->mail_split_group,
+                      gui->window, NULL, TRUE);
+}
+
 int create_window(AmgGui *gui, AmgError *error)
 {
     Object *banner_row;
@@ -673,15 +765,12 @@ int create_window(AmgGui *gui, AmgError *error)
     }
 
     gui->labels_scroller = create_vertical_scroller(GID_LABELS_SCROLL);
-    gui->messages_scroller = create_vertical_scroller(GID_MESSAGES_SCROLL);
+    gui->messages_scroller = NULL; /* listbrowser.gadget owns its native prop */
     gui->preview_scroller = create_vertical_scroller(GID_PREVIEW_SCROLL);
-    if (!gui->labels_scroller || !gui->messages_scroller ||
-        !gui->preview_scroller) {
+    if (!gui->labels_scroller || !gui->preview_scroller) {
         if (gui->preview_scroller) DisposeObject((Object *)gui->preview_scroller);
-        if (gui->messages_scroller) DisposeObject((Object *)gui->messages_scroller);
         if (gui->labels_scroller) DisposeObject((Object *)gui->labels_scroller);
         gui->preview_scroller = NULL;
-        gui->messages_scroller = NULL;
         gui->labels_scroller = NULL;
         FreeLBColumnInfo(gui->columns);
         gui->columns = NULL;
@@ -781,7 +870,7 @@ int create_window(AmgGui *gui, AmgError *error)
                         GA_RelVerify, TRUE,
                         GA_Text, window_current_mailbox_is_drafts(gui)
                             ? T(MSG_EDIT, "_Edit")
-                            : T(MSG_REPLY, "_Reply"),
+                            : T(MSG_REPLY, "Reply"),
                     EndObject,
                     CHILD_MinWidth, 92,
                     CHILD_WeightedWidth, 100,
@@ -859,8 +948,8 @@ int create_window(AmgGui *gui, AmgError *error)
                                 LAYOUT_SpaceOuter, FALSE,
                                 LAYOUT_SpaceInner, FALSE,
                             EndObject,
-                            CHILD_MinWidth, GUI_SCROLLBAR_WIDTH,
-                            CHILD_MaxWidth, GUI_SCROLLBAR_WIDTH,
+                            /* No fixed pixel reserve here: let the upper
+                             * system-folder row use the full available width. */
                             CHILD_WeightedWidth, 0,
                         EndObject,
                         CHILD_WeightedHeight, 0,
@@ -896,8 +985,9 @@ int create_window(AmgGui *gui, AmgError *error)
                                     LISTBROWSER_Spacing, 1,
                                 EndObject,
                             LAYOUT_AddChild, gui->labels_scroller,
-                            CHILD_MinWidth, GUI_SCROLLBAR_WIDTH,
-                            CHILD_MaxWidth, GUI_SCROLLBAR_WIDTH,
+                            /* Use scroller.gadget's native ReAction width,
+                             * matching the preview scroller and the native
+                             * ListBrowser vertical prop on this screen/theme. */
                             CHILD_WeightedWidth, 0,
                         EndObject,
                         CHILD_WeightedHeight, 100,
@@ -905,8 +995,21 @@ int create_window(AmgGui *gui, AmgError *error)
                 CHILD_WeightedWidth, 25,
                 CHILD_MinWidth, 120,
 
-                LAYOUT_AddChild, VGroupObject,
-                    LAYOUT_AddChild, HGroupObject,
+                LAYOUT_AddChild,
+                    gui->mail_split_group = VGroupObject,
+                    LAYOUT_SpaceOuter, FALSE,
+                    LAYOUT_SpaceInner, TRUE,
+                    /* Sublayouts have no clear backfill by default.  The
+                     * native WeightBar exposes pixels that previously
+                     * belonged to the ListBrowser when either pane shrinks.
+                     * Give this split group the same opaque background as
+                     * the parent layout so every native relayout clears those
+                     * old pixels before the children are rendered again. */
+                    LAYOUT_FillPen, gui->banner_pens[2],
+                    LAYOUT_FillPattern,
+                        (ULONG)(uintptr_t)solid_fill_pattern,
+                    LAYOUT_AddChild,
+                        gui->message_list_group = HGroupObject,
                         LAYOUT_SpaceOuter, FALSE,
                         LAYOUT_SpaceInner, FALSE,
                         LAYOUT_AddChild,
@@ -921,7 +1024,8 @@ int create_window(AmgGui *gui, AmgError *error)
                                 LISTBROWSER_SortColumn, 3,
                                 LISTBROWSER_MultiSelect, TRUE,
                                 LISTBROWSER_ShowSelected, TRUE,
-                                LISTBROWSER_VerticalProp, FALSE,
+                                LISTBROWSER_VerticalProp, TRUE,
+                                LISTBROWSER_AutoWheel, TRUE,
                                 LISTBROWSER_WrapText, TRUE,
                                 LISTBROWSER_Spacing, 1,
                                 /* Kein ScrollRaster-Optimierungsweg: auf
@@ -930,15 +1034,15 @@ int create_window(AmgGui *gui, AmgError *error)
                                  * Pixelzeilen des vorherigen Inhalts stehen. */
                                 LISTBROWSER_ScrollRaster, FALSE,
                             EndObject,
-                        LAYOUT_AddChild, gui->messages_scroller,
-                        CHILD_MinWidth, GUI_SCROLLBAR_WIDTH,
-                        CHILD_MaxWidth, GUI_SCROLLBAR_WIDTH,
-                        CHILD_WeightedWidth, 0,
                     EndObject,
-                    CHILD_WeightedHeight, 55,
+                    CHILD_WeightedHeight, gui->saved_split_percent,
                     CHILD_MinWidth, 250,
+                    /* Native layout.gadget balance bar.  No custom mouse
+                     * handler, IDCMP hook or deferred-layout path is used. */
+                    LAYOUT_WeightBar, TRUE,
 
-                    LAYOUT_AddChild, VGroupObject,
+                    LAYOUT_AddChild,
+                        gui->preview_group = VGroupObject,
                         LAYOUT_SpaceOuter, FALSE,
                         LAYOUT_SpaceInner, TRUE,
                         LAYOUT_AddChild, HGroupObject,
@@ -956,8 +1060,9 @@ int create_window(AmgGui *gui, AmgError *error)
                                         T(MSG_SELECT_A_MESSAGE_AFTER_FETCHING, "Select a message after fetching."),
                                 EndObject,
                             LAYOUT_AddChild, gui->preview_scroller,
-                            CHILD_MinWidth, GUI_SCROLLBAR_WIDTH,
-                            CHILD_MaxWidth, GUI_SCROLLBAR_WIDTH,
+                            /* Let scroller.gadget report its native ReAction
+                             * width so it matches the ListBrowser's built-in
+                             * vertical prop on the active screen/theme. */
                             CHILD_WeightedWidth, 0,
                         EndObject,
                         CHILD_WeightedHeight, 100,
@@ -980,7 +1085,7 @@ int create_window(AmgGui *gui, AmgError *error)
                         EndObject,
                         CHILD_WeightedHeight, 0,
                     EndObject,
-                    CHILD_WeightedHeight, 45,
+                    CHILD_WeightedHeight, 100U - gui->saved_split_percent,
                     CHILD_MinWidth, 250,
                 EndObject,
                 CHILD_WeightedWidth, 75,
@@ -1005,9 +1110,20 @@ int create_window(AmgGui *gui, AmgError *error)
         gui->columns = NULL;
         gui->labels_scroller = NULL;
         gui->messages_scroller = NULL;
+        gui->mail_split_group = NULL;
+        gui->message_list_group = NULL;
+        gui->preview_group = NULL;
         gui->preview_scroller = NULL;
         amg_error_set(error, AMG_ERR_MEMORY,
                       "ReAction-Fenster konnte nicht erzeugt werden.");
+        return AMG_ERR_MEMORY;
+    }
+
+    if (!connect_texteditor_scroller(gui->preview_gadget,
+                                     gui->preview_scroller,
+                                     &gui->preview_scroll_link)) {
+        amg_error_set(error, AMG_ERR_MEMORY,
+                      "TextEditor scrollbar connection could not be created.");
         return AMG_ERR_MEMORY;
     }
     return AMG_OK;

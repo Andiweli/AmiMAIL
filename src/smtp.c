@@ -1035,8 +1035,8 @@ int amg_smtp_send_mail(const AmgAccount *account, const char *access_token,
     }
     connection = smtp_open(account, access_token, error);
     if (!connection) return error ? error->code : AMG_ERR_TLS;
-    result = smtp_begin_data(connection, draft->from, draft->to, draft->cc,
-                             draft->bcc, error);
+    result = smtp_begin_data(connection, account->email, draft->to,
+                             draft->cc, draft->bcc, error);
     amg_buffer_init(&text);
     amg_buffer_init(&ending);
     if (result == AMG_OK)

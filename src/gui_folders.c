@@ -853,48 +853,159 @@ int handle_label_tree_event(AmgGui *gui)
     }
 }
 
-static void label_scroll_geometry(AmgGui *gui, ULONG *top_out,
-                                  ULONG *total_out, ULONG *visible_out)
+/* Hierarchical ListBrowser detail:
+ *
+ * LISTBROWSER_Top is an index in the attached node list.  Hidden children
+ * remain in that list, while the external folder scroller must operate in
+ * terms of rows that are actually visible.  Treating LISTBROWSER_Top as a
+ * visible-row index works only while every branch is expanded.  As soon as a
+ * branch is collapsed, raw node indexes and visible-row indexes diverge; the
+ * old code then calculated a much too small SCROLLER_Visible value and could
+ * no longer reach the real last visible folder.
+ *
+ * Keep the ListBrowser's own last-page clamp (it knows the exact rendered row
+ * height), but translate between raw node indexes and visible-row indexes at
+ * the boundary to the external scroller. */
+static int label_tree_row_is_visible(const AmgGui *gui, size_t index)
 {
-    ULONG current = 0, max_top = 0, total = 0, visible = 1;
-    if (!gui || !gui->window || !gui->labels_gadget) {
-        if (top_out) *top_out = 0;
-        if (total_out) *total_out = 1;
-        if (visible_out) *visible_out = 1;
-        return;
-    }
+    size_t parent, guard = 0U;
+    if (!gui || index < GUI_SYSTEM_LABEL_COUNT || index >= gui->label_count)
+        return 0;
 
-    GetAttr(LISTBROWSER_TotalVisibleNodes,
-            (Object *)gui->labels_gadget, &total);
-    if (total < 1U) total = 1U;
-    GetAttr(LISTBROWSER_Top, (Object *)gui->labels_gadget, &current);
+    parent = gui->labels[index].parent_index;
+    while (parent != (size_t)-1 && parent < gui->label_count &&
+           guard++ < gui->label_count) {
+        if (!gui->labels[parent].expanded) return 0;
+        parent = gui->labels[parent].parent_index;
+    }
+    return 1;
+}
+
+static ULONG label_tree_visible_count(const AmgGui *gui)
+{
+    ULONG total = 0U;
+    size_t i;
+    if (!gui) return 0U;
+    for (i = GUI_SYSTEM_LABEL_COUNT; i < gui->label_count; ++i) {
+        if (label_tree_row_is_visible(gui, i)) ++total;
+    }
+    return total;
+}
+
+/* Convert the ListBrowser's raw attached-list Top index to the ordinal of the
+ * same position in the currently visible tree.  If ReAction happens to leave
+ * Top on a node that just became hidden, this naturally maps to the next
+ * visible position after the collapsed subtree. */
+static ULONG label_tree_raw_to_visible_top(const AmgGui *gui, ULONG raw_top)
+{
+    ULONG visible_top = 0U;
+    size_t raw_count, raw;
+    if (!gui || gui->label_count <= GUI_SYSTEM_LABEL_COUNT) return 0U;
+
+    raw_count = gui->label_count - GUI_SYSTEM_LABEL_COUNT;
+    if ((size_t)raw_top > raw_count) raw_top = (ULONG)raw_count;
+    for (raw = 0U; raw < (size_t)raw_top; ++raw) {
+        if (label_tree_row_is_visible(gui,
+                                      GUI_SYSTEM_LABEL_COUNT + raw))
+            ++visible_top;
+    }
+    return visible_top;
+}
+
+/* Convert an external scroller position (visible-row ordinal) back to the raw
+ * node index required by LISTBROWSER_Top. */
+static ULONG label_tree_visible_to_raw_top(const AmgGui *gui,
+                                           ULONG visible_top)
+{
+    ULONG visible = 0U, last_visible_raw = 0U;
+    size_t raw_count, raw;
+    int have_visible = 0;
+    if (!gui || gui->label_count <= GUI_SYSTEM_LABEL_COUNT) return 0U;
+
+    raw_count = gui->label_count - GUI_SYSTEM_LABEL_COUNT;
+    for (raw = 0U; raw < raw_count; ++raw) {
+        if (!label_tree_row_is_visible(gui,
+                                       GUI_SYSTEM_LABEL_COUNT + raw))
+            continue;
+        last_visible_raw = (ULONG)raw;
+        have_visible = 1;
+        if (visible == visible_top) return (ULONG)raw;
+        ++visible;
+    }
+    return have_visible ? last_visible_raw : 0U;
+}
+
+static ULONG probe_label_browser_max_raw_top(AmgGui *gui,
+                                             ULONG restore_visible_top)
+{
+    ULONG max_raw_top = 0U;
+    ULONG restore_raw_top;
+    if (!gui || !gui->window || !gui->labels_gadget) return 0U;
 
     SetGadgetAttrs(gui->labels_gadget, gui->window, NULL,
                    LISTBROWSER_Top, 0x7fffffffUL,
                    TAG_DONE);
-    GetAttr(LISTBROWSER_Top, (Object *)gui->labels_gadget, &max_top);
-    if (current > max_top) current = max_top;
-    SetGadgetAttrs(gui->labels_gadget, gui->window, NULL,
-                   LISTBROWSER_Top, current,
-                   TAG_DONE);
+    GetAttr(LISTBROWSER_Top, (Object *)gui->labels_gadget, &max_raw_top);
 
-    if (max_top == 0U || total <= max_top) {
-        visible = total;
-        current = 0U;
-    } else {
-        visible = total - max_top;
-        if (visible < 1U) visible = 1U;
-        if (visible > total) visible = total;
+    restore_raw_top = label_tree_visible_to_raw_top(gui,
+                                                     restore_visible_top);
+    SetGadgetAttrs(gui->labels_gadget, gui->window, NULL,
+                   LISTBROWSER_Top, restore_raw_top,
+                   TAG_DONE);
+    return max_raw_top;
+}
+
+static void label_scroll_geometry(AmgGui *gui, ULONG *top_out,
+                                  ULONG *total_out, ULONG *visible_out)
+{
+    ULONG current_raw = 0U, max_raw = 0U;
+    ULONG current = 0U, max_top = 0U, total = 0U, visible = 1U;
+    if (!gui || !gui->window || !gui->labels_gadget) {
+        if (top_out) *top_out = 0U;
+        if (total_out) *total_out = 1U;
+        if (visible_out) *visible_out = 1U;
+        return;
     }
+
+    /* Use our exact tree model for the number of non-hidden rows.  ReAction's
+     * LISTBROWSER_TotalVisibleNodes is documented as estimated, so it is not
+     * needed for this hierarchy bookkeeping. */
+    total = label_tree_visible_count(gui);
+    if (total < 1U) total = 1U;
+
+    GetAttr(LISTBROWSER_Top, (Object *)gui->labels_gadget, &current_raw);
+    current = label_tree_raw_to_visible_top(gui, current_raw);
+    if (current >= total) current = total - 1U;
+
+    /* Ask ReAction for the exact raw node that begins the last renderable page,
+     * then translate that raw index into the visible-row coordinate space used
+     * by our external scroller.  This retains ReAction's exact knowledge of
+     * frame, font, spacing and current gadget height without mixing units. */
+    max_raw = probe_label_browser_max_raw_top(gui, current);
+    max_top = label_tree_raw_to_visible_top(gui, max_raw);
+    if (max_top >= total) max_top = total - 1U;
+    if (current > max_top) current = max_top;
+
+    visible = total - max_top;
+    if (visible < 1U) visible = 1U;
+    if (visible > total) visible = total;
+
+    /* probe_label_browser_max_raw_top() restored the pre-probe visible
+     * position.  If it had to be clamped to the new last page after a collapse,
+     * apply that clamp explicitly now. */
+    SetGadgetAttrs(gui->labels_gadget, gui->window, NULL,
+                   LISTBROWSER_Top,
+                       label_tree_visible_to_raw_top(gui, current),
+                   TAG_DONE);
 
     if (top_out) *top_out = current;
     if (total_out) *total_out = total;
     if (visible_out) *visible_out = visible;
 }
 
- void sync_labels_scroller(AmgGui *gui)
+void sync_labels_scroller(AmgGui *gui)
 {
-    ULONG top = 0, total = 1, visible = 1;
+    ULONG top = 0U, total = 1U, visible = 1U;
     if (!gui || !gui->window || !gui->labels_gadget ||
         !gui->labels_scroller)
         return;
@@ -907,6 +1018,7 @@ static void label_scroll_geometry(AmgGui *gui, ULONG *top_out,
         set_scroller_full(gui->window, gui->labels_scroller);
         return;
     }
+
     if (top > total - visible) top = total - visible;
     SetGadgetAttrs(gui->labels_scroller, gui->window, NULL,
                    SCROLLER_Top, top,
@@ -916,9 +1028,9 @@ static void label_scroll_geometry(AmgGui *gui, ULONG *top_out,
     RefreshGList(gui->labels_scroller, gui->window, NULL, 1);
 }
 
- void handle_labels_scroller(AmgGui *gui)
+void handle_labels_scroller(AmgGui *gui)
 {
-    ULONG top = 0, total = 1, visible = 1;
+    ULONG top = 0U, total = 1U, visible = 1U, raw_top;
     if (!gui || !gui->window || !gui->labels_gadget ||
         !gui->labels_scroller)
         return;
@@ -928,16 +1040,15 @@ static void label_scroll_geometry(AmgGui *gui, ULONG *top_out,
     if (total <= visible) top = 0U;
     else if (top > total - visible) top = total - visible;
 
+    raw_top = label_tree_visible_to_raw_top(gui, top);
     SetGadgetAttrs(gui->labels_gadget, gui->window, NULL,
-                   LISTBROWSER_Top, top,
+                   LISTBROWSER_Top, raw_top,
                    TAG_DONE);
     RefreshGList(gui->labels_gadget, gui->window, NULL, 1);
-    SetGadgetAttrs(gui->labels_scroller, gui->window, NULL,
-                   SCROLLER_Top, top,
-                   SCROLLER_Total, total,
-                   SCROLLER_Visible, visible,
-                   TAG_DONE);
-    RefreshGList(gui->labels_scroller, gui->window, NULL, 1);
+
+    /* Re-read after ReAction has applied its own last-page clamp. */
+    sync_labels_scroller(gui);
 }
+
 
 #endif /* AMIGMAIL_AMIGA */

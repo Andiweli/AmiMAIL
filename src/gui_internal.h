@@ -104,6 +104,13 @@ typedef struct GuiLabel {
     int has_next_sibling;
 } GuiLabel;
 
+
+typedef struct TextEditorScrollLink {
+    Object *model;
+    Object *editor_to_scroller;
+    Object *scroller_to_editor;
+} TextEditorScrollLink;
+
 struct AmgGui {
     AmgAccount *account;
     AmgNetwork *network;
@@ -120,8 +127,14 @@ struct AmgGui {
     struct Gadget *labels_scroller;
     struct Gadget *messages_gadget;
     struct Gadget *messages_scroller;
+    Object *mail_split_group;
+    Object *message_list_group;
+    Object *preview_group;
     struct Gadget *preview_gadget;
     struct Gadget *preview_scroller;
+    TextEditorScrollLink preview_scroll_link;
+    struct Window *compose_window;
+    int compose_open;
     struct Gadget *save_attachments_gadget;
     struct Gadget *update_gadget;
     struct Image label_show_image;
@@ -203,6 +216,7 @@ struct AmgGui {
     LONG saved_window_top;
     LONG saved_window_width;
     LONG saved_window_height;
+    ULONG saved_split_percent;
     int running;
 };
 
@@ -218,6 +232,14 @@ void status_local(AmgGui *gui, const char *text);
 void status_utf8(AmgGui *gui, const char *utf8);
 void periodic_timer_restart(AmgGui *gui);
 void periodic_timer_cleanup(AmgGui *gui);
+ULONG gui_runtime_signal_mask(AmgGui *gui);
+void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
+                                 AmgError *error);
+int rawkey_is_rcommand_letter(Object *window_object, ULONG result,
+                              char letter);
+int rawkey_is_delete(ULONG result);
+int rawkey_is_help(ULONG result);
+int input_event_has_multiselect_qualifier(Object *window_object);
 Object *static_text_label(const char *text);
 void draw_embedded_banner_at(AmgGui *gui, struct Window *window,
                              LONG left, LONG top,
@@ -228,6 +250,12 @@ void header_to_local(const char *header, const char *fallback,
                      char *local, size_t capacity);
 struct Node *one_column_node(const char *text, ULONG user_data);
 struct Gadget *create_vertical_scroller(ULONG gadget_id);
+int connect_texteditor_scroller(struct Gadget *editor,
+                                struct Gadget *scroller,
+                                TextEditorScrollLink *link);
+void disconnect_texteditor_scroller(struct Gadget *editor,
+                                    struct Gadget *scroller,
+                                    TextEditorScrollLink *link);
 void sync_listbrowser_scroller(struct Window *window,
                                struct Gadget *listbrowser,
                                struct Gadget *scroller);
@@ -294,12 +322,15 @@ void periodic_fetch_mail(AmgGui *gui, AmgError *error);
 void fetch_mail(AmgGui *gui, AmgError *error);
 void cancel_pending_move(AmgGui *gui);
 void handle_main_gadget(AmgGui *gui, ULONG gadget_id, AmgError *error);
+void handle_main_shortcut(AmgGui *gui, char letter, AmgError *error);
 void handle_menu(AmgGui *gui, ULONG menu_code, AmgError *error);
 
 /* Main-window/layout/rendering module entry points. Private to src/gui_*.c. */
 int create_window(AmgGui *gui, AmgError *error);
 void center_window_on_screen(struct Window *window);
 void draw_window_overlays(AmgGui *gui);
+void gui_mail_split_update_limits(AmgGui *gui, int relayout);
+ULONG gui_mail_split_current_percent(const AmgGui *gui);
 
 /* Preview/received-attachment module entry points. Private to src/gui_*.c. */
 void init_preview_url_hook(AmgGui *gui);
@@ -336,6 +367,7 @@ size_t merge_new_messages_from_payload(AmgGui *gui,
                                        const unsigned char *payload,
                                        size_t length, int *parse_error);
 size_t selected_message_uids(AmgGui *gui, ULONG *uids, size_t capacity);
+void normalize_message_selection_for_click(AmgGui *gui);
 ULONG *selected_message_uids_alloc(AmgGui *gui, size_t *count);
 int message_is_seen(AmgGui *gui, ULONG uid);
 int message_is_flagged(AmgGui *gui, ULONG uid);

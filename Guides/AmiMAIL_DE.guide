@@ -1,0 +1,322 @@
+@DATABASE AmiMAIL_DE.guide
+@$VER: AmiMAIL_DE.guide 1.5 (29.08.2026)
+
+@NODE MAIN "AmiMAIL 1.5 - Anleitung"
+AmiMAIL 1.5
+Nativer IMAP/SMTP-Mailclient für AmigaOS 3.2+
+ReAction, IMAP, SMTP und AmiSSL
+
+Inhalt:
+
+@{"Über AmiMAIL" LINK OVERVIEW}
+@{"Voraussetzungen" LINK REQUIREMENTS}
+@{"Installation" LINK INSTALL}
+@{"Erster Start und Konto" LINK ACCOUNT}
+@{"IMAP/SMTP und TLS" LINK SERVERS}
+@{"Systemordner zuordnen" LINK FOLDERS}
+@{"Das Hauptfenster" LINK MAINWINDOW}
+@{"Mails lesen und verwalten" LINK READING}
+@{"Neue Mail, Antwort und Weiterleitung" LINK COMPOSE}
+@{"Entwürfe" LINK DRAFTS}
+@{"Anhänge" LINK ATTACHMENTS}
+@{"HTML-Mails" LINK HTMLMAIL}
+@{"Kontakte und Signatur" LINK CONTACTS}
+@{"Benachrichtigungen und Iconify" LINK NOTIFY}
+@{"mailto: und Updates" LINK INTEGRATION}
+@{"Tastaturbedienung" LINK KEYBOARD}
+@{"Fehlerbehebung" LINK TROUBLE}
+@{"Über / Copyright" LINK ABOUT}
+
+© 2026 Andreas "Andiweli" Stürmer
+@ENDNODE
+
+@NODE OVERVIEW "Über AmiMAIL"
+AmiMAIL ist ein nativer, allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
+Im Gegensatz zu AmiGmail ist AmiMAIL nicht auf Gmail beschränkt und kann mit
+normalen IMAP-/SMTP-Anbietern verwendet werden.
+
+AmiMAIL ist bewusst als Single-Account-Client ausgelegt. Die Oberfläche
+basiert auf ReAction, die verschlüsselten Netzwerkverbindungen auf AmiSSL.
+
+Der Schwerpunkt liegt auf klassischer Amiga-Bedienung, geringem
+Ressourcenbedarf und einem robusten Klartext-orientierten Mail-Workflow.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE REQUIREMENTS "Voraussetzungen"
+- AmigaOS 3.2 oder neuer
+- 68020 oder neuer
+- funktionierender TCP/IP-Stack
+- AmiSSL 5
+- IMAP-/SMTP-Konto bei einem unterstützten Mailanbieter
+
+Für einen stabilen Betrieb wird ein großzügiger Workbench-Stack empfohlen.
+Die ausgelieferte Programm-Icon-Konfiguration verwendet 100000 Bytes.
+
+Datum und Uhrzeit des Amiga sollten korrekt eingestellt sein, damit
+TLS-Zertifikate zuverlässig geprüft werden können.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE INSTALL "Installation"
+Starte den mitgelieferten Installer und wähle das bestehende Verzeichnis, in
+dem AmiMAIL installiert werden soll.
+
+Nach der Sprachwahl kann der Installer optional den kompletten Ordner
+Setup/Notifications nach SYS:Prefs/Presets/Notifications kopieren.
+
+AmiSSL 5 muss bereits korrekt im System installiert sein. Der Installer
+ersetzt oder aktualisiert AmiSSL nicht.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE ACCOUNT "Erster Start und Konto"
+Öffne beim ersten Start die Kontoeinstellungen und trage die Daten deines
+Mailanbieters ein.
+
+- Name: sichtbarer Absendername; er wird beim Senden als Name <adresse> im
+  From:-Header verwendet.
+- E-Mail-Adresse: die Adresse, die als Absender verwendet wird.
+- IMAP-Server, Port, Benutzername und Passwort.
+- SMTP-Server, Port und gegebenenfalls eigene SMTP-Zugangsdaten.
+
+AmiMAIL kann SMTP mit denselben Zugangsdaten wie IMAP betreiben. Alternativ
+können getrennte SMTP-Zugangsdaten gespeichert werden.
+
+Die Zugangsdaten werden lokal geschützt gespeichert. Das Master-Passwort
+kann beim Start abgefragt werden. Optional kann AmiMAIL einen abgeleiteten
+Schlüssel persistent speichern, damit die Passwortabfrage beim Start
+entfällt.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE SERVERS "IMAP/SMTP und TLS"
+AmiMAIL unterstützt direkte TLS-Verbindungen und - abhängig vom
+konfigurierten Dienst - STARTTLS. Welche Ports und TLS-Art dein Konto
+benötigt, hängt vom Mailanbieter ab.
+
+Für Gmail ist die bewährte Konfiguration IMAP 993 mit direktem TLS und SMTP
+587 mit STARTTLS. Für andere Anbieter gelten deren Serverdaten.
+
+Beim Verbindungsaufbau probiert AmiMAIL alle gelieferten IPv4-Adressen eines
+Servers. TLS-Fehler werden nach Möglichkeit mit SSL-Fehlertyp,
+Socket-Fehler, TLS-Version und Cipher gemeldet.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE FOLDERS "Systemordner zuordnen"
+AmiMAIL ist nicht an die Ordnernamen eines bestimmten Anbieters gebunden.
+Posteingang ist IMAP INBOX; Gesendet, Papierkorb und Entwürfe können passend
+zum Server zugeordnet werden.
+
+Die manuelle Systemordner-Zuordnung ist besonders bei Anbietern wichtig, die
+Namen wie Sent Items, Trash, Deleted Messages oder Drafts unterschiedlich
+verwenden.
+
+Die Zuordnung beeinflusst unter anderem Speichern von Entwürfen, gesendete
+Kopien, Löschen und die passenden Hauptfenster-Aktionen.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE MAINWINDOW "Das Hauptfenster"
+Links befindet sich die Ordneransicht. Rechts oben steht die Mailliste und
+rechts unten die Vorschau.
+
+Die Mailliste verwendet den nativen vertikalen ReAction-Scrollbar des
+ListBrowser. Die Mailvorschau ist über BOOPSI direkt mit ihrem
+ReAction-Scroller gekoppelt. Beide Bereiche unterstützen das Mausrad.
+
+Das Hauptfenster bleibt vollständig bedienbar, während das Fenster "Neue
+Mail" offen ist. Auswahl, Vorschau, manueller Abruf und Netzwerkereignisse
+werden weiter verarbeitet.
+
+Fensterposition und -größe werden beim normalen Beenden gespeichert.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE READING "Mails lesen und verwalten"
+Wähle eine Mail aus, um sie im unteren Vorschaubereich zu lesen. AmiMAIL
+unterstützt die üblichen IMAP-Aktionen wie Gelesen/Ungelesen, Verschieben
+und Löschen.
+
+Wenn der Server UID MOVE unterstützt, wird dieses verwendet. Bei älteren
+Servern werden sichere COPY-/DELETE-Varianten genutzt, ohne ein unsicheres
+mailbox-weites EXPUNGE auszuführen.
+
+Antworten, Allen antworten und Weiterleiten stehen über die
+Antwort-Schaltfläche und ihren Auswahlbereich zur Verfügung.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE COMPOSE "Neue Mail, Antwort und Weiterleitung"
+"Neue Mail" öffnet das Verfassen-Fenster mit An, CC, BCC, Betreff,
+Nachrichtentext und Anhängen.
+
+Der unter Kontoeinstellungen eingetragene Name wird als sichtbarer
+Absendername in den RFC-konformen From:-Header geschrieben. Der
+SMTP-Envelope verwendet weiterhin nur die reine E-Mail-Adresse.
+
+Reply All filtert die eigene Adresse und doppelte Empfänger. Weiterleiten
+erzeugt einen neuen Empfänger-losen Entwurf mit passendem Betreff und kann
+vorhandene Anhänge übernehmen.
+
+Das Hauptfenster bleibt während des Verfassens aktiv.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE DRAFTS "Entwürfe"
+Entwürfe können auf dem IMAP-Server gespeichert und später wieder geöffnet
+werden.
+
+Beim Bearbeiten werden An, CC, BCC, Betreff, Text, Thread-Referenzen und
+Anhänge wiederhergestellt.
+
+Speichern ersetzt den alten Entwurf erst nach erfolgreichem Anlegen des
+neuen Entwurfs. Beim Senden wird der alte Entwurf erst nach erfolgreicher
+SMTP-Zustellung entfernt. Abbrechen verändert den Serverentwurf nicht.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE ATTACHMENTS "Anhänge"
+AmiMAIL unterstützt bis zu 8 Anhänge pro Nachricht. Die Summe aller Anhänge
+ist auf 10 MB begrenzt.
+
+Anhänge empfangener Mails können aus der Vorschau gespeichert werden. Beim
+Weiterleiten und Bearbeiten von Entwürfen können vorhandene Anhänge
+übernommen werden.
+
+Inline-Bilder aus HTML-Mails werden nicht automatisch geladen.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE HTMLMAIL "HTML-Mails"
+AmiMAIL enthält keinen vollständigen HTML-Browser. Ein sauberer
+text/plain-Part wird bevorzugt.
+
+HTML-only-Mails werden lokal in Klartext umgewandelt. Absätze,
+Zeilenumbrüche, Listen und Links bleiben soweit sinnvoll erhalten.
+
+CSS, style/script/head-Inhalte, Tracking-Pixel und andere externe Inhalte
+werden nicht geladen. HTML-Entities und numerische Entities werden
+dekodiert.
+
+Bei fehlerhaften multipart/alternative-Mails, deren angeblicher Plaintext
+aus CSS-/HTML-Resten besteht, kann AmiMAIL automatisch die HTML-Alternative
+verwenden und daraus sauberen Klartext erzeugen.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE CONTACTS "Kontakte und Signatur"
+Bearbeiten -> Kontaktverwaltung... öffnet das lokale Adressbuch. Kontakte
+können angelegt, bearbeitet und gelöscht sowie aus CSV- und VCard-Dateien
+importiert werden.
+
+Im Verfassen-Fenster können Kontakte für An, CC und BCC per Mehrfachauswahl
+übernommen werden.
+
+Unter Bearbeiten -> Signatur... wird die lokale Signatur verwaltet. Sie wird
+automatisch in neue Mails, Antworten, Reply All, Weiterleitungen und
+mailto:-Entwürfe eingefügt.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE NOTIFY "Benachrichtigungen und Iconify"
+AmiMAIL kann beim Eintreffen neuer Mails einen konfigurierten
+Benachrichtigungston über AmigaOS DataTypes abspielen.
+
+Das Hauptfenster kann iconifiziert werden. Netzwerk-Worker, periodischer
+Abruf und Statusverwaltung laufen im Hintergrund weiter.
+
+Der aktuelle Inbox-Zustand wird während der Laufzeit über AmiMAILStatus im
+Environment bereitgestellt.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE INTEGRATION "mailto: und Updates"
+AmiMAIL unterstützt mailto:-URIs mit Empfänger, CC, BCC, Betreff und Body.
+Läuft AmiMAIL bereits, wird die URI an die vorhandene Instanz
+weitergereicht, statt einen zweiten Mailclient zu starten.
+
+Der GitHub-Updatecheck läuft asynchron und höchstens einmal pro
+Programmstart. Ein verfügbares Release kann nach RAM: heruntergeladen
+werden; Installation und Entpacken erfolgen bewusst manuell.
+
+Für Browser wie IBrowse kann AmiMAIL als externer mailto:-Handler
+eingetragen werden.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE KEYBOARD "Tastaturbedienung"
+- Return/Enter bestätigt die primäre OK-/Übernehmen-Aktion in Requestern.
+- Escape schließt bzw. verwirft Dialoge mit Abbruchmöglichkeit.
+- TAB folgt der ReAction-Fokusreihenfolge in Eingabefenstern.
+- Das Mausrad scrollt Mailliste und Mailvorschau.
+
+Die exakte Reaktion einzelner Tasten hängt zusätzlich vom gerade aktiven
+ReAction-Gadget ab.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE TROUBLE "Fehlerbehebung"
+Bei Verbindungsfehlern zuerst Servername, Port, TLS-Art und Zugangsdaten mit
+den Angaben des Mailanbieters vergleichen.
+
+- TCP/IP-Verbindung und DNS-Auflösung prüfen.
+- AmiSSL 5 und Systemdatum/-uhrzeit kontrollieren.
+- Bei Gmail ein Google-App-Passwort verwenden.
+- Bei SSL_ERROR_SYSCALL oder connection reset by peer den gleichen Server
+  mit openssl s_client testen.
+- Bei Problemen mit Gesendet/Papierkorb/Entwürfen die Systemordner-Zuordnung
+  prüfen.
+
+AmiMAIL liefert bei TLS-Fehlern möglichst genaue Diagnoseangaben. Diese
+Informationen zusammen mit TCP/IP-Stack, AmiSSL-Version und
+Serverkonfiguration erleichtern einen Fehlerbericht erheblich.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE
+
+@NODE ABOUT "Über / Copyright"
+AmiMAIL 1.5 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
+
+© 2026 Andreas "Andiweli" Stürmer
+
+AmiMAIL verwendet ReAction, IMAP, SMTP und AmiSSL und ist bewusst als
+Single-Account-Client ausgelegt.
+
+
+@{"Zurück zum Inhalt" LINK MAIN}
+@ENDNODE

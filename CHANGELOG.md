@@ -1,5 +1,23 @@
 # Changelog
 
+## AmiMail 1.5 - 2026-08-29
+
+- update the program, package and release-asset version to 1.5
+- rework main-window scrolling to use ReAction-native mechanisms: the mail list now uses the ListBrowser vertical prop and the mail preview uses direct BOOPSI model/scroller coupling, including mouse-wheel support
+- keep the main window fully interactive while the compose window is open, including mail selection, preview updates, manual refresh and network-event processing
+- send the configured display name in the RFC-compliant `From:` header while keeping the SMTP envelope sender as the plain email address; non-ASCII display names are RFC 2047 encoded
+- let the mail-preview scroller use its natural ReAction width instead of a fixed pixel width so it matches the native ListBrowser scrollbar more closely
+- add lightweight HTML-to-text conversion for HTML-only messages without loading images, CSS or other external content
+- prefer `text/plain` in `multipart/alternative`, but automatically fall back to the HTML alternative when the supplied plain-text part is clearly polluted with generated CSS/HTML content
+- improve HTML cleanup for malformed or mislabeled mail parts, including removal of style/script/head content, HTML tags and escaped tag fragments
+- expand HTML-entity decoding, including common ISO-8859-1 entities and numeric entities, so characters such as umlauts and `ß` are displayed correctly
+- show recipients instead of senders in the Sent folder, including the localized Recipient/Empfänger column title
+- fix main-window keyboard handling: Right Amiga+A fetches mail, Right Amiga+W replies, Delete deletes the selected message(s), and Help opens the About requester; Reply All and Forward no longer have conflicting shortcuts
+- fix message-list selection so a normal left click always selects only the clicked message; multi-selection is retained only with Shift or Ctrl
+- fix hierarchical folder scrolling when IMAP folder branches are collapsed, including correct scrollbar geometry at small window heights
+- add a native ReAction layout WeightBar between the message list and mail preview, constrained to the middle third (1/3 to 2/3) and persisted with the normal window state
+- fix stale ListBrowser pixels on the WeightBar by giving the split sublayout an opaque backfill matching AmiMAIL's normal main-window background
+
 ## AmiMail 1.4 - 2026-08-29
 
 - update the program, package and release-asset version to 1.4
