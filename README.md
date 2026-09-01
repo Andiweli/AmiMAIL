@@ -108,7 +108,7 @@ Thank you for your support!
 
 ## 📧 Legal
 
-AmiMAIL is licensed under the **AMI Software Source-Available Non-Commercial Distribution License 1.0**. Free use, modification and non-commercial redistribution are permitted. Commercial distribution requires prior written permission from the copyright holder. See `LICENSE` for the complete terms.
+AmiMAIL is licensed under the **AmiMAIL/AmiGmail Non-Commercial Source License 1.0**. Free use, modification and non-commercial redistribution are permitted. Commercial distribution requires prior written permission from the copyright holder. See `LICENSE` for the complete terms.
 
 AmiMAIL is an independent, non-commercial hobby project. **Amiga** and **AmigaOS** are trademarks of their respective owners. AmiSSL and other third-party components remain subject to their respective licenses.
 
