@@ -31,6 +31,160 @@ extern struct Library *OpenURLBase;
     LP2(0x1e, ULONG, URL_OpenA, STRPTR, (url), a0, \
         struct TagItem *, (tags), a1, , OpenURLBase)
 
+
+static int reply_status_is_leap_year(unsigned long year)
+{
+    return (year % 4UL == 0UL && year % 100UL != 0UL) ||
+           year % 400UL == 0UL;
+}
+
+static void reply_status_format_date(LONG days, char *text, size_t capacity)
+{
+    static const unsigned char month_lengths[] = {
+        31U, 28U, 31U, 30U, 31U, 30U,
+        31U, 31U, 30U, 31U, 30U, 31U
+    };
+    unsigned long remaining, year = 1978UL, month = 0UL, day;
+    if (!text || !capacity) return;
+    text[0] = 0;
+    if (days < 0) return;
+    remaining = (unsigned long)days;
+    while (remaining >= (reply_status_is_leap_year(year) ? 366UL : 365UL)) {
+        remaining -= reply_status_is_leap_year(year) ? 366UL : 365UL;
+        ++year;
+    }
+    while (month < 11UL) {
+        unsigned long length = month_lengths[month];
+        if (month == 1UL && reply_status_is_leap_year(year)) ++length;
+        if (remaining < length) break;
+        remaining -= length;
+        ++month;
+    }
+    day = remaining + 1UL;
+    snprintf(text, capacity, "%02lu.%02lu.%04lu",
+             day, month + 1UL, year);
+}
+
+static GuiReplyStamp *find_reply_stamp(AmgGui *gui, size_t account_index,
+                                       const char *mailbox_utf8,
+                                       unsigned long uid_validity,
+                                       unsigned long uid)
+{
+    size_t i;
+    if (!gui || !mailbox_utf8 || !*mailbox_utf8 || !uid_validity || !uid)
+        return NULL;
+    for (i = 0U; i < GUI_REPLY_STAMP_CACHE_SIZE; ++i) {
+        GuiReplyStamp *stamp = &gui->reply_stamp_cache[i];
+        if (stamp->valid && stamp->account_index == account_index &&
+            stamp->uid == uid && stamp->uid_validity == uid_validity &&
+            !strcmp(stamp->mailbox_utf8, mailbox_utf8))
+            return stamp;
+    }
+    return NULL;
+}
+
+static void update_reply_status_gadget(AmgGui *gui)
+{
+    GuiReplyStamp *stamp = NULL;
+    char *status_text;
+    if (!gui) return;
+
+    /* Alternate backing buffers so button.gadget always sees a new GA_Text
+     * pointer. Some classic implementations optimize identical pointers and
+     * would otherwise miss an in-place string update. */
+    gui->reply_status_text_index ^= 1U;
+    status_text = gui->reply_status_text[gui->reply_status_text_index & 1U];
+    status_text[0] = 0;
+
+    if (gui->preview_message_answered) {
+        stamp = find_reply_stamp(gui, gui->active_account,
+                                 gui->preview_message_mailbox_utf8,
+                                 gui->preview_message_uid_validity,
+                                 gui->preview_message_uid);
+        if (stamp) {
+            char date[32], time_text[16];
+            reply_status_format_date(stamp->days, date, sizeof(date));
+            snprintf(time_text, sizeof(time_text), "%02lu:%02lu",
+                     (unsigned long)stamp->minutes / 60UL,
+                     (unsigned long)stamp->minutes % 60UL);
+            amg_tr_snprintf(status_text, sizeof(gui->reply_status_text[0]),
+                            MSG_MAIL_WAS_REPLIED_TO_ON_VALUE_AT_VALUE,
+                            "Mail was replied to on %s at %s.",
+                            date, time_text);
+        } else {
+            snprintf(status_text, sizeof(gui->reply_status_text[0]),
+                     "%s", T(MSG_MAIL_HAS_BEEN_REPLIED_TO,
+                               "Mail has been replied to"));
+        }
+    }
+
+    if (gui->reply_status_gadget) {
+        if (gui->window) {
+            SetGadgetAttrs(gui->reply_status_gadget, gui->window, NULL,
+                           GA_Text, (ULONG)(uintptr_t)status_text,
+                           TAG_DONE);
+            RefreshGList(gui->reply_status_gadget, gui->window, NULL, 1);
+        } else {
+            SetAttrs((Object *)gui->reply_status_gadget,
+                     GA_Text, (ULONG)(uintptr_t)status_text,
+                     TAG_DONE);
+        }
+    }
+}
+
+static void set_preview_reply_context(AmgGui *gui,
+                                      const char *mailbox_utf8,
+                                      unsigned long uid_validity,
+                                      unsigned long uid, int answered)
+{
+    if (!gui) return;
+    gui->preview_message_uid = uid;
+    gui->preview_message_uid_validity = uid_validity;
+    snprintf(gui->preview_message_mailbox_utf8,
+             sizeof(gui->preview_message_mailbox_utf8), "%s",
+             mailbox_utf8 ? mailbox_utf8 : "");
+    gui->preview_message_answered = answered ? 1 : 0;
+    update_reply_status_gadget(gui);
+}
+
+void gui_note_answered_now(AmgGui *gui, size_t account_index,
+                           const char *mailbox_utf8,
+                           unsigned long uid_validity, unsigned long uid)
+{
+    struct DateStamp now;
+    GuiReplyStamp *stamp;
+    if (!gui || !mailbox_utf8 || !*mailbox_utf8 || !uid_validity || !uid)
+        return;
+
+    stamp = find_reply_stamp(gui, account_index, mailbox_utf8,
+                             uid_validity, uid);
+    if (!stamp) {
+        stamp = &gui->reply_stamp_cache[
+            gui->reply_stamp_next % GUI_REPLY_STAMP_CACHE_SIZE];
+        gui->reply_stamp_next =
+            (gui->reply_stamp_next + 1U) % GUI_REPLY_STAMP_CACHE_SIZE;
+        memset(stamp, 0, sizeof(*stamp));
+    }
+
+    DateStamp(&now);
+    stamp->account_index = account_index;
+    stamp->uid = uid;
+    stamp->uid_validity = uid_validity;
+    snprintf(stamp->mailbox_utf8, sizeof(stamp->mailbox_utf8), "%s",
+             mailbox_utf8);
+    stamp->days = now.ds_Days;
+    stamp->minutes = now.ds_Minute;
+    stamp->valid = 1;
+
+    if (gui->active_account == account_index &&
+        gui->preview_message_uid == uid &&
+        gui->preview_message_uid_validity == uid_validity &&
+        !strcmp(gui->preview_message_mailbox_utf8, mailbox_utf8)) {
+        gui->preview_message_answered = 1;
+        update_reply_status_gadget(gui);
+    }
+}
+
 static int ascii_prefix_ci(const char *text, const char *prefix)
 {
     unsigned char a, b;
@@ -312,7 +466,9 @@ static int append_preview_header(AmgBuffer *preview, const char *name,
 }
 
 int display_message_payload(AmgGui *gui, const unsigned char *payload,
-                                   size_t payload_length, AmgError *error)
+                            size_t payload_length,
+                            const char *mailbox_utf8,
+                            unsigned long uid_validity, AmgError *error)
 {
     AmgImapFetchRecord record;
     AmgMailHeaders headers;
@@ -323,11 +479,14 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
     result = amg_imap_fetch_record_next(payload, payload_length,
                                         &position, &record);
     if (result <= 0) {
+        set_preview_reply_context(gui, NULL, 0UL, 0UL, 0);
         amg_error_set(error, result < 0 ? result : AMG_ERR_PARSE,
                       T(MSG_THE_SELECTED_MESSAGE_CONTAINS_NO_MAIL_DATA_BLOCK, "The selected message contains no mail data block."));
         return result < 0 ? result : AMG_ERR_PARSE;
     }
 
+    set_preview_reply_context(gui, mailbox_utf8, uid_validity,
+                              record.uid, record.answered);
     amg_mail_headers_init(&headers);
     amg_buffer_init(&body);
     amg_buffer_init(&preview);
@@ -394,7 +553,7 @@ static void set_attachment_button_enabled(AmgGui *gui, int enabled)
     }
 }
 
-void clear_current_message_payload(AmgGui *gui)
+static void release_current_message_payload(AmgGui *gui)
 {
     if (!gui) return;
     free(gui->current_message_payload);
@@ -402,6 +561,13 @@ void clear_current_message_payload(AmgGui *gui)
     gui->current_message_payload_length = 0U;
     gui->current_attachment_count = 0U;
     set_attachment_button_enabled(gui, 0);
+}
+
+void clear_current_message_payload(AmgGui *gui)
+{
+    if (!gui) return;
+    release_current_message_payload(gui);
+    set_preview_reply_context(gui, NULL, 0UL, 0UL, 0);
 }
 
 static int copy_first_message_literal(const unsigned char *payload,
@@ -450,7 +616,11 @@ void retain_current_message_payload(AmgGui *gui,
     result = copy_first_message_literal(event->payload,
                                         event->payload_length,
                                         &message, &message_length);
-    clear_current_message_payload(gui);
+    /* Replace only the retained MIME payload.  The preview reply context was
+     * set by display_message_payload() immediately before this call and must
+     * survive; clearing it here made the \Answered indication flash briefly
+     * and then disappear. */
+    release_current_message_payload(gui);
     if (result != AMG_OK) return;
 
     gui->current_message_payload = message;

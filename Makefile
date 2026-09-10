@@ -1,5 +1,5 @@
 PROJECT := AmiMail
-VERSION := 2.0.1
+VERSION := 2.0.2
 
 ifeq ($(origin CC),default)
 CC := m68k-amigaos-gcc
@@ -7,6 +7,10 @@ endif
 HOST_CC ?= gcc
 LHA ?= lha
 RELEASE_ASSET := AmiMAIL-v$(VERSION).lha
+RELEASE_ICON := assets/Icons/AmiMail.info
+RELEASE_CATALOGS := _Catalogs
+RELEASE_README := $(wildcard README.md)
+SOURCE_ROOT := $(notdir $(CURDIR))
 ifeq ($(origin AR),default)
 AR := m68k-amigaos-ar
 endif
@@ -119,13 +123,13 @@ dist: release
 
 	mkdir -p dist/$(PROJECT)-$(VERSION)/docs
 
-	cp bin/$(PROJECT) assets/AmiMail.info README.md CHANGELOG.md LICENSE dist/$(PROJECT)-$(VERSION)/
+	cp bin/$(PROJECT) $(RELEASE_ICON) CHANGELOG.md LICENSE $(RELEASE_README) dist/$(PROJECT)-$(VERSION)/
 
 	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md dist/$(PROJECT)-$(VERSION)/docs/
 
 	cp -R config dist/$(PROJECT)-$(VERSION)/
 
-	cp -R Catalogs dist/$(PROJECT)-$(VERSION)/
+	cp -R $(RELEASE_CATALOGS) dist/$(PROJECT)-$(VERSION)/Catalogs
 
 	cd dist && tar -czf $(PROJECT)-$(VERSION)-AmigaOS3.tar.gz $(PROJECT)-$(VERSION)
 
@@ -137,13 +141,13 @@ release-lha: release
 
 	mkdir -p dist/$(PROJECT)-$(VERSION)/docs
 
-	cp bin/$(PROJECT) assets/AmiMail.info README.md CHANGELOG.md LICENSE dist/$(PROJECT)-$(VERSION)/
+	cp bin/$(PROJECT) $(RELEASE_ICON) CHANGELOG.md LICENSE $(RELEASE_README) dist/$(PROJECT)-$(VERSION)/
 
 	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md dist/$(PROJECT)-$(VERSION)/docs/
 
 	cp -R config dist/$(PROJECT)-$(VERSION)/
 
-	cp -R Catalogs dist/$(PROJECT)-$(VERSION)/
+	cp -R $(RELEASE_CATALOGS) dist/$(PROJECT)-$(VERSION)/Catalogs
 
 	cd dist && $(LHA) a $(RELEASE_ASSET) $(PROJECT)-$(VERSION)
 
@@ -151,10 +155,12 @@ release-lha: release
 
 source-dist:
 
+	mkdir -p dist
+
 	rm -f dist/$(PROJECT)-$(VERSION)-source.zip
 
-	cd .. && zip -qr $(PROJECT)/dist/$(PROJECT)-$(VERSION)-source.zip $(PROJECT) \
-		-x '$(PROJECT)/build/*' '$(PROJECT)/bin/*' '$(PROJECT)/dist/*'
+	cd .. && zip -qr "$(CURDIR)/dist/$(PROJECT)-$(VERSION)-source.zip" "$(SOURCE_ROOT)" \
+		-x '$(SOURCE_ROOT)/build/*' '$(SOURCE_ROOT)/bin/*' '$(SOURCE_ROOT)/dist/*' '*.bak'
 
 clean:
 

@@ -41,6 +41,7 @@ typedef struct AmgImapFetchRecord {
     size_t literal_length;
     int seen;
     int flagged;
+    int answered;
     int deleted;
 } AmgImapFetchRecord;
 

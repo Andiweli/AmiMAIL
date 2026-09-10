@@ -1,4 +1,4 @@
-## version 5
+## version 6
 ## language english
 ## basename AmiMAIL
 
@@ -1523,3 +1523,9 @@ Icon by Martin 'Mason' Merz
 
 MSG_THANKS_TO_ALL_TESTERS_WHO_HELP_TO_CONTINUOUSLY_IMPROVE_AMIMAIL (2100000026//)
 Thanks to all testers who help to continuously improve AmiMAIL.
+
+MSG_MAIL_HAS_BEEN_REPLIED_TO (2100000027//)
+Mail has been replied to
+
+MSG_MAIL_WAS_REPLIED_TO_ON_VALUE_AT_VALUE (2100000028//)
+Mail was replied to on %s at %s.

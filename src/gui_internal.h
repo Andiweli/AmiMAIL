@@ -33,6 +33,7 @@ struct DiskObject;
 #define GUI_MAIN_MIN_WIDTH 620L
 #define GUI_MAIN_MIN_HEIGHT 320L
 #define GUI_SIGNATURE_MAX 2048U
+#define GUI_REPLY_STAMP_CACHE_SIZE 16U
 
 #define ACCOUNT_DRAWER "ENVARC:AmiMail"
 
@@ -84,6 +85,9 @@ typedef struct DraftEditData {
     char message_id_utf8[256];
     char mailbox_utf8[512];
     unsigned long uid;
+    char reply_source_mailbox_utf8[512];
+    unsigned long reply_source_uid;
+    unsigned long reply_source_uid_validity;
     ComposeAttachment attachments[AMG_MAIL_MAX_ATTACHMENTS];
     size_t attachment_count;
 } DraftEditData;
@@ -104,6 +108,17 @@ typedef struct GuiLabel {
     int has_next_sibling;
 } GuiLabel;
 
+
+
+typedef struct GuiReplyStamp {
+    size_t account_index;
+    unsigned long uid;
+    unsigned long uid_validity;
+    char mailbox_utf8[512];
+    LONG days;
+    LONG minutes;
+    int valid;
+} GuiReplyStamp;
 
 typedef struct TextEditorScrollLink {
     Object *model;
@@ -155,6 +170,7 @@ struct AmgGui {
     struct Window *compose_window;
     int compose_open;
     struct Gadget *save_attachments_gadget;
+    struct Gadget *reply_status_gadget;
     struct Gadget *update_gadget;
     struct Image label_show_image;
     struct Image label_hide_image;
@@ -196,7 +212,18 @@ struct AmgGui {
     char reply_body_local[GUI_REPLY_BODY_MAX];
     char reply_in_reply_to_utf8[512];
     char reply_references_utf8[1024];
+    unsigned long reply_source_uid;
+    unsigned long reply_source_uid_validity;
+    char reply_source_mailbox_utf8[512];
     ULONG preview_line_count;
+    unsigned long preview_message_uid;
+    unsigned long preview_message_uid_validity;
+    char preview_message_mailbox_utf8[512];
+    int preview_message_answered;
+    char reply_status_text[2][192];
+    unsigned int reply_status_text_index;
+    GuiReplyStamp reply_stamp_cache[GUI_REPLY_STAMP_CACHE_SIZE];
+    size_t reply_stamp_next;
     unsigned char *current_message_payload;
     size_t current_message_payload_length;
     size_t current_attachment_count;
@@ -384,7 +411,12 @@ void sync_preview_scroller(AmgGui *gui, int reset_top);
 void handle_preview_scroller(AmgGui *gui);
 void set_preview_local(AmgGui *gui, const char *local);
 int display_message_payload(AmgGui *gui, const unsigned char *payload,
-                            size_t payload_length, AmgError *error);
+                            size_t payload_length,
+                            const char *mailbox_utf8,
+                            unsigned long uid_validity, AmgError *error);
+void gui_note_answered_now(AmgGui *gui, size_t account_index,
+                           const char *mailbox_utf8,
+                           unsigned long uid_validity, unsigned long uid);
 void clear_current_message_payload(AmgGui *gui);
 void retain_current_message_payload(AmgGui *gui,
                                     const AmgNetworkEvent *event);

@@ -34,7 +34,7 @@ static void test_base64(void)
 
 static void test_quoted_printable(void)
 {
-    AmgBuffer output;amg_buffer_init(&output);CHECK(amg_quoted_printable_decode("Gr=C3=BC=C3=9Fe=\r\n!",21U,&output)==AMG_OK);
+    AmgBuffer output;amg_buffer_init(&output);CHECK(amg_quoted_printable_decode("Gr=C3=BC=C3=9Fe=\r\n!",strlen("Gr=C3=BC=C3=9Fe=\r\n!"),&output)==AMG_OK);
     CHECK(!strcmp(text(&output),"Grüße!"));amg_buffer_free(&output);
 }
 
@@ -147,24 +147,26 @@ static void test_imap_parser(void)
         size_t position = 0;
         amg_buffer_init(&response);
         snprintf(prefix, sizeof(prefix),
-                 "* 49 FETCH (UID 9001 FLAGS (\\Seen \\Flagged) "
+                 "* 49 FETCH (UID 9001 FLAGS (\\Seen \\Flagged \\Answered) "
                  "RFC822.SIZE 2049 BODY[HEADER.FIELDS (FROM SUBJECT)] {%lu}\r\n",
                  (unsigned long)strlen(header1));
         CHECK(amg_buffer_append_cstr(&response, prefix) == AMG_OK);
         CHECK(amg_buffer_append_cstr(&response, header1) == AMG_OK);
         CHECK(amg_buffer_append_cstr(&response, ")\r\n") == AMG_OK);
         snprintf(prefix, sizeof(prefix),
-                 "* 50 FETCH (UID 9002 FLAGS (\\Deleted) RFC822.SIZE 100 "
+                 "* 50 FETCH (UID 9002 RFC822.SIZE 100 "
                  "BODY[HEADER.FIELDS (FROM SUBJECT)] {%lu}\r\n",
                  (unsigned long)strlen(header2));
         CHECK(amg_buffer_append_cstr(&response, prefix) == AMG_OK);
         CHECK(amg_buffer_append_cstr(&response, header2) == AMG_OK);
         CHECK(amg_buffer_append_cstr(&response,
-                                     ")\r\nA000003 OK fetched\r\n") == AMG_OK);
+                                     " FLAGS (\\Deleted))\r\n"
+                                     "A000003 OK fetched\r\n") == AMG_OK);
         CHECK(amg_imap_fetch_record_next(response.data, response.length,
                                          &position, &record) == 1);
         CHECK(record.uid == 9001UL && record.rfc822_size == 2049UL);
         CHECK(record.seen && record.flagged);
+        CHECK(record.answered);
         CHECK(!record.deleted);
         CHECK(record.literal_length == strlen(header1) &&
               !memcmp(record.literal, header1, strlen(header1)));
@@ -172,6 +174,7 @@ static void test_imap_parser(void)
                                          &position, &record) == 1);
         CHECK(record.uid == 9002UL && record.rfc822_size == 100UL);
         CHECK(!record.seen && !record.flagged);
+        CHECK(!record.answered);
         CHECK(record.deleted);
         CHECK(record.literal_length == strlen(header2) &&
               !memcmp(record.literal, header2, strlen(header2)));
@@ -572,7 +575,7 @@ static void test_mailto(void)
 static void test_smtp(void)
 {
     AmgBuffer output,subject;AmgReplyDraft draft;AmgError error;memset(&draft,0,sizeof(draft));amg_buffer_init(&output);amg_buffer_init(&subject);
-    CHECK(amg_smtp_dot_stuff("a\r\n.b\r\n..c\r\n",14U,&output)==AMG_OK);CHECK(!strcmp(text(&output),"a\r\n..b\r\n...c\r\n"));amg_buffer_free(&output);
+    CHECK(amg_smtp_dot_stuff("a\r\n.b\r\n..c\r\n",strlen("a\r\n.b\r\n..c\r\n"),&output)==AMG_OK);CHECK(!strcmp(text(&output),"a\r\n..b\r\n...c\r\n"));amg_buffer_free(&output);
     CHECK(amg_smtp_reply_subject("Re: Test",&subject)==AMG_OK);CHECK(!strcmp(text(&subject),"Re: Test"));amg_buffer_free(&subject);
     draft.from="me@gmail.com";draft.to="you@example.com";draft.subject="Test";draft.body_utf8="Hallo\n.Zeile";draft.in_reply_to="<old@example>";draft.references="<first@example> <old@example>";
     draft.date_rfc2822="Wed, 12 Aug 2026 10:00:00 +0200";draft.message_id="<new@gmail.com>";amg_buffer_init(&output);
@@ -581,9 +584,13 @@ static void test_smtp(void)
         AmgMailDraft mail;
         memset(&mail,0,sizeof(mail));
         mail.from="me@example.com";mail.to="to@example.com";mail.cc="";mail.bcc="hidden@example.com";mail.subject="Sent copy";mail.body_utf8="Body";mail.date_rfc2822="Wed, 12 Aug 2026 10:00:00 +0200";mail.message_id="<sent@example.com>";
+        mail.reply_source_uid=1234UL;mail.reply_source_uid_validity=5678UL;mail.reply_source_mailbox="Posteingang/Privat";
         amg_buffer_init(&output);
         CHECK(amg_smtp_build_mail(&mail,1,&output,&error)==AMG_OK);
         CHECK(strstr(text(&output),"Bcc: hidden@example.com\r\n")!=NULL);
+        CHECK(strstr(text(&output),AMG_MAIL_REPLY_UID_HEADER)==NULL);
+        CHECK(strstr(text(&output),AMG_MAIL_REPLY_UIDVALIDITY_HEADER)==NULL);
+        CHECK(strstr(text(&output),AMG_MAIL_REPLY_MAILBOX_HEADER)==NULL);
         amg_buffer_free(&output);
         amg_buffer_init(&output);
         CHECK(amg_smtp_build_mail(&mail,0,&output,&error)==AMG_OK);

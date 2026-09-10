@@ -17,6 +17,9 @@ typedef struct AmgReplyDraft {
 
 #define AMG_MAIL_MAX_ATTACHMENTS 8U
 #define AMG_MAIL_MAX_ATTACHMENT_TOTAL (10UL * 1024UL * 1024UL)
+#define AMG_MAIL_REPLY_UID_HEADER "X-AmiMAIL-Reply-UID"
+#define AMG_MAIL_REPLY_UIDVALIDITY_HEADER "X-AmiMAIL-Reply-UIDValidity"
+#define AMG_MAIL_REPLY_MAILBOX_HEADER "X-AmiMAIL-Reply-Mailbox"
 
 typedef struct AmgAttachmentInput {
     const char *path;
@@ -38,6 +41,13 @@ typedef struct AmgMailDraft {
     const char *references;
     const AmgAttachmentInput *attachments;
     size_t attachment_count;
+    /* Local reply-origin metadata. These fields are deliberately not emitted
+     * by amg_smtp_build_mail() or amg_smtp_send_mail(). The network layer may
+     * use them to mark the original IMAP message as \\Answered after SMTP has
+     * succeeded and to preserve that association in an AmiMAIL draft. */
+    unsigned long reply_source_uid;
+    unsigned long reply_source_uid_validity;
+    const char *reply_source_mailbox;
 } AmgMailDraft;
 
 int amg_smtp_dot_stuff(const char *message, size_t length, AmgBuffer *output);

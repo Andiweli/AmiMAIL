@@ -56,6 +56,9 @@ int amg_imap_fetch_message(AmgImapSession *session, unsigned long uid,
 int amg_imap_set_seen(AmgImapSession *session, unsigned long uid, int seen, AmgError *error);
 int amg_imap_set_flagged(AmgImapSession *session, unsigned long uid,
                          int flagged, AmgError *error);
+int amg_imap_set_answered(AmgImapSession *session, unsigned long uid,
+                          unsigned long expected_uid_validity,
+                          const char *mailbox_utf8, AmgError *error);
 int amg_imap_move_label(AmgImapSession *session, unsigned long uid,
                         const char *source_label, const char *destination_label,
                         AmgError *error);

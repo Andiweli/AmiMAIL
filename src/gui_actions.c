@@ -1082,6 +1082,8 @@ static void request_message(AmgGui *gui, int action, AmgError *error)
     int compose_action = prepare_reply || prepare_reply_all ||
                          prepare_forward || edit_draft;
     const char *request_kind = "preview";
+    const char *source_mailbox = NULL;
+    size_t source_index;
     int result;
     if (!gui || !gui->messages_gadget) return;
     if (!compose_action) {
@@ -1137,13 +1139,22 @@ static void request_message(AmgGui *gui, int action, AmgError *error)
     else if (prepare_forward) request_kind = "forward";
     else if (prepare_reply) request_kind = "reply";
 
+    if (edit_draft)
+        source_mailbox = gui->labels[3U].server_mailbox_utf8[0]
+            ? gui->labels[3U].server_mailbox_utf8
+            : gui->current_mailbox_utf8;
+    else {
+        source_index = label_index_for_mailbox(gui, gui->current_mailbox_utf8);
+        source_mailbox =
+            source_index < gui->label_count &&
+            gui->labels[source_index].server_mailbox_utf8[0]
+                ? gui->labels[source_index].server_mailbox_utf8
+                : gui->current_mailbox_utf8;
+    }
+
     result = amg_network_request(gui->network, AMG_NET_FETCH_MESSAGE, uid,
                                  request_kind,
-                                 edit_draft
-                                    ? (gui->labels[3U].server_mailbox_utf8[0]
-                                           ? gui->labels[3U].server_mailbox_utf8
-                                           : gui->current_mailbox_utf8)
-                                    : NULL,
+                                 source_mailbox,
                                  error);
     if (result == AMG_OK) {
         clear_current_message_payload(gui);
@@ -1554,6 +1565,7 @@ void handle_network(AmgGui *gui)
                     memset(&preview_error, 0, sizeof(preview_error));
                     if (display_message_payload(
                             gui, event.payload, event.payload_length,
+                            event.argument2, event.uid_validity,
                             &preview_error) == AMG_OK) {
                         retain_current_message_payload(gui, &event);
                         set_message_selected_visual(gui, event.uid);
@@ -1615,6 +1627,16 @@ void handle_network(AmgGui *gui)
                                     gui, event.payload, event.payload_length,
                                     &preview_error);
                             if (prep_result == AMG_OK) {
+                                gui->reply_source_uid = event.uid;
+                                gui->reply_source_uid_validity =
+                                    event.uid_validity;
+                                snprintf(gui->reply_source_mailbox_utf8,
+                                         sizeof(gui->reply_source_mailbox_utf8),
+                                         "%s", event.argument2);
+                                if (!gui->reply_source_mailbox_utf8[0]) {
+                                    gui->reply_source_uid = 0UL;
+                                    gui->reply_source_uid_validity = 0UL;
+                                }
                                 if (!compose_dialog(gui, COMPOSE_MODE_REPLY,
                                                     NULL, &preview_error))
                                     status_local(gui, prepare_reply_all
@@ -1706,9 +1728,21 @@ void handle_network(AmgGui *gui)
                         status_local(gui, T(MSG_DRAFT_WAS_SAVED, "Draft was saved."));
                     break;
                 case AMG_NET_SEND_REPLY:
+                    if (event.reply_answered_marked)
+                        gui_note_answered_now(
+                            gui, gui->active_account,
+                            event.reply_source_mailbox,
+                            event.reply_source_uid_validity,
+                            event.reply_source_uid);
                     status_local(gui, T(MSG_REPLY_SENT, "Reply sent."));
                     break;
                 case AMG_NET_SEND_MAIL:
+                    if (event.reply_answered_marked)
+                        gui_note_answered_now(
+                            gui, gui->active_account,
+                            event.reply_source_mailbox,
+                            event.reply_source_uid_validity,
+                            event.reply_source_uid);
                     if (event.uid && !strcmp(event.argument2,
                                              "draft-removed"))
                         remove_message_uid(gui, event.uid);

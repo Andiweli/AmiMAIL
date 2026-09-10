@@ -33,7 +33,7 @@ void amg_i18n_init(void) {
     /* Require the current catalog generation. locale.library caches catalogs
      * across application restarts, so without OC_Version an older cached
      * AmiMAIL.catalog can keep serving English fallbacks for newly added IDs. */
-    tags[2].ti_Tag=OC_Version; tags[2].ti_Data=5UL;
+    tags[2].ti_Tag=OC_Version; tags[2].ti_Data=6UL;
     tags[3].ti_Tag=TAG_DONE; tags[3].ti_Data=0UL;
     catalog=OpenCatalogA(NULL,(STRPTR)"AmiMAIL.catalog",tags);
 #endif

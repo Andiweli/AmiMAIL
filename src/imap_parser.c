@@ -381,11 +381,34 @@ int amg_imap_fetch_record_next(const unsigned char *data, size_t length,
             data + line_start, line_end - line_start, "\\Seen");
         record->flagged = line_contains_text(
             data + line_start, line_end - line_start, "\\Flagged");
+        record->answered = line_contains_text(
+            data + line_start, line_end - line_start, "\\Answered");
         record->deleted = line_contains_text(
             data + line_start, line_end - line_start, "\\Deleted");
         record->literal = data + cursor;
         record->literal_length = literal_length;
         cursor += literal_length;
+        /* IMAP servers may return requested FETCH attributes in any order.
+         * If FLAGS follows the literal, it appears on the short trailer line
+         * between the literal and the terminating CRLF. Merge flags from that
+         * trailer as well instead of assuming FLAGS always precedes BODY[]. */
+        if (cursor < length) {
+            size_t trailer_end = cursor;
+            while (trailer_end < length && data[trailer_end] != '\n')
+                ++trailer_end;
+            if (!record->seen)
+                record->seen = line_contains_text(
+                    data + cursor, trailer_end - cursor, "\\Seen");
+            if (!record->flagged)
+                record->flagged = line_contains_text(
+                    data + cursor, trailer_end - cursor, "\\Flagged");
+            if (!record->answered)
+                record->answered = line_contains_text(
+                    data + cursor, trailer_end - cursor, "\\Answered");
+            if (!record->deleted)
+                record->deleted = line_contains_text(
+                    data + cursor, trailer_end - cursor, "\\Deleted");
+        }
         *position = cursor;
         (void)sequence;
         return 1;

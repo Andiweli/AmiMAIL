@@ -1,4 +1,4 @@
-## version $VER: AmiMAIL.catalog 5.0 (09.09.2026)
+## version $VER: AmiMAIL.catalog 6.0 (10.09.2026)
 ## language deutsch
 ## codeset 0
 
@@ -1605,3 +1605,9 @@ Icon by Martin 'Mason' Merz
 
 MSG_THANKS_TO_ALL_TESTERS_WHO_HELP_TO_CONTINUOUSLY_IMPROVE_AMIMAIL
 Danke an alle Tester, die helfen, AmiMAIL laufend zu verbessern.
+
+MSG_MAIL_HAS_BEEN_REPLIED_TO
+Mail wurde beantwortet
+
+MSG_MAIL_WAS_REPLIED_TO_ON_VALUE_AT_VALUE
+Mail wurde am %s um %s Uhr beantwortet.

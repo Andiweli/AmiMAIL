@@ -31,6 +31,11 @@ typedef struct AmgNetworkEvent {
     AmgNetCommandType type;
     int result;
     unsigned long uid;
+    unsigned long uid_validity;
+    unsigned long reply_source_uid;
+    unsigned long reply_source_uid_validity;
+    int reply_answered_marked;
+    char reply_source_mailbox[512];
     char argument1[768];
     char argument2[768];
     char message[256];

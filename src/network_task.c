@@ -1,4 +1,5 @@
 #include "network_task.h"
+#include "codec.h"
 #include "imap.h"
 #include "oauth.h"
 #include "oauth_client_config.h"
@@ -36,8 +37,13 @@ typedef struct AmgNetMessage {
     AmgNetCommandType type;
     int result;
     unsigned long uid;
+    unsigned long uid_validity;
+    unsigned long reply_source_uid;
+    unsigned long reply_source_uid_validity;
+    int reply_answered_marked;
     char argument1[768];
     char argument2[768];
+    char reply_source_mailbox[512];
     char from[768];
     char to[768];
     char cc[768];
@@ -253,6 +259,82 @@ static void cleanup_temp_attachments(AmgNetMessage *message)
     }
 }
 
+static int add_reply_source_headers_to_draft(const AmgNetMessage *message,
+                                             AmgBuffer *raw,
+                                             AmgError *error)
+{
+    AmgBuffer mailbox_wire;
+    AmgBuffer decorated;
+    char uid_header[80];
+    char uid_validity_header[96];
+    size_t split = 0U;
+    size_t i;
+    int result;
+
+    if (!message || !raw) return AMG_ERR_ARGUMENT;
+    if (!message->reply_source_uid ||
+        !message->reply_source_uid_validity ||
+        !message->reply_source_mailbox[0])
+        return AMG_OK;
+
+    for (i = 0U; i + 3U < raw->length; ++i) {
+        if (raw->data[i] == '\r' && raw->data[i + 1U] == '\n' &&
+            raw->data[i + 2U] == '\r' && raw->data[i + 3U] == '\n') {
+            split = i + 2U;
+            break;
+        }
+    }
+    if (!split) {
+        amg_error_set(error, AMG_ERR_PARSE,
+                      T(MSG_MAIL_DRAFT_COULD_NOT_BE_CREATED,
+                        "Mail draft could not be created."));
+        return AMG_ERR_PARSE;
+    }
+
+    amg_buffer_init(&mailbox_wire);
+    amg_buffer_init(&decorated);
+    result = amg_modified_utf7_encode(message->reply_source_mailbox,
+                                      &mailbox_wire);
+    if (result == AMG_OK)
+        result = amg_buffer_append(&decorated, raw->data, split);
+    if (result == AMG_OK) {
+        snprintf(uid_header, sizeof(uid_header), "%s: %lu\r\n",
+                 AMG_MAIL_REPLY_UID_HEADER, message->reply_source_uid);
+        result = amg_buffer_append_cstr(&decorated, uid_header);
+    }
+    if (result == AMG_OK) {
+        snprintf(uid_validity_header, sizeof(uid_validity_header),
+                 "%s: %lu\r\n", AMG_MAIL_REPLY_UIDVALIDITY_HEADER,
+                 message->reply_source_uid_validity);
+        result = amg_buffer_append_cstr(&decorated, uid_validity_header);
+    }
+    if (result == AMG_OK) {
+        result = amg_buffer_append_cstr(&decorated,
+                                        AMG_MAIL_REPLY_MAILBOX_HEADER ": ");
+    }
+    if (result == AMG_OK)
+        result = amg_buffer_append(&decorated, mailbox_wire.data,
+                                   mailbox_wire.length);
+    if (result == AMG_OK)
+        result = amg_buffer_append_cstr(&decorated, "\r\n");
+    if (result == AMG_OK)
+        result = amg_buffer_append(&decorated, raw->data + split,
+                                   raw->length - split);
+
+    amg_buffer_free(&mailbox_wire);
+    if (result != AMG_OK) {
+        amg_buffer_free(&decorated);
+        amg_error_set(error, result,
+                      T(MSG_MAIL_DRAFT_COULD_NOT_BE_CREATED,
+                        "Mail draft could not be created."));
+        return result;
+    }
+
+    amg_buffer_free(raw);
+    *raw = decorated;
+    return AMG_OK;
+}
+
 static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
                          AmgNetMessage *message, const char *access_token,
                          AmgError *error)
@@ -284,6 +366,9 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
     draft.references = message->references;
     draft.attachments = attachments;
     draft.attachment_count = message->attachment_count;
+    draft.reply_source_uid = message->reply_source_uid;
+    draft.reply_source_uid_validity = message->reply_source_uid_validity;
+    draft.reply_source_mailbox = message->reply_source_mailbox;
 
     result = amg_smtp_send_mail(&network->account, access_token, &draft, error);
     if (result != AMG_OK) return result;
@@ -341,6 +426,32 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
                       "draft-removed");
         }
     }
+
+    /* A successful SMTP delivery is the only point at which a reply becomes
+     * an answered message. Keep this independent of Sent-copy or old-draft
+     * cleanup: either of those may fail without turning a delivered mail into
+     * a failed send. The source mailbox is selected only for the STORE and
+     * amg_imap_set_answered() restores the worker's previous mailbox. */
+    if (message->reply_source_uid && message->reply_source_mailbox[0]) {
+        memset(&detail_error, 0, sizeof(detail_error));
+        detail_result = ensure_imap_connected(network, imap, access_token,
+                                              &detail_error);
+        if (detail_result == AMG_OK)
+            detail_result = amg_imap_set_answered(
+                imap, message->reply_source_uid,
+                message->reply_source_uid_validity,
+                message->reply_source_mailbox, &detail_error);
+        if (detail_result != AMG_OK) {
+            if (detail_result == AMG_ERR_IO || detail_result == AMG_ERR_TLS) {
+                network->connected = 0;
+                amg_imap_disconnect(imap);
+            }
+            append_success_warning(
+                error, T(MSG_MAIL_SENT, "Mail sent"), &detail_error);
+        } else {
+            message->reply_answered_marked = 1;
+        }
+    }
     return AMG_OK;
 }
 
@@ -374,9 +485,14 @@ static int save_mail_draft(AmgNetwork *network, AmgImapSession *imap,
     draft.references = message->references;
     draft.attachments = attachments;
     draft.attachment_count = message->attachment_count;
+    draft.reply_source_uid = message->reply_source_uid;
+    draft.reply_source_uid_validity = message->reply_source_uid_validity;
+    draft.reply_source_mailbox = message->reply_source_mailbox;
 
     amg_buffer_init(&raw);
     result = amg_smtp_build_mail(&draft, 1, &raw, error);
+    if (result == AMG_OK)
+        result = add_reply_source_headers_to_draft(message, &raw, error);
     if (result == AMG_OK)
         result = amg_imap_append_draft(
             imap, message->argument1[0] ? message->argument1 : "\\Drafts",
@@ -571,6 +687,8 @@ static void network_worker(void)
                 case AMG_NET_FETCH_MESSAGE:
                     result = amg_imap_fetch_message(
                         &imap, message->uid, &message->payload, &error);
+                    if (result == AMG_OK)
+                        message->uid_validity = imap.uid_validity;
                     break;
 
                 case AMG_NET_SET_SEEN:
@@ -849,7 +967,9 @@ static int request_mail_message(AmgNetwork *network,
         !text_fits(draft->date_rfc2822, 96U) ||
         !text_fits(draft->message_id, 256U) ||
         !text_fits(draft->in_reply_to, 512U) ||
-        !text_fits(draft->references, 1024U)) {
+        !text_fits(draft->references, 1024U) ||
+        !text_fits(draft->reply_source_mailbox,
+                   sizeof(message->reply_source_mailbox))) {
         amg_error_set(error, AMG_ERR_LIMIT, T(MSG_MAIL_DRAFT_IS_TOO_LARGE, "Mail draft is too large."));
         return AMG_ERR_LIMIT;
     }
@@ -882,6 +1002,15 @@ static int request_mail_message(AmgNetwork *network,
               draft->in_reply_to);
     copy_text(message->references, sizeof(message->references),
               draft->references);
+    if (draft->reply_source_uid && draft->reply_source_uid_validity &&
+        draft->reply_source_mailbox && draft->reply_source_mailbox[0]) {
+        message->reply_source_uid = draft->reply_source_uid;
+        message->reply_source_uid_validity =
+            draft->reply_source_uid_validity;
+        copy_text(message->reply_source_mailbox,
+                  sizeof(message->reply_source_mailbox),
+                  draft->reply_source_mailbox);
+    }
     message->attachment_count = draft->attachment_count;
     for (i = 0; i < draft->attachment_count; ++i) {
         copy_text(message->attachments[i].path,
@@ -968,6 +1097,13 @@ int amg_network_poll(AmgNetwork *network, AmgNetworkEvent *event)
     event->type = message->type;
     event->result = message->result;
     event->uid = message->uid;
+    event->uid_validity = message->uid_validity;
+    event->reply_source_uid = message->reply_source_uid;
+    event->reply_source_uid_validity = message->reply_source_uid_validity;
+    event->reply_answered_marked = message->reply_answered_marked;
+    copy_text(event->reply_source_mailbox,
+              sizeof(event->reply_source_mailbox),
+              message->reply_source_mailbox);
     copy_text(event->argument1, sizeof(event->argument1), message->argument1);
     copy_text(event->argument2, sizeof(event->argument2), message->argument2);
     copy_text(event->message, sizeof(event->message), message->error.message);

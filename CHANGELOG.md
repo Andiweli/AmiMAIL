@@ -1,5 +1,29 @@
 # Changelog
 
+## AmiMail 2.0.2 - 2026-09-10
+
+### User interface
+
+- align the reply-status text at the lower-left edge of the mail preview by disabling the transparent status button's internal ReAction text padding
+- retain the 2.0.1 reply/forward compose focus behavior, server-side `\Answered` handling and persistent reply-status display
+
+## AmiMail 2.0.1 - 2026-09-10
+
+### Mail preview and replies
+
+- show the server-side IMAP `\Answered` state in the preview footer, left of **Save attachments**; replies successfully marked by AmiMAIL in the current session show their local date/time, while replies from other clients or earlier sessions display only **Mail has been replied to**
+- preserve the current reply-status context while replacing the retained MIME payload, so the `\Answered` indication no longer flashes briefly and disappears after a message is loaded
+- open Reply, Reply All and Forward compose windows with keyboard focus and the insertion cursor already placed at the start of the message editor
+- mark the original IMAP message with `\Answered` only after SMTP delivery of a reply has succeeded
+- preserve the original message UID, UIDVALIDITY and source mailbox while the compose window is open, so changing folders or messages in the main window cannot mark the wrong message; refuse the flag update if the mailbox generation changed
+- preserve that reply origin across saved AmiMail drafts with private internal headers; these headers are not emitted to recipients or to the regular Sent copy
+- treat failure to update `\Answered` as a non-fatal post-send warning and restore the IMAP worker's previously selected mailbox
+
+### Tests and packaging
+
+- fix two host tests that passed lengths larger than their quoted-printable and SMTP dot-stuffing test strings
+- correct release paths for the Workbench icon and catalogs, make the optional README copy conditional, make `source-dist` independent of the checkout directory name, and exclude `.bak` files from source archives
+
 ## AmiMail 2.0 - 2026-09-02
 
 ### Multi-account support

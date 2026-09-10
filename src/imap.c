@@ -1238,6 +1238,71 @@ int amg_imap_set_flagged(AmgImapSession *session, unsigned long uid,
     return imap_command(session, command, NULL, error);
 }
 
+int amg_imap_set_answered(AmgImapSession *session, unsigned long uid,
+                          unsigned long expected_uid_validity,
+                          const char *mailbox_utf8, AmgError *error)
+{
+    const char *mailbox;
+    char previous_mailbox[sizeof(session->selected_mailbox)];
+    char command[128];
+    int restore_previous = 0;
+    int result;
+
+    if (!session || !uid || !mailbox_utf8 || !*mailbox_utf8)
+        return AMG_ERR_ARGUMENT;
+    mailbox = resolve_special_mailbox(session, mailbox_utf8);
+    if (!mailbox || !*mailbox) return AMG_ERR_ARGUMENT;
+
+    previous_mailbox[0] = 0;
+    if (session->selected_mailbox[0] &&
+        !ascii_ci_equal(session->selected_mailbox, mailbox)) {
+        strncpy(previous_mailbox, session->selected_mailbox,
+                sizeof(previous_mailbox) - 1U);
+        previous_mailbox[sizeof(previous_mailbox) - 1U] = 0;
+        restore_previous = 1;
+    }
+
+    if (!ascii_ci_equal(session->selected_mailbox, mailbox)) {
+        result = amg_imap_select(session, mailbox, error);
+        if (result != AMG_OK) return result;
+    }
+
+    /* A UID is only meaningful inside one UIDVALIDITY generation. Never risk
+     * marking a different message if a mailbox was recreated while a reply
+     * compose window or saved draft was open. */
+    if (expected_uid_validity && session->uid_validity &&
+        expected_uid_validity != session->uid_validity) {
+        result = AMG_ERR_PROTOCOL;
+        amg_error_set(error, result,
+                      "IMAP UIDVALIDITY changed");
+    } else {
+        snprintf(command, sizeof(command),
+                 "UID STORE %lu +FLAGS.SILENT (\\Answered)", uid);
+        result = imap_command(session, command, NULL, error);
+    }
+    if (result != AMG_OK && error) {
+        char detail[sizeof(error->message)];
+        char qualified[sizeof(error->message)];
+        snprintf(detail, sizeof(detail), "%s", error->message);
+        snprintf(qualified, sizeof(qualified), "\\Answered: %.230s",
+                 detail[0] ? detail : "IMAP STORE failed");
+        amg_error_set(error, result, qualified);
+    }
+
+    if (restore_previous) {
+        AmgError restore_error;
+        memset(&restore_error, 0, sizeof(restore_error));
+        if (amg_imap_select(session, previous_mailbox, &restore_error) !=
+                AMG_OK &&
+            result == AMG_OK) {
+            result = restore_error.code != AMG_OK
+                ? restore_error.code : AMG_ERR_PROTOCOL;
+            if (error) *error = restore_error;
+        }
+    }
+    return result;
+}
+
 static int move_with_uid_move(AmgImapSession *session, unsigned long uid,
                               const char *destination_mailbox,
                               AmgError *error)

@@ -659,6 +659,45 @@ void cleanup_draft_edit_files(DraftEditData *seed)
     seed->attachment_count = 0U;
 }
 
+static void restore_draft_reply_source(const AmgMailHeaders *headers,
+                                       DraftEditData *seed)
+{
+    const char *uid_text;
+    const char *uid_validity_text;
+    const char *mailbox_wire;
+    char *end = NULL;
+    char *validity_end = NULL;
+    unsigned long uid;
+    unsigned long uid_validity;
+    AmgBuffer mailbox_utf8;
+
+    if (!headers || !seed) return;
+    uid_text = amg_mail_header_get(headers, AMG_MAIL_REPLY_UID_HEADER);
+    uid_validity_text = amg_mail_header_get(
+        headers, AMG_MAIL_REPLY_UIDVALIDITY_HEADER);
+    mailbox_wire = amg_mail_header_get(headers,
+                                       AMG_MAIL_REPLY_MAILBOX_HEADER);
+    if (!uid_text || !*uid_text || !uid_validity_text ||
+        !*uid_validity_text || !mailbox_wire || !*mailbox_wire)
+        return;
+
+    uid = strtoul(uid_text, &end, 10);
+    uid_validity = strtoul(uid_validity_text, &validity_end, 10);
+    if (!uid || !end || *end != 0 || !uid_validity ||
+        !validity_end || *validity_end != 0) return;
+
+    amg_buffer_init(&mailbox_utf8);
+    if (amg_modified_utf7_decode(mailbox_wire, &mailbox_utf8) == AMG_OK &&
+        amg_buffer_terminate(&mailbox_utf8) == AMG_OK &&
+        mailbox_utf8.length < sizeof(seed->reply_source_mailbox_utf8)) {
+        memcpy(seed->reply_source_mailbox_utf8, mailbox_utf8.data,
+               mailbox_utf8.length + 1U);
+        seed->reply_source_uid = uid;
+        seed->reply_source_uid_validity = uid_validity;
+    }
+    amg_buffer_free(&mailbox_utf8);
+}
+
 int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
                                  size_t payload_length, unsigned long uid,
                                  const char *mailbox_utf8,
@@ -713,6 +752,7 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
     snprintf(seed->references_utf8, sizeof(seed->references_utf8), "%s",
              amg_mail_header_get(&headers, "References")
                  ? amg_mail_header_get(&headers, "References") : "");
+    restore_draft_reply_source(&headers, seed);
 
     result = amg_mime_extract_text((const char *)record.literal,
                                    record.literal_length, &body_utf8, error);
@@ -1600,6 +1640,21 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
     }
     draft.attachments = inputs;
     draft.attachment_count = attachment_count;
+    draft.reply_source_uid = 0UL;
+    draft.reply_source_uid_validity = 0UL;
+    draft.reply_source_mailbox = NULL;
+    if (mode == COMPOSE_MODE_REPLY && gui->reply_source_uid &&
+        gui->reply_source_mailbox_utf8[0]) {
+        draft.reply_source_uid = gui->reply_source_uid;
+        draft.reply_source_uid_validity = gui->reply_source_uid_validity;
+        draft.reply_source_mailbox = gui->reply_source_mailbox_utf8;
+    } else if (mode == COMPOSE_MODE_EDIT_DRAFT && seed &&
+               seed->reply_source_uid &&
+               seed->reply_source_mailbox_utf8[0]) {
+        draft.reply_source_uid = seed->reply_source_uid;
+        draft.reply_source_uid_validity = seed->reply_source_uid_validity;
+        draft.reply_source_mailbox = seed->reply_source_mailbox_utf8;
+    }
 
     if (!amg_network_is_running(gui->network)) {
         result = amg_network_start(gui->network, gui->account, error);
@@ -2053,6 +2108,19 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     gui->compose_window = window;
     WindowToFront(window);
     ActivateWindow(window);
+
+    /* Replies (including Reply All) and forwards are normally opened so the
+     * user can immediately type above the quoted/forwarded text.  Put both
+     * the keyboard focus and insertion cursor into the message editor instead
+     * of requiring an extra mouse click. */
+    if (reply_mode || forward_mode) {
+        SetGadgetAttrs(body_gadget, window, NULL,
+                       GA_TEXTEDITOR_CursorX, 0UL,
+                       GA_TEXTEDITOR_CursorY, 0UL,
+                       TAG_DONE);
+        ActivateGadget(body_gadget, window, NULL);
+    }
+
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
     if (attachment_count) {
         rebuild_attachment_list(attachments_gadget, window, &attachment_list,
