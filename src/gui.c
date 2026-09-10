@@ -659,16 +659,6 @@ static void load_active_account_runtime(AmgGui *gui)
     gui->network_reconfigure_pending = runtime->network_reconfigure_pending;
 }
 
-static int account_tab_has_unread(const AmgGui *gui, size_t account_index)
-{
-    const GuiAccountRuntime *runtime;
-    if (!gui || account_index >= AMG_MAX_ACCOUNTS) return 0;
-    if (account_index == gui->active_account)
-        return gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL;
-    runtime = &gui->account_runtime[account_index];
-    return runtime->inbox_unseen_known && runtime->inbox_unseen_count > 0UL;
-}
-
 void gui_reload_account_states(AmgGui *gui)
 {
     size_t index, selected;
@@ -729,9 +719,13 @@ void gui_rebuild_account_tabs(AmgGui *gui)
             TNA_Text,
                 (ULONG)(uintptr_t)gui->account_tab_labels[visible],
             TNA_Number, (ULONG)visible,
-            account_tab_has_unread(gui, index) ? TNA_TextPen : TAG_IGNORE,
-                account_tab_has_unread(gui, index)
-                    ? (ULONG)gui->banner_pens[1] : 0UL,
+            ((index == gui->active_account
+                  ? (gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL)
+                  : (gui->account_runtime[index].inbox_unseen_known &&
+                     gui->account_runtime[index].inbox_unseen_count > 0UL)) &&
+                 gui->screen && gui->account_tab_unread_pen >= 0L)
+                ? TNA_TextPen : TAG_IGNORE,
+            (ULONG)gui->account_tab_unread_pen,
             TAG_DONE);
         if (node) AddTail(&gui->account_tabs_list, node);
         ++visible;
@@ -862,6 +856,7 @@ AmgGui *amg_gui_create(AmgAccountSet *accounts, AmgError *error)
     gui->account = &accounts->accounts[gui->active_account];
     gui->notification_sound_signal_bit = -1;
     gui->preview_url_signal_bit = -1;
+    gui->account_tab_unread_pen = -1L;
     gui_state_set_mail_status_active();
     gui_reload_account_states(gui);
     NewList(&gui->system_labels_list);
@@ -923,6 +918,10 @@ void amg_gui_destroy(AmgGui *gui)
             ReleasePen(gui->screen->ViewPort.ColorMap, gui->update_pen);
         if (gui->unread_pen_owned && gui->unread_pen >= 0)
             ReleasePen(gui->screen->ViewPort.ColorMap, gui->unread_pen);
+        if (gui->account_tab_unread_pen_owned &&
+            gui->account_tab_unread_pen >= 0)
+            ReleasePen(gui->screen->ViewPort.ColorMap,
+                       gui->account_tab_unread_pen);
         for (i = 0; i < BANNER_COLOR_COUNT; ++i) {
             if (gui->banner_pen_owned[i] && gui->banner_pens[i] >= 0)
                 ReleasePen(gui->screen->ViewPort.ColorMap,

@@ -7,4 +7,8 @@ void amg_i18n_cleanup(void);
 const char *amg_tr(long string_id, const char *english_fallback);
 int amg_tr_snprintf(char *output, size_t capacity,
                     long string_id, const char *english_format, ...);
+/* Returns the current Amiga locale offset in minutes west of GMT.
+ * East-of-GMT locations therefore use negative values, matching
+ * struct Locale::loc_GMTOffset. */
+int amg_locale_gmt_offset_minutes(long *minutes_west);
 #endif

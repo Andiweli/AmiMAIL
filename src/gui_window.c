@@ -423,6 +423,26 @@ static void prepare_unread_pen(AmgGui *gui)
     gui->unread_pen = pen >= 0 ? pen : (LONG)gui->screen->DetailPen;
 }
 
+static void prepare_account_tab_unread_pen(AmgGui *gui)
+{
+    LONG pen;
+    if (!gui || !gui->screen) return;
+    /* Match the red used by the AmiMAIL envelope while still asking the
+     * current screen's ColorMap for the closest available pen. */
+    pen = ObtainBestPenA(
+        gui->screen->ViewPort.ColorMap,
+        0xd9d9d9d9UL, 0x34343434UL, 0x35353535UL, NULL);
+    if (pen >= 0) {
+        gui->account_tab_unread_pen = pen;
+        gui->account_tab_unread_pen_owned = 1U;
+        return;
+    }
+    pen = FindColor(gui->screen->ViewPort.ColorMap,
+                    0xd9d9d9d9UL, 0x34343434UL, 0x35353535UL, -1L);
+    gui->account_tab_unread_pen =
+        pen >= 0 ? pen : (LONG)gui->screen->DetailPen;
+}
+
 static void prepare_text_pen(AmgGui *gui)
 {
     struct DrawInfo *draw_info;
@@ -772,8 +792,12 @@ int create_window(AmgGui *gui, AmgError *error)
     prepare_banner_pens(gui);
     prepare_app_header_pens(gui);
     prepare_unread_pen(gui);
+    prepare_account_tab_unread_pen(gui);
     prepare_text_pen(gui);
     prepare_update_pen(gui);
+    /* The first tab list is built before a screen is locked. Rebuild it now
+     * so unread accounts can use the screen-specific red text pen. */
+    gui_rebuild_account_tabs(gui);
     init_preview_url_hook(gui);
     init_label_tree_render_hook(gui);
     init_compact_list_render_hooks(gui);

@@ -317,6 +317,7 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
     AmgImapFetchRecord record;
     AmgMailHeaders headers;
     AmgBuffer body, preview, attachments;
+    char date_local[160];
     size_t position = 0;
     int result;
     result = amg_imap_fetch_record_next(payload, payload_length,
@@ -339,9 +340,12 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
     if (result == AMG_OK)
         result = append_preview_header(
             &preview, T(MSG_TO, "To: "), amg_mail_header_get(&headers, "To"));
-    if (result == AMG_OK)
+    if (result == AMG_OK) {
+        format_mail_date_local(amg_mail_header_get(&headers, "Date"),
+                               date_local, sizeof(date_local));
         result = append_preview_header(
-            &preview, T(MSG_DATE, "Date: "), amg_mail_header_get(&headers, "Date"));
+            &preview, T(MSG_DATE, "Date: "), date_local);
+    }
     if (result == AMG_OK)
         result = append_preview_header(
             &preview, T(MSG_SUBJECT, "Subject: "), amg_mail_header_get(&headers, "Subject"));

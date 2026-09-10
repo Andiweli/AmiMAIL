@@ -207,6 +207,8 @@ struct AmgGui {
     unsigned char app_header_pen_owned[APP_HEADER_COLOR_COUNT];
     LONG unread_pen;
     unsigned char unread_pen_owned;
+    LONG account_tab_unread_pen;
+    unsigned char account_tab_unread_pen_owned;
     LONG text_pen;
     LONG update_pen;
     unsigned char update_pen_owned;
@@ -311,7 +313,6 @@ void gui_state_prepare_window(AmgGui *gui);
 void gui_state_save_window(const AmgGui *gui);
 void gui_state_set_mail_status_active(void);
 void gui_state_set_mail_status_inactive(void);
-void gui_state_sync_mail_status(AmgGui *gui);
 void gui_state_set_inbox_unseen(AmgGui *gui, unsigned long count);
 void gui_state_adjust_inbox_unseen(AmgGui *gui, long delta);
 void gui_state_load_inbox_notification(AmgGui *gui);
@@ -402,6 +403,7 @@ size_t message_uid_stats(const unsigned char *payload, size_t length,
                          int *parse_error);
 size_t message_unseen_count_from_payload(const unsigned char *payload,
                                          size_t length, int *parse_error);
+void format_mail_date_local(const char *header, char *local, size_t capacity);
 size_t update_messages_from_payload(AmgGui *gui,
                                     const unsigned char *payload,
                                     size_t length, int *parse_error);

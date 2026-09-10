@@ -1790,8 +1790,6 @@ void gui_process_background_network(AmgGui *gui, size_t account_index)
                     runtime->inbox_uid_validity != uid_validity;
                 int parse_error = 0;
                 int unseen_error = 0;
-                int was_unread = runtime->inbox_unseen_known &&
-                    runtime->inbox_unseen_count > 0UL;
                 size_t unseen_count = message_unseen_count_from_payload(
                     event.payload, event.payload_length, &unseen_error);
                 size_t new_count = message_uid_stats(
@@ -1813,14 +1811,26 @@ void gui_process_background_network(AmgGui *gui, size_t account_index)
                         runtime->inbox_uid_validity = uid_validity;
                     runtime->inbox_baseline_ready = 1;
                     if (unseen_error >= 0) {
+                        int was_unread = runtime->inbox_unseen_known &&
+                                         runtime->inbox_unseen_count > 0UL;
                         int is_unread;
-                        runtime->inbox_unseen_count =
-                            (unsigned long)unseen_count;
-                        runtime->inbox_unseen_known = 1;
-                        is_unread = runtime->inbox_unseen_count > 0UL;
-                        gui_state_sync_mail_status(gui);
+                        if (!had_baseline || generation_changed ||
+                            !runtime->inbox_unseen_known) {
+                            runtime->inbox_unseen_count =
+                                (unsigned long)unseen_count;
+                            runtime->inbox_unseen_known = 1;
+                        } else if (unseen_count > 0U) {
+                            unsigned long amount =
+                                (unsigned long)unseen_count;
+                            if (runtime->inbox_unseen_count > ~0UL - amount)
+                                runtime->inbox_unseen_count = ~0UL;
+                            else
+                                runtime->inbox_unseen_count += amount;
+                        }
+                        is_unread = runtime->inbox_unseen_known &&
+                                    runtime->inbox_unseen_count > 0UL;
                         if (was_unread != is_unread &&
-                            gui->account_tabs_gadget && gui->window)
+                            gui->account_tabs_gadget)
                             gui_rebuild_account_tabs(gui);
                     }
                     gui_state_save_account_notification(gui, account_index);

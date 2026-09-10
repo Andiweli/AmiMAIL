@@ -329,43 +329,17 @@ void gui_state_set_mail_status_inactive(void)
     mail_status_shutdown_saved = 1;
 }
 
-void gui_state_sync_mail_status(AmgGui *gui)
+static void sync_mail_status(AmgGui *gui)
 {
     const char *value;
-    size_t index;
-    int any_unseen = 0;
-
-    if (!gui || !gui->account_set) {
+    if (!gui || !gui->inbox_unseen_known) {
         gui_state_set_mail_status_active();
         return;
     }
-
-    /* AmiMAILStatus is a process-wide status indicator, so it must reflect
-     * all enabled accounts rather than only the account currently shown in
-     * the main window.  The active account lives in the legacy gui fields;
-     * background accounts keep their counters in account_runtime[]. */
-    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
-        const AmgAccount *account = &gui->account_set->accounts[index];
-        if (!account->enabled) continue;
-
-        if (index == gui->active_account) {
-            if (gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL) {
-                any_unseen = 1;
-                break;
-            }
-        } else {
-            const GuiAccountRuntime *runtime = &gui->account_runtime[index];
-            if (runtime->inbox_unseen_known &&
-                runtime->inbox_unseen_count > 0UL) {
-                any_unseen = 1;
-                break;
-            }
-        }
-    }
-
-    value = any_unseen
-        ? T(MSG_NEW_MAIL_S_IN_INBOX, "New mail(s) in Inbox")
-        : T(MSG_NO_NEW_MAIL, "No new Mail");
+    if (gui->inbox_unseen_count > 0UL)
+        value = T(MSG_NEW_MAIL_S_IN_INBOX, "New mail(s) in Inbox");
+    else
+        value = T(MSG_NO_NEW_MAIL, "No new Mail");
     set_mail_status_value(value);
 }
 
@@ -376,9 +350,9 @@ void gui_state_set_inbox_unseen(AmgGui *gui, unsigned long count)
     was_unread = gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL;
     gui->inbox_unseen_count = count;
     gui->inbox_unseen_known = 1;
-    is_unread = gui->inbox_unseen_count > 0UL;
-    gui_state_sync_mail_status(gui);
-    if (was_unread != is_unread && gui->account_tabs_gadget && gui->window)
+    is_unread = count > 0UL;
+    sync_mail_status(gui);
+    if (was_unread != is_unread && gui->account_tabs_gadget)
         gui_rebuild_account_tabs(gui);
 }
 
@@ -407,8 +381,8 @@ void gui_state_adjust_inbox_unseen(AmgGui *gui, long delta)
             gui->inbox_unseen_count -= amount;
     }
     is_unread = gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL;
-    gui_state_sync_mail_status(gui);
-    if (was_unread != is_unread && gui->account_tabs_gadget && gui->window)
+    sync_mail_status(gui);
+    if (was_unread != is_unread && gui->account_tabs_gadget)
         gui_rebuild_account_tabs(gui);
 }
 

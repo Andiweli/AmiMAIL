@@ -335,24 +335,162 @@ static unsigned mail_month_number(const char month[4])
     return 0;
 }
 
-static void format_mail_date(const char *header, char *local, size_t capacity)
+static int mail_leap_year(unsigned long year)
+{
+    return (year % 4UL == 0UL && year % 100UL != 0UL) ||
+           year % 400UL == 0UL;
+}
+
+static unsigned mail_days_in_month(unsigned long year, unsigned month)
+{
+    static const unsigned char days[] = {
+        31U, 28U, 31U, 30U, 31U, 30U,
+        31U, 31U, 30U, 31U, 30U, 31U
+    };
+    if (month < 1U || month > 12U) return 0U;
+    if (month == 2U && mail_leap_year(year)) return 29U;
+    return days[month - 1U];
+}
+
+static void mail_date_previous_day(unsigned long *year, unsigned *month,
+                                   unsigned long *day)
+{
+    if (!year || !month || !day || !*year || *month < 1U || *month > 12U)
+        return;
+    if (*day > 1UL) {
+        --*day;
+        return;
+    }
+    if (*month > 1U)
+        --*month;
+    else {
+        *month = 12U;
+        if (*year > 1UL) --*year;
+    }
+    *day = (unsigned long)mail_days_in_month(*year, *month);
+}
+
+static void mail_date_next_day(unsigned long *year, unsigned *month,
+                               unsigned long *day)
+{
+    unsigned days;
+    if (!year || !month || !day || !*year || *month < 1U || *month > 12U)
+        return;
+    days = mail_days_in_month(*year, *month);
+    if (*day < (unsigned long)days) {
+        ++*day;
+        return;
+    }
+    *day = 1UL;
+    if (*month < 12U)
+        ++*month;
+    else {
+        *month = 1U;
+        ++*year;
+    }
+}
+
+/* RFC 5322 numeric zones use the conventional sign: +0200 means two hours
+ * east of UTC, -0700 means seven hours west of UTC. */
+static int mail_zone_minutes_east(const char *text, long *minutes_east)
+{
+    const char *p;
+    int sign;
+    unsigned hours, minutes;
+    if (!text || !minutes_east) return 0;
+    while (*text == ' ' || *text == '\t') ++text;
+
+    if (text[0] == '+' || text[0] == '-') {
+        sign = text[0] == '+' ? 1 : -1;
+        p = text + 1;
+        if (p[0] < '0' || p[0] > '9' ||
+            p[1] < '0' || p[1] > '9')
+            return 0;
+        hours = (unsigned)(p[0] - '0') * 10U +
+                (unsigned)(p[1] - '0');
+        p += 2;
+        if (*p == ':') ++p;
+        if (p[0] < '0' || p[0] > '9' ||
+            p[1] < '0' || p[1] > '9')
+            return 0;
+        minutes = (unsigned)(p[0] - '0') * 10U +
+                  (unsigned)(p[1] - '0');
+        if (hours > 23U || minutes > 59U) return 0;
+        *minutes_east = sign * (long)(hours * 60U + minutes);
+        return 1;
+    }
+
+    if ((!strncmp(text, "GMT", 3U) &&
+         (text[3] == 0 || text[3] == ' ' || text[3] == '\t' ||
+          text[3] == '(')) ||
+        (!strncmp(text, "UTC", 3U) &&
+         (text[3] == 0 || text[3] == ' ' || text[3] == '\t' ||
+          text[3] == '(')) ||
+        (!strncmp(text, "UT", 2U) &&
+         (text[2] == 0 || text[2] == ' ' || text[2] == '\t' ||
+          text[2] == '(')) ||
+        (text[0] == 'Z' &&
+         (text[1] == 0 || text[1] == ' ' || text[1] == '\t' ||
+          text[1] == '('))) {
+        *minutes_east = 0L;
+        return 1;
+    }
+    return 0;
+}
+
+void format_mail_date_local(const char *header, char *local, size_t capacity)
 {
     const char *date = header;
     const char *comma;
+    const char *zone;
     char month_text[4];
     unsigned long day, year, hour, minute;
     unsigned month;
+    int consumed = 0;
+
     if (!local || !capacity) return;
     local[0] = 0;
     if (!date || !*date) return;
     comma = strchr(date, ',');
     if (comma) date = comma + 1;
     while (*date == ' ' || *date == '\t') ++date;
-    if (sscanf(date, "%lu %3s %lu %lu:%lu",
-               &day, month_text, &year, &hour, &minute) == 5) {
+
+    if (sscanf(date, "%lu %3s %lu %lu:%lu%n",
+               &day, month_text, &year, &hour, &minute, &consumed) == 5) {
         month = mail_month_number(month_text);
-        if (month && day >= 1UL && day <= 31UL &&
+        if (month && day >= 1UL &&
+            day <= (unsigned long)mail_days_in_month(year, month) &&
             hour <= 23UL && minute <= 59UL) {
+            long source_minutes_east;
+            long local_minutes_west;
+            long minute_of_day = (long)(hour * 60UL + minute);
+
+            /* %n stops after HH:MM. Skip an optional :SS before the zone. */
+            zone = date + consumed;
+            if (*zone == ':') {
+                ++zone;
+                while (*zone >= '0' && *zone <= '9') ++zone;
+            }
+            while (*zone == ' ' || *zone == '\t') ++zone;
+
+            if (mail_zone_minutes_east(zone, &source_minutes_east) &&
+                amg_locale_gmt_offset_minutes(&local_minutes_west)) {
+                /* struct Locale uses the opposite sign convention:
+                 * positive is west of GMT, negative is east. */
+                minute_of_day -= source_minutes_east;
+                minute_of_day -= local_minutes_west;
+                while (minute_of_day < 0L) {
+                    minute_of_day += 24L * 60L;
+                    mail_date_previous_day(&year, &month, &day);
+                }
+                while (minute_of_day >= 24L * 60L) {
+                    minute_of_day -= 24L * 60L;
+                    mail_date_next_day(&year, &month, &day);
+                }
+                hour = (unsigned long)(minute_of_day / 60L);
+                minute = (unsigned long)(minute_of_day % 60L);
+            }
+
             snprintf(local, capacity, "%04lu-%02u-%02lu %02lu:%02lu",
                      year, month, day, hour, minute);
             return;
@@ -444,7 +582,7 @@ size_t update_messages_from_payload(AmgGui *gui,
         address_name_only(from, sizeof(from));
         header_to_local(subject_header, T(MSG_NO_SUBJECT, "(No subject)"),
                         subject, sizeof(subject));
-        format_mail_date(date_header, date, sizeof(date));
+        format_mail_date_local(date_header, date, sizeof(date));
         node = message_node(gui, from, subject, date,
                             record.rfc822_size, record.uid,
                             record.seen, record.flagged,
@@ -452,7 +590,7 @@ size_t update_messages_from_payload(AmgGui *gui,
         if (node) {
             /* Die Anzeige soll unabhaengig von der FETCH-Reihenfolge immer
              * mit der neuesten Datumsspalte beginnen. Das ISO-Format aus
-             * format_mail_date() ist lexikographisch chronologisch. */
+             * format_mail_date_local() ist lexikographisch chronologisch. */
             insert_message_node_date_desc(
                 &gui->messages_list, node, date, record.uid);
             ++count;
@@ -561,7 +699,7 @@ size_t update_messages_from_payload(AmgGui *gui,
         header_to_local(subject_header,
                         T(MSG_NO_SUBJECT, "(No subject)"),
                         subject, sizeof(subject));
-        format_mail_date(date_header, date, sizeof(date));
+        format_mail_date_local(date_header, date, sizeof(date));
         node = message_node(gui, from, subject, date,
                             record.rfc822_size, record.uid,
                             record.seen, record.flagged,
