@@ -20,7 +20,7 @@ AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a
 ## 📧 Features
 
 - Native **AmigaOS 3.2+ / ReAction** interface
-- Support for up to **three independent IMAP/SMTP accounts** with native account tabs in the main window and Account settings
+- Support for up to **five independent IMAP/SMTP accounts** with native account tabs in the main window and Account settings
 - Per-account server settings, credentials, notification sounds, signatures and encrypted startup/unlock state
 - Secure connections using **direct SSL/TLS or STARTTLS** through AmiSSL
 - Automatic detection of standard IMAP folders such as **Inbox, Sent, Drafts, Spam/Junk and Trash**, with manual folder assignment when required
