@@ -1,4 +1,4 @@
-# ![Logo](https://github.com/Andiweli/AmiMAIL/blob/main/images/amimail-icon.png) AmiMAIL
+# ![Logo](https://github.com/Andiweli/AmiMAIL/blob/main/_Images/mail-icon.png) AmiMAIL
 
 **A native Mail client for AmigaOS 3.2+ — built with ReAction, IMAP, SMTP and AmiSSL.**
 
@@ -14,7 +14,8 @@
 
 AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a classic ReAction interface while connecting directly to any **IMAP and SMTP over AmiSSL/TLS**. Messages remain on the server and are accessed live through IMAP. AmiMAIL does **not** maintain a local offline mail database.
 
-![AmiMAIL App screen with configuration requester](https://github.com/Andiweli/AmiMAIL/blob/main/images/amimail-app.png)
+![AmiMAIL App screen](https://github.com/Andiweli/AmiMAIL/blob/main/_Images/amimail1.jpg)
+![AmiMAIL App screen with configuration requester](https://github.com/Andiweli/AmiMAIL/blob/main/_Images/amimail2.jpg)
 
 ## 📧 Features
 
