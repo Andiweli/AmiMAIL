@@ -1,4 +1,4 @@
-# ![Logo](https://github.com/Andiweli/AmiMAIL/blob/main/images/amimail-icon.png) AmiMAIL
+# ![Logo](https://github.com/Andiweli/AmiMAIL/blob/main/_Images/mail-icon.png) AmiMAIL
 
 **A native Mail client for AmigaOS 3.2+ — built with ReAction, IMAP, SMTP and AmiSSL.**
 
@@ -14,30 +14,33 @@
 
 AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a classic ReAction interface while connecting directly to any **IMAP and SMTP over AmiSSL/TLS**. Messages remain on the server and are accessed live through IMAP. AmiMAIL does **not** maintain a local offline mail database.
 
-![AmiMAIL App screen with configuration requester](https://github.com/Andiweli/AmiMAIL/blob/main/images/amimail-app.png)
+![AmiMAIL App screen](https://github.com/Andiweli/AmiMAIL/blob/main/_Images/amimail1.jpg)
+![AmiMAIL App screen with configuration requester](https://github.com/Andiweli/AmiMAIL/blob/main/_Images/amimail2.jpg)
 
 ## 📧 Features
 
 - Native **AmigaOS 3.2+ / ReAction** interface
-- **Single-account IMAP/SMTP client** with freely configurable server names, ports and usernames
+- Support for up to **five independent IMAP/SMTP accounts** with native account tabs in the main window and Account settings
+- Per-account server settings, credentials, notification sounds, signatures and encrypted startup/unlock state
 - Secure connections using **direct SSL/TLS or STARTTLS** through AmiSSL
 - Automatic detection of standard IMAP folders such as **Inbox, Sent, Drafts, Spam/Junk and Trash**, with manual folder assignment when required
 - Additional and nested IMAP folders displayed as an expandable folder tree with remembered expand/collapse state
-- Optional automatic Inbox fetch when AmiMAIL starts
-- Optional automatic Inbox check every 5 minutes, including while AmiMAIL is iconified
-- Compose new messages and reply to received mail
+- Independent background Inbox checks for each enabled account, including optional fetch at startup and periodic checks while AmiMAIL is iconified
+- Compose new messages, **Reply, Reply All and Forward**, with RFC-compliant sender display names
+- Per-account **signature management** with automatic insertion into new messages, replies and forwards
 - Move and delete messages, empty Trash and Spam, and mark messages as read/unread or flagged/unflagged
 - Multi-selection for supported message operations
 - Create, save, reopen, edit and send **IMAP drafts**
-- MIME messages with Base64, Quoted-Printable and RFC 2047 handling
+- Improved **HTML-to-text conversion** for HTML-only or malformed messages, while preferring clean plain-text alternatives when available
+- MIME messages with Base64, Quoted-Printable, RFC 2047 and extended HTML-entity handling
 - Send up to **8 attachments with a combined maximum of 10 MB**
-- Save attachments from received messages
+- Preserve attachments when forwarding messages and save attachments from received messages
 - Sort messages by sender, subject, date or message size
 - Clickable URLs and **`mailto:` integration with single-instance hand-off**
 - Local **Contacts / Address Book** with add, edit and multi-selection delete
 - Import contacts from **CSV and VCF/vCard**, including duplicate detection
 - Select one or multiple contacts for **To, CC and BCC** while composing mail
-- Optional configurable **new-mail notification sound** using AmigaOS DataTypes
+- Optional configurable **new-mail notification sound** per account using AmigaOS DataTypes
 - Native **ReAction Iconify** support with background mail checks and an embedded Workbench AppIcon
 - Window position and size are restored between program starts
 - Built-in asynchronous **GitHub update check and release download to `RAM:`**
@@ -102,7 +105,7 @@ If you enjoy this project and would like to support my work, you can make a smal
 
 Your support helps me spend more time maintaining existing projects, fixing bugs, improving compatibility, and working on new features.
 
-[![Support via PayPal](https://img.shields.io/badge/Support%20via-PayPal-0070BA?logo=paypal\&logoColor=white)](https://paypal.me/andiweli)
+[![Support via PayPal](https://img.shields.io/badge/Support%20via-PayPal-0070BA?logo=paypal&logoColor=white)](https://paypal.me/andiweli)
 
 Thank you for your support!
 
