@@ -1,4 +1,4 @@
-## version $VER: AmiMAIL.catalog 1.0 (22.08.2026)
+## version $VER: AmiMAIL.catalog 5.0 (09.09.2026)
 ## language deutsch
 ## codeset 0
 
@@ -169,8 +169,9 @@ Anlagen d\374rfen zusammen h\366chstens 10 MB gro\337 sein.
 MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8
 Dateianlagen d\303\274rfen zusammen h\303\266chstens 10 MB gro\303\237 sein.
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB
-Anlagen sind zusammen gr\366\337er als 10 MB.
+Anlagen sind zusammen gr\303\266\303\237er als 10 MB.
 
 MSG_ATTACHMENT_BIN
 Anhang.bin
@@ -319,11 +320,13 @@ Entw\374rfe:
 MSG_DRAFTS_CAN_ONLY_BE_EDITED_IN_THE_DRAFTS
 Entw\374rfe k\366nnen nur im Ordner Entw\374rfe bearbeitet werden.
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_DRAFT_ATTACHMENTS_TOTAL_MORE_THAN_10_MB
-Entwurfsanlagen sind zusammen gr\366\337er als 10 MB.
+Entwurfsanlagen sind zusammen gr\303\266\303\237er als 10 MB.
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_DRAFT_BODY_IS_TOO_LARGE_TO_EDIT
-Entwurfstext ist zu gro\337 zum Bearbeiten.
+Entwurfstext ist zu gro\303\237 zum Bearbeiten.
 
 MSG_DRAFT_COULD_NOT_BE_PARSED
 Entwurf konnte nicht ausgewertet werden.
@@ -921,8 +924,9 @@ Bitte mindestens ein Feld ausf\374llen.
 MSG_PLEASE_SELECT_AN_ATTACHMENT_FIRST
 Bitte zuerst eine Anlage ausw\344hlen.
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_PLEASE_SELECT_AN_IFF_8SVX_WAV_SOUND_FILE
-Bitte eine IFF/8SVX/WAV-Tondatei ausw\344hlen.
+Bitte eine IFF/8SVX/WAV-Tondatei ausw\303\244hlen.
 
 MSG_PLEASE_SELECT_AT_LEAST_ONE_CONTACT
 Bitte mindestens einen Kontakt ausw\344hlen.
@@ -1236,11 +1240,13 @@ TCP-Lesefehler (errno %d).
 MSG_TCP_WRITE_ERROR_ERRNO_VALUE
 TCP-Schreibfehler (errno %d).
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_TEMPORARY_ATTACHMENT_COULD_NOT_BE_CREATED
-Tempor\344re Anlage konnte nicht angelegt werden.
+Tempor\303\244re Anlage konnte nicht angelegt werden.
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_TEMPORARY_ATTACHMENT_COULD_NOT_BE_WRITTEN
-Tempor\344re Anlage konnte nicht geschrieben werden.
+Tempor\303\244re Anlage konnte nicht geschrieben werden.
 
 ; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_THE_ACCOUNT_IS_NOT_YET_UNLOCKED_FOR_THIS
@@ -1255,8 +1261,9 @@ Der Entwurfsordner ist nicht bekannt.
 MSG_THE_DRAFTS_FOLDER_WAS_NOT_FOUND
 Der Entwurfsordner wurde nicht gefunden.
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_THE_DRAFT_CONTAINS_MORE_THAN_8_ATTACHMENTS
-Der Entwurf enth\344lt mehr als 8 Anlagen.
+Der Entwurf enth\303\244lt mehr als 8 Anlagen.
 
 MSG_THE_FETCH_PERIOD_MUST_BE_BETWEEN_1_AND
 Der Abruf-Zeitraum muss zwischen 1 und 3650 Tagen liegen.
@@ -1297,8 +1304,9 @@ Der IMAP-Server meldet PREAUTH bereits vor STARTTLS. Bitte direktes TLS verwende
 MSG_THE_IMAP_SERVER_SENT_NO_DATA_AFTER_THE
 Der IMAP-Server hat nach dem Verbindungsaufbau keine Daten gesendet.
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_THE_MESSAGE_CONTAINS_MORE_THAN_8_ATTACHMENTS
-Die Nachricht enth\344lt mehr als 8 Anlagen.
+Die Nachricht enth\303\244lt mehr als 8 Anlagen.
 
 MSG_THE_MESSAGE_IS_ALREADY_IN_TRASH
 Die Nachricht liegt bereits im Papierkorb.
@@ -1314,8 +1322,9 @@ Die gew\303\244hlte Anmeldemethode wird nicht unterst\303\274tzt.
 MSG_THE_SELECTED_MESSAGE_CONTAINS_NO_MAIL_DATA_BLOCK
 Die ausgew\303\244hlte Nachricht enth\303\244lt keinen Mail-Datenblock.
 
+; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_THE_SELECTED_SOUND_FILE_WAS_NOT_FOUND
-Die gew\344hlte Tondatei wurde nicht gefunden.
+Die gew\303\244hlte Tondatei wurde nicht gefunden.
 
 MSG_THE_SENT_FOLDER_WAS_NOT_FOUND
 Der Gesendet-Ordner wurde nicht gefunden.
@@ -1516,3 +1525,83 @@ Spam
 
 MSG_SYSTEM_TRASH
 Papierkorb
+
+MSG_ACCOUNT
+Konto
+
+MSG_ACCOUNT_1
+Konto 1
+
+MSG_ACCOUNT_2
+Konto 2
+
+MSG_ACCOUNT_3
+Konto 3
+
+MSG_ACCOUNT_VALUE_DETAIL
+Konto %lu: %s
+
+MSG_ACTIVE_ACCOUNT
+Aktives Konto:
+
+MSG_ACTIVATE_ACCOUNT
+Account aktivieren
+
+MSG_CONFIGURE_THIS_ACCOUNT_THEN_SAVE
+Dieses Konto konfigurieren und dann speichern.
+
+MSG_AT_LEAST_ONE_ACCOUNT_MUST_BE_ACTIVE
+Mindestens ein Konto muss aktiv sein.
+
+; Internal UTF-8 path: this text is stored in AmgError and converted before display.
+MSG_ACCOUNT_VALUE_UNLOCK_BEFORE_CHANGING_SETTINGS
+Konto %lu: Konto vor dem \303\204ndern der Einstellungen entsperren.
+
+MSG_MAIL_ACCOUNTS_SAVED
+Mailkonten gespeichert.
+
+MSG_CLOSE_THE_COMPOSE_WINDOW_BEFORE_SWITCHING_ACCOUNTS
+Verfassen-Fenster vor dem Kontowechsel schlie\337en.
+
+MSG_LOADING_MAIL_FOLDERS
+Mailordner werden geladen...
+
+MSG_ACCOUNT_VALUE
+Konto %lu
+
+MSG_ALLOW_CHANGES_WITHOUT_MASTER_PASSWORD
+\304nderungen ohne Master-Passwort zulassen
+
+MSG_ACCOUNT_UNLOCKED_FUTURE_STARTS_ARE_AUTOMATIC
+Konto entsperrt; zuk\374nftige Starts erfolgen automatisch.
+
+MSG_UNLOCK_ONCE_FUTURE_STARTS_ARE_AUTOMATIC
+Einmal entsperren; zuk\374nftige Starts erfolgen automatisch.
+
+MSG_ACCOUNT_SAVED_STARTUP_KEY_COULD_NOT_BE_STORED
+Konto gespeichert; automatischer Startschl\374ssel konnte nicht gespeichert werden.
+
+MSG_ACCOUNT_NAME
+Accountname:
+
+MSG_SENDER_NAME
+Absendername:
+
+
+MSG_COPY
+Kopieren
+
+MSG_CUT
+Ausschneiden
+
+MSG_PASTE
+Einf\374gen
+
+MSG_SELECT_ALL
+Alles ausw\344hlen
+
+MSG_ICON_BY_MARTIN_MASON_MERZ
+Icon by Martin 'Mason' Merz
+
+MSG_THANKS_TO_ALL_TESTERS_WHO_HELP_TO_CONTINUOUSLY_IMPROVE_AMIMAIL
+Danke an alle Tester, die helfen, AmiMAIL laufend zu verbessern.

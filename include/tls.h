@@ -7,6 +7,7 @@ typedef struct AmgTlsConnection AmgTlsConnection;
 
 int amg_tls_global_init(AmgError *error);
 void amg_tls_global_cleanup(void);
+void amg_tls_set_cancel_flag(volatile int *cancel_flag);
 AmgTlsConnection *amg_tls_connect_plain(const char *host, unsigned short port,
                                         unsigned long timeout_seconds,
                                         AmgError *error);

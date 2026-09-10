@@ -42,7 +42,7 @@
 #define GUI_RAWKEY_RETURN 0x44UL
 #define GUI_RAWKEY_ESCAPE 0x45UL
 #define T(id, en) amg_tr((id), (en))
-enum AccountGadgetId { GID_ACCOUNT_CONFIG_TABS=100,GID_ACCOUNT_ADD,GID_ACCOUNT_DELETE,GID_ACCOUNT_MOVE_LEFT,GID_ACCOUNT_MOVE_RIGHT,GID_ACCOUNT_ENABLED,GID_ACCOUNT_ACCOUNT_NAME,GID_ACCOUNT_NAME,GID_ACCOUNT_EMAIL,GID_ACCOUNT_IMAP_HOST,GID_ACCOUNT_IMAP_PORT,GID_ACCOUNT_IMAP_STARTTLS,GID_ACCOUNT_IMAP_USERNAME,GID_ACCOUNT_IMAP_PASSWORD,GID_ACCOUNT_SMTP_HOST,GID_ACCOUNT_SMTP_PORT,GID_ACCOUNT_SMTP_STARTTLS,GID_ACCOUNT_SMTP_SAME_CREDENTIALS,GID_ACCOUNT_SMTP_USERNAME,GID_ACCOUNT_SMTP_PASSWORD,GID_ACCOUNT_FOLDER_MAPPING,GID_ACCOUNT_FETCH_DAYS,GID_ACCOUNT_FETCH_ON_START,GID_ACCOUNT_PERIODIC_FETCH,GID_ACCOUNT_NOTIFICATION_SOUND,GID_ACCOUNT_NOTIFICATION_PATH,GID_ACCOUNT_NOTIFICATION_CHOOSE,GID_ACCOUNT_STATUS,GID_ACCOUNT_SAVE,GID_ACCOUNT_CANCEL };
+enum AccountGadgetId { GID_ACCOUNT_CONFIG_TABS=100,GID_ACCOUNT_ADD,GID_ACCOUNT_DELETE,GID_ACCOUNT_MOVE_LEFT,GID_ACCOUNT_MOVE_RIGHT,GID_ACCOUNT_ENABLED,GID_ACCOUNT_ACCOUNT_NAME,GID_ACCOUNT_NAME,GID_ACCOUNT_EMAIL,GID_ACCOUNT_IMAP_HOST,GID_ACCOUNT_IMAP_PORT,GID_ACCOUNT_IMAP_STARTTLS,GID_ACCOUNT_IMAP_USERNAME,GID_ACCOUNT_IMAP_PASSWORD,GID_ACCOUNT_SMTP_HOST,GID_ACCOUNT_SMTP_PORT,GID_ACCOUNT_SMTP_STARTTLS,GID_ACCOUNT_SMTP_SAME_CREDENTIALS,GID_ACCOUNT_SMTP_USERNAME,GID_ACCOUNT_SMTP_PASSWORD,GID_ACCOUNT_FOLDER_MAPPING,GID_ACCOUNT_MASTER_PASSWORD,GID_ACCOUNT_NO_MASTER_PROMPT,GID_ACCOUNT_FETCH_DAYS,GID_ACCOUNT_FETCH_ON_START,GID_ACCOUNT_PERIODIC_FETCH,GID_ACCOUNT_NOTIFICATION_SOUND,GID_ACCOUNT_NOTIFICATION_PATH,GID_ACCOUNT_NOTIFICATION_CHOOSE,GID_ACCOUNT_STATUS,GID_ACCOUNT_UNLOCK,GID_ACCOUNT_SAVE,GID_ACCOUNT_CANCEL };
 enum FolderMappingGadgetId { GID_FOLDER_SENT=140,GID_FOLDER_DRAFTS,GID_FOLDER_ALL,GID_FOLDER_SPAM,GID_FOLDER_TRASH,GID_FOLDER_SAVE_SENT,GID_FOLDER_OK,GID_FOLDER_CANCEL };
 enum ConfirmGadgetId { GID_CONFIRM_YES=300,GID_CONFIRM_NO };
 enum AboutGadgetId { GID_ABOUT_OK=400 };
@@ -84,6 +84,13 @@ static int requester_string_accept_code(UWORD code)
     return code == (UWORD)'\r';
 }
 
+static int requester_password_accept_code(UWORD code)
+{
+    /* On classic ReAction the SHK_PASSWORD hook may terminate a string
+     * gadget with Code 0 instead of '\r' when Return/Enter is pressed.
+     * TAB must never submit the requester; it remains normal tab cycling. */
+    return code == 0U || code == (UWORD)'\r';
+}
 
 static int folder_mapping_string_id(ULONG gadget_id)
 {
@@ -104,6 +111,7 @@ static int account_string_id(ULONG gadget_id)
         case GID_ACCOUNT_SMTP_PORT:
         case GID_ACCOUNT_SMTP_USERNAME:
         case GID_ACCOUNT_SMTP_PASSWORD:
+        case GID_ACCOUNT_MASTER_PASSWORD:
         case GID_ACCOUNT_FETCH_DAYS:
             return 1;
         default:
@@ -111,6 +119,14 @@ static int account_string_id(ULONG gadget_id)
     }
 }
 
+static int persistent_key_exists(size_t account_index)
+{
+    const char *path = amg_storage_persistent_key_path(account_index);
+    BPTR lock = path ? Lock((CONST_STRPTR)path, ACCESS_READ) : 0;
+    if (!lock) return 0;
+    UnLock(lock);
+    return 1;
+}
 
 static int account_file_exists(size_t account_index)
 {
@@ -173,6 +189,18 @@ static int ensure_config_drawer(AmgError *error)
     return !account->imap_password;
 }
 
+static void replace_account(AmgGui *gui, AmgAccount *replacement)
+{
+    amg_account_clear(gui->account);
+    *gui->account = *replacement;
+    replacement->imap_password = NULL;
+    replacement->smtp_password = NULL;
+    replacement->refresh_token = NULL;
+    /* The persisted Inbox UID high-water mark is account-specific.  Reload
+     * it after unlock or account replacement so the first fetch can already
+     * recognise mail that arrived while AmiMAIL was not running. */
+    gui_state_load_inbox_notification(gui);
+}
 
 static int nullable_text_equal(const char *left, const char *right)
 {
@@ -218,6 +246,8 @@ static int account_settings_equal(const AmgAccount *left,
     return account_network_settings_equal(left, right) &&
         !strcmp(left->account_name, right->account_name) &&
         left->enabled == right->enabled &&
+        left->allow_passwordless_changes ==
+            right->allow_passwordless_changes &&
         left->fetch_on_start == right->fetch_on_start &&
         left->periodic_fetch == right->periodic_fetch &&
         left->notification_sound == right->notification_sound &&
@@ -532,6 +562,207 @@ static int system_folder_mapping_dialog(AmgGui *gui,
     return accepted;
 }
 
+int unlock_account_dialog(AmgGui *gui, AmgError *error)
+{
+    Object *dialog;
+    struct Window *window;
+    struct Gadget *master_gadget;
+    struct Gadget *status_gadget;
+    ULONG signal_mask = 0;
+    ULONG unlock_width = 460UL;
+    LONG unlock_left, unlock_top;
+    int done = 0;
+    int unlocked = 0;
+    const char *account_path;
+    const char *session_key_path;
+    const char *persistent_key_path;
+
+    if (!gui || !gui->screen || !gui->window) return 0;
+    account_path = amg_storage_account_path(gui->active_account);
+    session_key_path =
+        amg_storage_session_key_path(gui->active_account);
+    persistent_key_path =
+        amg_storage_persistent_key_path(gui->active_account);
+
+    /* Keep all geometry changes before RA_OpenWindow().  On classic
+     * ReAction the password field reliably retains input focus only when this
+     * shrink-wrapped requester is not repositioned after it becomes visible. */
+    unlock_left = gui->window->LeftEdge +
+        ((LONG)gui->window->Width - (LONG)unlock_width) / 2L;
+    unlock_top = gui->window->TopEdge + ((LONG)gui->window->Height / 2L) - 40L;
+    if (unlock_left < 0L) unlock_left = 0L;
+    if (unlock_top < 0L) unlock_top = 0L;
+    if (unlock_left + (LONG)unlock_width > (LONG)gui->screen->Width)
+        unlock_left = (LONG)gui->screen->Width - (LONG)unlock_width;
+    if (unlock_left < 0L) unlock_left = 0L;
+
+    master_gadget = NULL;
+    status_gadget = NULL;
+    dialog = WindowObject,
+        WA_Title, T(MSG_AMIMAIL_UNLOCK_ACCOUNT, "AmiMail - Unlock account"),
+        WA_Left, unlock_left,
+        WA_Top, unlock_top,
+        WA_Width, unlock_width,
+        WA_MinWidth, unlock_width,
+        WA_MaxWidth, unlock_width,
+        WA_PubScreen, gui->screen,
+        WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
+                  WFLG_ACTIVATE,
+        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
+        WINDOW_ParentGroup, VGroupObject,
+            LAYOUT_SpaceOuter, TRUE,
+            LAYOUT_SpaceInner, TRUE,
+            LAYOUT_ShrinkWrap, TRUE,
+
+            LAYOUT_AddChild, static_text_label(
+                T(MSG_MASTER_PASSWORD, "Master password:")),
+            CHILD_WeightedHeight, 0,
+
+            LAYOUT_AddChild,
+                master_gadget = (struct Gadget *)StringObject,
+                    GA_ID, GID_ACCOUNT_MASTER_PASSWORD,
+                    GA_RelVerify, TRUE,
+                    GA_TabCycle, TRUE,
+                    STRINGA_MaxChars, 127,
+                    STRINGA_HookType, SHK_PASSWORD,
+                    STRINGA_TextVal, "",
+                EndObject,
+            CHILD_WeightedHeight, 0,
+
+            LAYOUT_AddChild,
+                status_gadget = (struct Gadget *)StringObject,
+                    GA_ID, GID_ACCOUNT_STATUS,
+                    GA_ReadOnly, TRUE,
+                    STRINGA_TextVal,
+                        T(MSG_UNLOCK_ONCE_FUTURE_STARTS_ARE_AUTOMATIC,
+                          "Unlock once; future starts are automatic."),
+                EndObject,
+            CHILD_WeightedHeight, 0,
+
+            LAYOUT_AddChild, HGroupObject,
+                LAYOUT_EvenSize, TRUE,
+                LAYOUT_AddChild, ButtonObject,
+                    GA_ID, GID_ACCOUNT_UNLOCK,
+                    GA_RelVerify, TRUE,
+                    GA_Text, T(MSG_UNLOCK, "_Unlock"),
+                EndObject,
+                LAYOUT_AddChild, ButtonObject,
+                    GA_ID, GID_ACCOUNT_CANCEL,
+                    GA_RelVerify, TRUE,
+                    GA_Text, T(MSG_CANCEL, "_Cancel"),
+                EndObject,
+            EndObject,
+            CHILD_WeightedHeight, 0,
+        EndObject,
+    EndWindow;
+    if (!dialog) {
+        amg_error_set(error, AMG_ERR_MEMORY,
+                      T(MSG_UNLOCK_WINDOW_COULD_NOT_BE_CREATED, "Unlock window could not be created."));
+        return 0;
+    }
+
+    window = RA_OpenWindow(dialog);
+    if (!window) {
+        DisposeObject(dialog);
+        amg_error_set(error, AMG_ERR_IO,
+                      T(MSG_UNLOCK_WINDOW_COULD_NOT_BE_OPENED, "Unlock window could not be opened."));
+        return 0;
+    }
+    /* Restore the exact focus path that was proven to work before the
+     * post-open centring regression: open -> activate password gadget.
+     * Do not MoveWindow(), delay or re-activate the window afterwards. */
+    ActivateGadget(master_gadget, window, NULL);
+    GetAttr(WINDOW_SigMask, dialog, &signal_mask);
+
+    while (!done) {
+        ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
+        if (signals & SIGBREAKF_CTRL_C) {
+            done = 1;
+            continue;
+        }
+        if (signals & signal_mask) {
+            ULONG result;
+            UWORD input_code = 0U;
+            while ((result = RA_HandleInput(dialog, &input_code)) !=
+                   WMHI_LASTMSG) {
+                switch (result & WMHI_CLASSMASK) {
+                    case WMHI_CLOSEWINDOW:
+                        done = 1;
+                        break;
+                    case WMHI_RAWKEY:
+                        if ((result & WMHI_KEYMASK) == GUI_RAWKEY_ESCAPE) {
+                            done = 1;
+                            break;
+                        }
+                        if (!requester_rawkey_accept(result & WMHI_KEYMASK))
+                            break;
+                        result = WMHI_GADGETUP | GID_ACCOUNT_UNLOCK;
+                        /* fall through */
+                    case WMHI_GADGETUP:
+                        if ((result & WMHI_GADGETMASK) ==
+                                GID_ACCOUNT_MASTER_PASSWORD &&
+                            requester_password_accept_code(input_code))
+                            result = WMHI_GADGETUP | GID_ACCOUNT_UNLOCK;
+                        if ((result & WMHI_GADGETMASK) == GID_ACCOUNT_CANCEL) {
+                            done = 1;
+                        } else if ((result & WMHI_GADGETMASK) ==
+                                   GID_ACCOUNT_UNLOCK) {
+                            const char *master = string_text(master_gadget);
+                            AmgAccount loaded;
+                            if (!master[0]) {
+                                set_string(status_gadget, window,
+                                           T(MSG_ENTER_THE_MASTER_PASSWORD, "Enter the master password."));
+                                break;
+                            }
+                            set_string(
+                                status_gadget, window,
+                                T(MSG_CHECKING_MASTER_PASSWORD, "Checking master password..."));
+                            RefreshGList(status_gadget, window, NULL, 1);
+                            amg_account_init(&loaded);
+                            if (amg_storage_load_account(
+                                    account_path, master, &loaded,
+                                    error) == AMG_OK) {
+                                AmgError session_error;
+                                AmgError persistent_error;
+                                AmgError refresh_error;
+                                memset(&session_error, 0, sizeof(session_error));
+                                memset(&persistent_error, 0,
+                                       sizeof(persistent_error));
+                                memset(&refresh_error, 0, sizeof(refresh_error));
+                                if (amg_storage_account_needs_kdf_refresh(
+                                        account_path)) {
+                                    (void)amg_storage_save_account(
+                                        account_path, &loaded, master,
+                                        &refresh_error);
+                                }
+                                replace_account(gui, &loaded);
+                                unlocked = 1;
+                                if (amg_storage_cache_session_key(
+                                        account_path, session_key_path,
+                                        master, &session_error) != AMG_OK ||
+                                    amg_storage_cache_session_key(
+                                        account_path, persistent_key_path,
+                                        master, &persistent_error) != AMG_OK)
+                                    unlocked = 2;
+                                done = 1;
+                            } else {
+                                set_utf8_string(status_gadget, window,
+                                                error->message);
+                                amg_account_clear(&loaded);
+                            }
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    set_string(master_gadget, window, "");
+    RA_CloseWindow(dialog);
+    DisposeObject(dialog);
+    return unlocked;
+}
+
 typedef struct AccountPageGadgets {
     struct Gadget *enabled;
     struct Gadget *account_name;
@@ -548,6 +779,8 @@ typedef struct AccountPageGadgets {
     struct Gadget *smtp_same_credentials;
     struct Gadget *smtp_username;
     struct Gadget *smtp_password;
+    struct Gadget *master_password;
+    struct Gadget *no_master_prompt;
     struct Gadget *fetch_days;
     struct Gadget *fetch_on_start;
     struct Gadget *periodic_fetch;
@@ -675,7 +908,8 @@ static int account_page_collect(
 
 static void account_page_show(
     const AccountPageGadgets *page, struct Window *window,
-    const AmgAccount *account, char sent_mailbox[512],
+    const AmgAccount *account, int no_master_prompt,
+    const char *master, char sent_mailbox[512],
     char drafts_mailbox[512], char all_mailbox[512],
     char spam_mailbox[512], char trash_mailbox[512],
     int *save_sent_copy)
@@ -704,6 +938,7 @@ static void account_page_show(
     set_string(page->fetch_days, window, value);
     set_string(page->notification_path, window,
                account->notification_sound_path);
+    set_string(page->master_password, window, master ? master : "");
     SetGadgetAttrs(page->enabled, window, NULL, GA_Selected,
                    account->enabled ? TRUE : FALSE, TAG_DONE);
     SetGadgetAttrs(page->imap_starttls, window, NULL, GA_Selected,
@@ -722,6 +957,10 @@ static void account_page_show(
                    account->periodic_fetch ? TRUE : FALSE, TAG_DONE);
     SetGadgetAttrs(page->notification_sound, window, NULL, GA_Selected,
                    account->notification_sound ? TRUE : FALSE, TAG_DONE);
+    SetGadgetAttrs(page->no_master_prompt, window, NULL, GA_Selected,
+                   no_master_prompt ? TRUE : FALSE, TAG_DONE);
+    SetGadgetAttrs(page->master_password, window, NULL, GA_Disabled,
+                   no_master_prompt ? TRUE : FALSE, TAG_DONE);
     utf8_to_local_copy(account->sent_mailbox, sent_mailbox, 512U);
     utf8_to_local_copy(account->drafts_mailbox, drafts_mailbox, 512U);
     utf8_to_local_copy(account->all_mailbox, all_mailbox, 512U);
@@ -953,12 +1192,16 @@ static int account_order_move_configured_slot(
     struct Gadget *smtp_host_gadget, *smtp_port_gadget;
     struct Gadget *smtp_starttls_gadget, *smtp_same_credentials_gadget;
     struct Gadget *smtp_username_gadget, *smtp_password_gadget;
-    struct Gadget *fetch_days_gadget;
+    struct Gadget *master_password_gadget, *fetch_days_gadget;
+    struct Gadget *no_master_prompt_gadget;
     struct Gadget *fetch_on_start_gadget, *periodic_fetch_gadget;
     struct Gadget *notification_sound_gadget, *notification_sound_path_gadget;
-    struct Gadget *dialog_status;
+    struct Gadget *dialog_status, *unlock_gadget;
     AccountPageGadgets page;
     AmgAccount drafts[AMG_MAX_ACCOUNTS];
+    char masters[AMG_MAX_ACCOUNTS][128];
+    int persistent_unlocks[AMG_MAX_ACCOUNTS];
+    int original_persistent_unlocks[AMG_MAX_ACCOUNTS];
     int configured_slots[AMG_MAX_ACCOUNTS];
     int deleted_slots[AMG_MAX_ACCOUNTS];
     size_t draft_order[AMG_MAX_ACCOUNTS];
@@ -979,9 +1222,14 @@ static int account_order_move_configured_slot(
     char spam_mailbox[512], trash_mailbox[512];
     int save_sent_copy;
     int done = 0, changed = 0;
+    int session_cache_warning = 0;
+    int persistent_cache_warning = 0;
     int network_was_running[AMG_MAX_ACCOUNTS];
+    int can_unlock_existing;
+    int persistent_unlock;
 
     memset(&page, 0, sizeof(page));
+    memset(masters, 0, sizeof(masters));
     memset(configured_slots, 0, sizeof(configured_slots));
     memset(deleted_slots, 0, sizeof(deleted_slots));
     memcpy(draft_order, gui->account_set->order, sizeof(draft_order));
@@ -1001,6 +1249,11 @@ static int account_order_move_configured_slot(
                           T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
             return 0;
         }
+        persistent_unlocks[account_index] =
+            gui->account_set->accounts[account_index]
+                .allow_passwordless_changes ? 1 : 0;
+        original_persistent_unlocks[account_index] =
+            persistent_unlocks[account_index];
         network_was_running[account_index] =
             amg_network_is_running(gui->networks[account_index]);
         configured_slots[account_index] =
@@ -1022,6 +1275,13 @@ static int account_order_move_configured_slot(
                       T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
         return 0;
     }
+    /* Unlock is meaningful only for an existing account whose secrets are
+     * not available in the current draft (for example after importing a
+     * legacy account or deleting its cached key). */
+    can_unlock_existing = account_file_exists(active_tab) &&
+        account_is_locked(&drafts[active_tab]);
+    persistent_unlock = persistent_unlocks[active_tab];
+
     tabs_gadget = NULL;
     add_account_gadget = NULL;
     delete_account_gadget = NULL;
@@ -1042,12 +1302,15 @@ static int account_order_move_configured_slot(
     smtp_same_credentials_gadget = NULL;
     smtp_username_gadget = NULL;
     smtp_password_gadget = NULL;
+    master_password_gadget = NULL;
+    no_master_prompt_gadget = NULL;
     fetch_days_gadget = NULL;
     fetch_on_start_gadget = NULL;
     periodic_fetch_gadget = NULL;
     notification_sound_gadget = NULL;
     notification_sound_path_gadget = NULL;
     dialog_status = NULL;
+    unlock_gadget = NULL;
     snprintf(fetch_days_text, sizeof(fetch_days_text), "%u",
              gui->account->fetch_days ? gui->account->fetch_days : 180U);
     snprintf(imap_port_text, sizeof(imap_port_text), "%u",
@@ -1473,6 +1736,51 @@ static int account_order_move_configured_slot(
 
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
+                    LAYOUT_AddChild, static_text_label(T(MSG_MASTER_PASSWORD, "Master password:")),
+                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_WeightedWidth, 0,
+                    LAYOUT_AddChild,
+                        master_password_gadget = (struct Gadget *)StringObject,
+                            GA_ID, GID_ACCOUNT_MASTER_PASSWORD,
+                            GA_RelVerify, TRUE,
+                            GA_TabCycle, TRUE,
+                            GA_Disabled, persistent_unlock ? TRUE : FALSE,
+                            STRINGA_MaxChars, 127,
+                            STRINGA_HookType, SHK_PASSWORD,
+                            STRINGA_TextVal, "",
+                        EndObject,
+                    EndObject,
+                CHILD_WeightedHeight, 0,
+
+                LAYOUT_AddChild, HGroupObject,
+                    LAYOUT_SpaceInner, TRUE,
+                    LAYOUT_AddChild, HGroupObject,
+                        LAYOUT_SpaceOuter, FALSE,
+                        LAYOUT_SpaceInner, FALSE,
+                    EndObject,
+                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_WeightedWidth, 0,
+                    LAYOUT_AddChild,
+                        no_master_prompt_gadget =
+                            (struct Gadget *)ButtonObject,
+                            GA_ID, GID_ACCOUNT_NO_MASTER_PROMPT,
+                            GA_RelVerify, TRUE,
+                            GA_Selected,
+                                persistent_unlock ? TRUE : FALSE,
+                            BUTTON_AutoButton, BAG_CHECKBOX,
+                            BUTTON_PushButton, TRUE,
+                        EndObject,
+                    CHILD_MinWidth, 24,
+                    CHILD_MaxWidth, 24,
+                    CHILD_WeightedWidth, 0,
+                    LAYOUT_AddChild, static_text_label(
+                        T(MSG_ALLOW_CHANGES_WITHOUT_MASTER_PASSWORD,
+                          "Allow changes without master password")),
+                EndObject,
+                CHILD_WeightedHeight, 0,
+
+                LAYOUT_AddChild, HGroupObject,
+                    LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_FETCH_PERIOD_DAYS, "Fetch period (days):")),
                     CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
                     CHILD_WeightedWidth, 0,
@@ -1621,6 +1929,13 @@ static int account_order_move_configured_slot(
 
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_EvenSize, TRUE,
+                LAYOUT_AddChild,
+                    unlock_gadget = (struct Gadget *)ButtonObject,
+                    GA_ID, GID_ACCOUNT_UNLOCK,
+                    GA_RelVerify, TRUE,
+                    GA_Disabled, can_unlock_existing ? FALSE : TRUE,
+                    GA_Text, T(MSG_UNLOCK, "_Unlock"),
+                EndObject,
                 LAYOUT_AddChild, ButtonObject,
                     GA_ID, GID_ACCOUNT_SAVE,
                     GA_RelVerify, TRUE,
@@ -1663,6 +1978,8 @@ static int account_order_move_configured_slot(
     page.smtp_same_credentials = smtp_same_credentials_gadget;
     page.smtp_username = smtp_username_gadget;
     page.smtp_password = smtp_password_gadget;
+    page.master_password = master_password_gadget;
+    page.no_master_prompt = no_master_prompt_gadget;
     page.fetch_days = fetch_days_gadget;
     page.fetch_on_start = fetch_on_start_gadget;
     page.periodic_fetch = periodic_fetch_gadget;
@@ -1713,6 +2030,7 @@ static int account_order_move_configured_slot(
                             case GID_ACCOUNT_CONFIG_TABS:
                             {
                                 ULONG next_visible = 0UL;
+                                ULONG no_master = 0UL;
                                 size_t next_slot;
                                 size_t current_visible =
                                     account_config_visible_for_slot(
@@ -1743,13 +2061,32 @@ static int account_order_move_configured_slot(
                                         (ULONG)current_visible, TAG_DONE);
                                     break;
                                 }
+                                snprintf(masters[active_tab],
+                                         sizeof(masters[active_tab]), "%s",
+                                         string_text(master_password_gadget));
+                                GetAttr(GA_Selected,
+                                        (Object *)no_master_prompt_gadget,
+                                        &no_master);
+                                persistent_unlocks[active_tab] =
+                                    no_master ? 1 : 0;
+                                drafts[active_tab]
+                                    .allow_passwordless_changes =
+                                    persistent_unlocks[active_tab];
                                 active_tab = next_slot;
                                 account_page_show(
                                     &page, window, &drafts[active_tab],
-                                    sent_mailbox,
+                                    persistent_unlocks[active_tab],
+                                    masters[active_tab], sent_mailbox,
                                     drafts_mailbox, all_mailbox,
                                     spam_mailbox, trash_mailbox,
                                     &save_sent_copy);
+                                SetGadgetAttrs(
+                                    unlock_gadget, window, NULL,
+                                    GA_Disabled,
+                                    (account_file_exists(active_tab) &&
+                                     account_is_locked(&drafts[active_tab]))
+                                        ? FALSE : TRUE,
+                                    TAG_DONE);
                                 if (account_config_rebuild_tabs(
                                         dialog, window, tabs_gadget,
                                         add_account_gadget, delete_account_gadget,
@@ -1773,6 +2110,7 @@ static int account_order_move_configured_slot(
 
                             case GID_ACCOUNT_ADD:
                             {
+                                ULONG no_master = 0UL;
                                 size_t new_slot;
                                 if (account_page_collect(
                                         &page, &drafts[active_tab],
@@ -1784,6 +2122,17 @@ static int account_order_move_configured_slot(
                                                     error->message);
                                     break;
                                 }
+                                snprintf(masters[active_tab],
+                                         sizeof(masters[active_tab]), "%s",
+                                         string_text(master_password_gadget));
+                                GetAttr(GA_Selected,
+                                        (Object *)no_master_prompt_gadget,
+                                        &no_master);
+                                persistent_unlocks[active_tab] =
+                                    no_master ? 1 : 0;
+                                drafts[active_tab]
+                                    .allow_passwordless_changes =
+                                    persistent_unlocks[active_tab];
                                 for (new_slot = 0U; new_slot < AMG_MAX_ACCOUNTS;
                                      ++new_slot)
                                     if (!configured_slots[new_slot] &&
@@ -1811,6 +2160,8 @@ static int account_order_move_configured_slot(
                                               "Not enough memory."));
                                         break;
                                     }
+                                    persistent_unlocks[new_slot] =
+                                        original_persistent_unlocks[new_slot];
                                 }
                                 deleted_slots[new_slot] = 0;
                                 account_order_append_configured_slot(
@@ -1819,10 +2170,13 @@ static int account_order_move_configured_slot(
                                 active_tab = new_slot;
                                 account_page_show(
                                     &page, window, &drafts[active_tab],
-                                    sent_mailbox,
+                                    persistent_unlocks[active_tab],
+                                    masters[active_tab], sent_mailbox,
                                     drafts_mailbox, all_mailbox,
                                     spam_mailbox, trash_mailbox,
                                     &save_sent_copy);
+                                SetGadgetAttrs(unlock_gadget, window, NULL,
+                                               GA_Disabled, TRUE, TAG_DONE);
                                 if (account_config_rebuild_tabs(
                                         dialog, window, tabs_gadget,
                                         add_account_gadget, delete_account_gadget,
@@ -1862,6 +2216,8 @@ static int account_order_move_configured_slot(
 
                                 deleted_slots[active_tab] = 1;
                                 configured_slots[active_tab] = 0;
+                                persistent_unlocks[active_tab] = 0;
+                                masters[active_tab][0] = 0;
                                 amg_account_clear(&drafts[active_tab]);
                                 amg_account_init(&drafts[active_tab]);
                                 account_order_partition_configured_slots(
@@ -1869,10 +2225,17 @@ static int account_order_move_configured_slot(
                                 active_tab = next_slot;
                                 account_page_show(
                                     &page, window, &drafts[active_tab],
-                                    sent_mailbox,
+                                    persistent_unlocks[active_tab],
+                                    masters[active_tab], sent_mailbox,
                                     drafts_mailbox, all_mailbox,
                                     spam_mailbox, trash_mailbox,
                                     &save_sent_copy);
+                                SetGadgetAttrs(
+                                    unlock_gadget, window, NULL, GA_Disabled,
+                                    (account_file_exists(active_tab) &&
+                                     account_is_locked(&drafts[active_tab]))
+                                        ? FALSE : TRUE,
+                                    TAG_DONE);
                                 if (account_config_rebuild_tabs(
                                         dialog, window, tabs_gadget,
                                         add_account_gadget, delete_account_gadget,
@@ -1897,6 +2260,7 @@ static int account_order_move_configured_slot(
                             case GID_ACCOUNT_MOVE_LEFT:
                             case GID_ACCOUNT_MOVE_RIGHT:
                             {
+                                ULONG no_master = 0UL;
                                 int direction =
                                     (result & WMHI_GADGETMASK) ==
                                             GID_ACCOUNT_MOVE_LEFT
@@ -1911,6 +2275,17 @@ static int account_order_move_configured_slot(
                                                     error->message);
                                     break;
                                 }
+                                snprintf(masters[active_tab],
+                                         sizeof(masters[active_tab]), "%s",
+                                         string_text(master_password_gadget));
+                                GetAttr(GA_Selected,
+                                        (Object *)no_master_prompt_gadget,
+                                        &no_master);
+                                persistent_unlocks[active_tab] =
+                                    no_master ? 1 : 0;
+                                drafts[active_tab]
+                                    .allow_passwordless_changes =
+                                    persistent_unlocks[active_tab];
                                 if (account_order_move_configured_slot(
                                         draft_order, configured_slots,
                                         active_tab, direction)) {
@@ -1942,6 +2317,97 @@ static int account_order_move_configured_slot(
                                 done = 1;
                                 break;
 
+                            case GID_ACCOUNT_UNLOCK:
+                            {
+                                AmgAccount loaded;
+                                const char *account_path =
+                                    amg_storage_account_path(active_tab);
+                                const char *session_path =
+                                    amg_storage_session_key_path(active_tab);
+                                const char *persistent_path =
+                                    amg_storage_persistent_key_path(active_tab);
+                                const char *master =
+                                    string_text(master_password_gadget);
+                                if (!*master) {
+                                    set_string(dialog_status, window,
+                                               T(MSG_ENTER_THE_MASTER_PASSWORD, "Enter the master password."));
+                                    break;
+                                }
+                                amg_account_init(&loaded);
+                                if (amg_storage_load_account(
+                                        account_path, master, &loaded,
+                                        error) == AMG_OK) {
+                                    if (amg_storage_save_account(
+                                            account_path, &loaded, master,
+                                            error) == AMG_OK) {
+                                        AmgError session_error;
+                                        memset(&session_error, 0,
+                                               sizeof(session_error));
+                                        {
+                                            AmgError persistent_error;
+                                            memset(&persistent_error, 0,
+                                                   sizeof(persistent_error));
+                                            if (amg_storage_cache_session_key(
+                                                    account_path,
+                                                    persistent_path,
+                                                    master,
+                                                    &persistent_error) != AMG_OK)
+                                                persistent_cache_warning = 1;
+                                        }
+                                        if (amg_storage_cache_session_key(
+                                                account_path,
+                                                session_path, master,
+                                                &session_error) != AMG_OK)
+                                            session_cache_warning = 1;
+                                        amg_account_clear(&drafts[active_tab]);
+                                        drafts[active_tab] = loaded;
+                                        loaded.imap_password = NULL;
+                                        loaded.smtp_password = NULL;
+                                        loaded.refresh_token = NULL;
+                                        snprintf(masters[active_tab],
+                                                 sizeof(masters[active_tab]),
+                                                 "%s", master);
+                                        account_page_show(
+                                            &page, window,
+                                            &drafts[active_tab],
+                                            persistent_unlocks[active_tab],
+                                            masters[active_tab], sent_mailbox,
+                                            drafts_mailbox, all_mailbox,
+                                            spam_mailbox, trash_mailbox,
+                                            &save_sent_copy);
+                                        SetGadgetAttrs(
+                                            unlock_gadget, window, NULL,
+                                            GA_Disabled, TRUE, TAG_DONE);
+                                        set_string(
+                                            dialog_status, window,
+                                            T(MSG_ACCOUNT_UNLOCKED_FUTURE_STARTS_ARE_AUTOMATIC,
+                                              "Account unlocked; future starts are automatic."));
+                                    } else {
+                                        set_utf8_string(
+                                            dialog_status, window,
+                                            error->message);
+                                        amg_account_clear(&loaded);
+                                    }
+                                } else {
+                                    set_utf8_string(dialog_status, window,
+                                                    error->message);
+                                    amg_account_clear(&loaded);
+                                }
+                                break;
+                            }
+
+                            case GID_ACCOUNT_NO_MASTER_PROMPT:
+                            {
+                                ULONG no_master = 0UL;
+                                GetAttr(GA_Selected,
+                                        (Object *)no_master_prompt_gadget,
+                                        &no_master);
+                                SetGadgetAttrs(master_password_gadget, window,
+                                               NULL, GA_Disabled,
+                                               no_master ? TRUE : FALSE,
+                                               TAG_DONE);
+                                break;
+                            }
 
                             case GID_ACCOUNT_SMTP_SAME_CREDENTIALS:
                             {
@@ -1975,6 +2441,7 @@ static int account_order_move_configured_slot(
 
                             case GID_ACCOUNT_SAVE:
                             {
+                                ULONG no_master = 0UL;
                                 size_t enabled_count = 0U;
                                 size_t next_active;
                                 if (account_page_collect(
@@ -1987,6 +2454,17 @@ static int account_order_move_configured_slot(
                                                     error->message);
                                     break;
                                 }
+                                snprintf(masters[active_tab],
+                                         sizeof(masters[active_tab]), "%s",
+                                         string_text(master_password_gadget));
+                                GetAttr(GA_Selected,
+                                        (Object *)no_master_prompt_gadget,
+                                        &no_master);
+                                persistent_unlocks[active_tab] =
+                                    no_master ? 1 : 0;
+                                drafts[active_tab]
+                                    .allow_passwordless_changes =
+                                    persistent_unlocks[active_tab];
 
                                 /* Validate every changed enabled page before
                                  * writing any account files. Pure tab-order
@@ -2049,6 +2527,56 @@ static int account_order_move_configured_slot(
                                             UnLock(sound_lock);
                                         }
                                     }
+                                    if (candidate_changed &&
+                                        account_file_exists(account_index) &&
+                                        account_is_locked(candidate)) {
+                                        char message[192];
+                                        amg_tr_snprintf(
+                                            message, sizeof(message),
+                                            MSG_ACCOUNT_VALUE_UNLOCK_BEFORE_CHANGING_SETTINGS,
+                                            "Account %lu: unlock the account before changing its settings.",
+                                            (unsigned long)(account_index + 1U));
+                                        amg_error_set(error, AMG_ERR_AUTH,
+                                                      message);
+                                        break;
+                                    }
+                                    if (candidate_changed &&
+                                        (candidate->enabled ||
+                                         candidate->email[0] ||
+                                         account_file_exists(account_index)) &&
+                                        !masters[account_index][0] &&
+                                        !(gui->account_set->accounts[
+                                              account_index]
+                                              .allow_passwordless_changes &&
+                                          persistent_key_exists(
+                                              account_index))) {
+                                        char message[160];
+                                        amg_tr_snprintf(
+                                            message, sizeof(message),
+                                            MSG_ACCOUNT_VALUE_DETAIL,
+                                            "Account %lu: %s",
+                                            (unsigned long)(account_index + 1U),
+                                            T(MSG_ENTER_A_MASTER_PASSWORD_FOR_ENCRYPTION,
+                                              "Enter a master password for encryption."));
+                                        amg_error_set(error, AMG_ERR_AUTH,
+                                                      message);
+                                        break;
+                                    }
+                                    if (candidate_changed &&
+                                        masters[account_index][0] &&
+                                        account_file_exists(account_index)) {
+                                        AmgAccount verified;
+                                        amg_account_init(&verified);
+                                        if (amg_storage_load_account(
+                                                amg_storage_account_path(
+                                                    account_index),
+                                                masters[account_index],
+                                                &verified, error) != AMG_OK) {
+                                            amg_account_clear(&verified);
+                                            break;
+                                        }
+                                        amg_account_clear(&verified);
+                                    }
                                 }
                                 if (account_index < AMG_MAX_ACCOUNTS) {
                                     if (error->message[0])
@@ -2074,11 +2602,15 @@ static int account_order_move_configured_slot(
                                      ++account_index) {
                                     const char *account_path =
                                         amg_storage_account_path(account_index);
-                                    const char *key_path =
+                                    const char *session_path =
+                                        amg_storage_session_key_path(account_index);
+                                    const char *persistent_path =
                                         amg_storage_persistent_key_path(account_index);
+                                    AmgError cache_error;
                                     AmgAccount *candidate =
                                         &drafts[account_index];
                                     int settings_changed;
+                                    int unlock_changed;
                                     if (deleted_slots[account_index])
                                         continue;
                                     settings_changed =
@@ -2086,19 +2618,52 @@ static int account_order_move_configured_slot(
                                             candidate,
                                             &gui->account_set->accounts[
                                                 account_index]);
-                                    if (!settings_changed)
+                                    unlock_changed =
+                                        persistent_unlocks[account_index] !=
+                                        original_persistent_unlocks[
+                                            account_index];
+                                    if (!settings_changed && !unlock_changed)
                                         continue;
                                     if (!candidate->enabled &&
                                         !candidate->email[0] &&
                                         !account_file_exists(account_index))
                                         continue;
-                                    if (amg_storage_save_account_auto(
-                                            account_path, key_path, candidate,
-                                            error) != AMG_OK) {
-                                        set_utf8_string(
-                                            dialog_status, window,
-                                            error->message);
-                                        break;
+                                    if (settings_changed) {
+                                        int save_result;
+                                        if (masters[account_index][0])
+                                            save_result =
+                                                amg_storage_save_account(
+                                                    account_path, candidate,
+                                                    masters[account_index],
+                                                    error);
+                                        else
+                                            save_result =
+                                                amg_storage_save_account_cached(
+                                                    account_path,
+                                                    persistent_path,
+                                                    candidate, error);
+                                        if (save_result != AMG_OK) {
+                                            set_utf8_string(
+                                                dialog_status, window,
+                                                error->message);
+                                            break;
+                                        }
+                                    }
+                                    if (masters[account_index][0]) {
+                                        memset(&cache_error, 0,
+                                               sizeof(cache_error));
+                                        if (amg_storage_cache_session_key(
+                                                account_path, session_path,
+                                                masters[account_index],
+                                                &cache_error) != AMG_OK)
+                                            session_cache_warning = 1;
+                                        memset(&cache_error, 0,
+                                               sizeof(cache_error));
+                                        if (amg_storage_cache_session_key(
+                                                account_path, persistent_path,
+                                                masters[account_index],
+                                                &cache_error) != AMG_OK)
+                                            persistent_cache_warning = 1;
                                     }
                                 }
                                 if (account_index < AMG_MAX_ACCOUNTS)
@@ -2200,13 +2765,26 @@ static int account_order_move_configured_slot(
             }
         }
     }
+    set_string(master_password_gadget, window, "");
     DisposeObject(dialog);
     account_config_free_tab_nodes(&account_tabs_list);
     for (account_index = 0U; account_index < AMG_MAX_ACCOUNTS;
          ++account_index)
         amg_account_clear(&drafts[account_index]);
-    if (changed)
-        status_local(gui, T(MSG_MAIL_ACCOUNTS_SAVED, "Mail accounts saved."));
+    amg_secure_clear(masters, sizeof(masters));
+    if (changed) {
+        if (persistent_cache_warning)
+            status_local(gui,
+                T(MSG_ACCOUNT_SAVED_STARTUP_KEY_COULD_NOT_BE_STORED,
+                  "Account saved; automatic startup key could not be stored."));
+        else if (session_cache_warning)
+            status_local(gui,
+                T(MSG_ACCOUNT_IS_UNLOCKED_SESSION_KEY_COULD_NOT_BE,
+                  "Account is unlocked; session key could not be stored in ENV:."));
+        else
+            status_local(gui,
+                T(MSG_MAIL_ACCOUNTS_SAVED, "Mail accounts saved."));
+    }
     return changed;
 }
 
@@ -2337,27 +2915,10 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
             CHILD_WeightedHeight, 0,
 
             LAYOUT_AddChild,
-                static_text_label(T(MSG_ICON_BY_MARTIN_MASON_MERZ,
-                                    "Icon by Martin 'Mason' Merz")),
+                static_text_label(T(MSG_LEGAL_NOTICE, "Legal notice:")),
             CHILD_MinHeight, line_height,
             CHILD_MaxHeight, line_height,
             CHILD_WeightedHeight, 0,
-            LAYOUT_AddChild,
-                static_text_label(T(
-                    MSG_THANKS_TO_ALL_TESTERS_WHO_HELP_TO_CONTINUOUSLY_IMPROVE_AMIMAIL,
-                    "Thanks to all testers who help to continuously improve AmiMAIL.")),
-            CHILD_MinHeight, line_height,
-            CHILD_MaxHeight, line_height,
-            CHILD_WeightedHeight, 0,
-
-            LAYOUT_AddChild, HGroupObject,
-                LAYOUT_SpaceOuter, FALSE,
-                LAYOUT_SpaceInner, FALSE,
-            EndObject,
-            CHILD_MinHeight, font_height / 2L,
-            CHILD_MaxHeight, font_height / 2L,
-            CHILD_WeightedHeight, 0,
-
             LAYOUT_AddChild,
                 static_text_label(T(MSG_AMIMAIL_IS_AN_INDEPENDENT_NON_COMMERCIAL_HOBBY_PROJECT, "AmiMail is an independent, non-commercial hobby project.")),
             CHILD_MinHeight, line_height,
@@ -2454,8 +3015,11 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
 {
     LONG font_height = 8L;
     LONG question_height, note_height, text_height, button_height;
+    LONG requester_height, left, top, max_left, max_top;
+    Object *root_group;
     Object *dialog;
     struct Window *window;
+    struct LayoutLimits limits;
     ULONG signal_mask = 0;
     int done = 0;
     int confirmed = 0;
@@ -2468,75 +3032,122 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
     text_height = question_height + (note && *note ? note_height : 0L);
     button_height = font_height + 8L;
 
+    /*
+     * Keep the proven requester layout unchanged.  In particular, the
+     * transparent button gadgets center the text correctly and the explicit
+     * one-line spacer gives the native ReAction distance between text and
+     * the Yes/No row.
+     */
+    root_group = VGroupObject,
+        LAYOUT_SpaceOuter, TRUE,
+        LAYOUT_SpaceInner, FALSE,
+        LAYOUT_AddChild, VGroupObject,
+            LAYOUT_SpaceOuter, FALSE,
+            LAYOUT_SpaceInner, FALSE,
+            LAYOUT_AddChild, ButtonObject,
+                GA_ReadOnly, TRUE,
+                GA_Text, question ? question : "",
+                BUTTON_BevelStyle, BVS_NONE,
+                BUTTON_Transparent, TRUE,
+            EndObject,
+            CHILD_MinHeight, question_height,
+            CHILD_MaxHeight, question_height,
+            CHILD_WeightedHeight, 0,
+            LAYOUT_AddChild, ButtonObject,
+                GA_ReadOnly, TRUE,
+                GA_Text, note && *note ? note : "",
+                BUTTON_BevelStyle, BVS_NONE,
+                BUTTON_Transparent, TRUE,
+            EndObject,
+            CHILD_MinHeight, note && *note ? note_height : 0,
+            CHILD_MaxHeight, note && *note ? note_height : 0,
+            CHILD_WeightedHeight, 0,
+        EndObject,
+        CHILD_MinHeight, text_height,
+        CHILD_MaxHeight, text_height,
+        CHILD_WeightedHeight, 0,
+
+        LAYOUT_AddChild, HGroupObject,
+            LAYOUT_SpaceOuter, FALSE,
+            LAYOUT_SpaceInner, FALSE,
+        EndObject,
+        CHILD_MinHeight, font_height,
+        CHILD_MaxHeight, font_height,
+        CHILD_WeightedHeight, 0,
+
+        LAYOUT_AddChild, HGroupObject,
+            LAYOUT_SpaceOuter, FALSE,
+            LAYOUT_SpaceInner, TRUE,
+            LAYOUT_EvenSize, TRUE,
+            LAYOUT_AddChild, ButtonObject,
+                GA_ID, GID_CONFIRM_YES,
+                GA_RelVerify, TRUE,
+                GA_Text, T(MSG_YES, "_Yes"),
+            EndObject,
+            LAYOUT_AddChild, ButtonObject,
+                GA_ID, GID_CONFIRM_NO,
+                GA_RelVerify, TRUE,
+                GA_Text, T(MSG_NO, "_No"),
+            EndObject,
+        EndObject,
+        CHILD_MinHeight, button_height,
+        CHILD_MaxHeight, button_height,
+        CHILD_WeightedHeight, 0,
+    EndObject;
+    if (!root_group) return 0;
+
+    /*
+     * The classic WPOS_CENTERWINDOW path is not reliable for this requester
+     * on every ReAction/AmigaOS combination.  Determine the height of the
+     * exact, unchanged layout before opening and create the window already
+     * centered over the requested reference window.  This avoids both the
+     * old horizontal offset and any visible post-open MoveWindow().
+     */
+    memset(&limits, 0, sizeof(limits));
+    LayoutLimits((struct Gadget *)root_group, &limits,
+                 gui->screen->RastPort.Font, gui->screen);
+    requester_height = (LONG)limits.MinHeight +
+                       (LONG)ref_window->BorderTop +
+                       (LONG)ref_window->BorderBottom;
+    if (requester_height < text_height + font_height + button_height)
+        requester_height = text_height + font_height + button_height +
+                           (LONG)ref_window->BorderTop +
+                           (LONG)ref_window->BorderBottom;
+
+    left = (LONG)ref_window->LeftEdge +
+           ((LONG)ref_window->Width - width) / 2L;
+    top = (LONG)ref_window->TopEdge +
+          ((LONG)ref_window->Height - requester_height) / 2L;
+
+    max_left = (LONG)gui->screen->Width - width;
+    max_top = (LONG)gui->screen->Height - requester_height;
+    if (max_left < 0L) max_left = 0L;
+    if (max_top < 0L) max_top = 0L;
+    if (left < 0L) left = 0L;
+    if (top < 0L) top = 0L;
+    if (left > max_left) left = max_left;
+    if (top > max_top) top = max_top;
+
     dialog = WindowObject,
         WA_Title, "AmiMail",
+        WA_Left, left,
+        WA_Top, top,
         WA_Width, width,
+        WA_Height, requester_height,
         WA_MinWidth, width,
         WA_MaxWidth, width,
+        WA_MinHeight, requester_height,
+        WA_MaxHeight, requester_height,
         WA_PubScreen, gui->screen,
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                   WFLG_ACTIVATE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
-        WINDOW_RefWindow, ref_window,
-        WINDOW_Position, WPOS_CENTERWINDOW,
-        WINDOW_ParentGroup, VGroupObject,
-            LAYOUT_SpaceOuter, TRUE,
-            LAYOUT_SpaceInner, FALSE,
-            LAYOUT_AddChild, VGroupObject,
-                LAYOUT_SpaceOuter, FALSE,
-                LAYOUT_SpaceInner, FALSE,
-                LAYOUT_AddChild, ButtonObject,
-                    GA_ReadOnly, TRUE,
-                    GA_Text, question ? question : "",
-                    BUTTON_BevelStyle, BVS_NONE,
-                    BUTTON_Transparent, TRUE,
-                EndObject,
-                CHILD_MinHeight, question_height,
-                CHILD_MaxHeight, question_height,
-                CHILD_WeightedHeight, 0,
-                LAYOUT_AddChild, ButtonObject,
-                    GA_ReadOnly, TRUE,
-                    GA_Text, note && *note ? note : "",
-                    BUTTON_BevelStyle, BVS_NONE,
-                    BUTTON_Transparent, TRUE,
-                EndObject,
-                CHILD_MinHeight, note && *note ? note_height : 0,
-                CHILD_MaxHeight, note && *note ? note_height : 0,
-                CHILD_WeightedHeight, 0,
-            EndObject,
-            CHILD_MinHeight, text_height,
-            CHILD_MaxHeight, text_height,
-            CHILD_WeightedHeight, 0,
-
-            LAYOUT_AddChild, HGroupObject,
-                LAYOUT_SpaceOuter, FALSE,
-                LAYOUT_SpaceInner, FALSE,
-            EndObject,
-            CHILD_MinHeight, font_height,
-            CHILD_MaxHeight, font_height,
-            CHILD_WeightedHeight, 0,
-
-            LAYOUT_AddChild, HGroupObject,
-                LAYOUT_SpaceOuter, FALSE,
-                LAYOUT_SpaceInner, TRUE,
-                LAYOUT_EvenSize, TRUE,
-                LAYOUT_AddChild, ButtonObject,
-                    GA_ID, GID_CONFIRM_YES,
-                    GA_RelVerify, TRUE,
-                    GA_Text, T(MSG_YES, "_Yes"),
-                EndObject,
-                LAYOUT_AddChild, ButtonObject,
-                    GA_ID, GID_CONFIRM_NO,
-                    GA_RelVerify, TRUE,
-                    GA_Text, T(MSG_NO, "_No"),
-                EndObject,
-            EndObject,
-            CHILD_MinHeight, button_height,
-            CHILD_MaxHeight, button_height,
-            CHILD_WeightedHeight, 0,
-        EndObject,
+        WINDOW_ParentGroup, root_group,
     EndWindow;
-    if (!dialog) return 0;
+    if (!dialog) {
+        DisposeObject(root_group);
+        return 0;
+    }
 
     window = RA_OpenWindow(dialog);
     if (!window) {

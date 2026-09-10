@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define HTML_VISIBLE_URL_MAX 512U
+
 static int ci_equal_n(const char *a, const char *b, size_t n)
 {
     while (n--) if (tolower((unsigned char)*a++) != tolower((unsigned char)*b++)) return 0;
@@ -535,6 +537,83 @@ static int html_get_attribute(const char *tag, size_t length,
     return 0;
 }
 
+static int html_attr_contains_ci(const char *text, const char *needle)
+{
+    size_t text_length, needle_length, i;
+    if (!text || !needle) return 0;
+    text_length = strlen(text);
+    needle_length = strlen(needle);
+    if (!needle_length || needle_length > text_length) return 0;
+    for (i = 0U; i + needle_length <= text_length; ++i)
+        if (ci_equal_n(text + i, needle, needle_length)) return 1;
+    return 0;
+}
+
+static int html_dimension_is_tracking_size(const char *value)
+{
+    char *end = NULL;
+    unsigned long dimension;
+    if (!value || !*value) return 0;
+    dimension = strtoul(value, &end, 10);
+    if (end == value) return 0;
+    while (*end && isspace((unsigned char)*end)) ++end;
+    if (*end &&
+        !((end[0] == 'p' || end[0] == 'P') &&
+          (end[1] == 'x' || end[1] == 'X') && end[2] == 0))
+        return 0;
+    return dimension <= 1UL;
+}
+
+static int html_image_is_hidden_or_tracking(const char *tag, size_t tag_length)
+{
+    char width[32], height[32], style[512], src[1024];
+    int tiny_width, tiny_height;
+
+    width[0] = height[0] = style[0] = src[0] = 0;
+    html_get_attribute(tag, tag_length, "width", width, sizeof(width));
+    html_get_attribute(tag, tag_length, "height", height, sizeof(height));
+    html_get_attribute(tag, tag_length, "style", style, sizeof(style));
+    html_get_attribute(tag, tag_length, "src", src, sizeof(src));
+
+    tiny_width = html_dimension_is_tracking_size(width);
+    tiny_height = html_dimension_is_tracking_size(height);
+    if (tiny_width && tiny_height) return 1;
+
+    if (html_attr_contains_ci(style, "display:none") ||
+        html_attr_contains_ci(style, "display: none") ||
+        html_attr_contains_ci(style, "visibility:hidden") ||
+        html_attr_contains_ci(style, "visibility: hidden") ||
+        html_attr_contains_ci(style, "opacity:0") ||
+        html_attr_contains_ci(style, "opacity: 0"))
+        return 1;
+
+    if ((tiny_width || tiny_height) &&
+        (html_attr_contains_ci(src, "pixel.gif") ||
+         html_attr_contains_ci(src, "tracking") ||
+         html_attr_contains_ci(src, "tracker")))
+        return 1;
+    return 0;
+}
+
+static int html_append_image_text(AmgBuffer *output, const char *tag,
+                                  size_t tag_length)
+{
+    char alt[1024];
+    int has_alt;
+    int result;
+
+    if (!output || !tag) return AMG_ERR_ARGUMENT;
+    if (html_image_is_hidden_or_tracking(tag, tag_length)) return AMG_OK;
+
+    alt[0] = 0;
+    has_alt = html_get_attribute(tag, tag_length, "alt", alt, sizeof(alt));
+    result = html_append_space(output);
+    if (result != AMG_OK) return result;
+    if (has_alt && alt[0])
+        return amg_buffer_append_cstr(output, alt);
+    return amg_buffer_append_cstr(output, "[Grafik]");
+}
+
 static int html_href_is_safe_to_show(const char *href)
 {
     if (!href || !*href || href[0] == '#') return 0;
@@ -549,18 +628,40 @@ static int html_finish_anchor(AmgBuffer *output, char *href,
 {
     size_t href_length;
     int same_as_text;
+    int has_visible_text;
+    int graphic_marker_only = 0;
     if (!output || !href || !active || !*active) return AMG_OK;
     *active = 0;
     if (!html_href_is_safe_to_show(href)) {
         href[0] = 0;
         return AMG_OK;
     }
+
     href_length = strlen(href);
-    same_as_text = output->length >= text_start &&
+    has_visible_text = output->length > text_start;
+    same_as_text = has_visible_text &&
                    output->length - text_start == href_length &&
                    !memcmp(output->data + text_start, href, href_length);
-    if (!same_as_text) {
-        if (output->length > text_start && html_append_space(output) != AMG_OK)
+    if (has_visible_text) {
+        size_t start = text_start, end = output->length;
+        static const char marker[] = "[Grafik]";
+        while (start < end && isspace((unsigned char)output->data[start]))
+            ++start;
+        while (end > start && isspace((unsigned char)output->data[end - 1U]))
+            --end;
+        graphic_marker_only = end - start == sizeof(marker) - 1U &&
+                              !memcmp(output->data + start, marker,
+                                      sizeof(marker) - 1U);
+    }
+
+    /* Image-only/social anchors have no useful textual label and used to
+     * produce bare tracking URLs in the preview. Modern payment/newsletter
+     * mails also carry tracking links well over 1 KB. Such unbroken tokens
+     * can exceed classic texteditor.gadget's practical import/wrap limits.
+     * Keep the human-readable anchor text, but append only bounded URLs. */
+    if (has_visible_text && !graphic_marker_only && !same_as_text &&
+        href_length <= HTML_VISIBLE_URL_MAX) {
+        if (html_append_space(output) != AMG_OK)
             return AMG_ERR_MEMORY;
         if (amg_buffer_append_char(output, '<') != AMG_OK ||
             amg_buffer_append_cstr(output, href) != AMG_OK ||
@@ -593,6 +694,11 @@ int amg_html_to_text(const char *input, size_t length, AmgBuffer *output)
                                       &escaped_closing)) {
                 if (html_name_equal(escaped_name, escaped_name_length, "br")) {
                     result = html_ensure_newlines(output, 1U);
+                } else if (html_name_equal(escaped_name, escaped_name_length,
+                                           "img")) {
+                    result = html_append_space(output);
+                    if (result == AMG_OK && !escaped_closing)
+                        result = amg_buffer_append_cstr(output, "[Grafik]");
                 } else if (html_name_equal(escaped_name, escaped_name_length,
                                            "li")) {
                     result = html_ensure_newlines(output, 1U);
@@ -710,6 +816,9 @@ int amg_html_to_text(const char *input, size_t length, AmgBuffer *output)
                     anchor_text_start = output->length;
                     anchor_active = 1;
                 }
+            } else if (html_name_equal(name, name_length, "img")) {
+                if (!closing)
+                    result = html_append_image_text(output, tag, tag_length);
             } else if (html_name_equal(name, name_length, "br")) {
                 result = html_ensure_newlines(output, 1U);
             } else if (html_name_equal(name, name_length, "li")) {
@@ -816,20 +925,35 @@ int amg_html_to_text(const char *input, size_t length, AmgBuffer *output)
 }
 
 
-static int html_text_looks_mislabeled(const char *text, size_t length)
+static int html_name_is_common_markup(const char *name, size_t name_length)
 {
     static const char *const tags[] = {
-        "html", "body", "div", "span", "p", "br", "table", "tr", "td",
-        "th", "ul", "ol", "li", "a", "font", "blockquote", "h1", "h2",
-        "h3", "h4", "h5", "h6", "style", "script"
+        "html", "head", "body", "div", "span", "p", "br", "img",
+        "table", "tr", "td", "th", "ul", "ol", "li", "a", "font",
+        "blockquote", "h1", "h2", "h3", "h4", "h5", "h6",
+        "style", "script", "section", "article", "header", "footer",
+        "pre", "hr"
     };
     size_t i;
-    unsigned tag_hits = 0U, entity_hits = 0U;
+
+    if (!name || !name_length) return 0;
+    for (i = 0U; i < sizeof(tags) / sizeof(tags[0]); ++i) {
+        size_t tag_length = strlen(tags[i]);
+        if (name_length == tag_length &&
+            ci_equal_n(name, tags[i], tag_length))
+            return 1;
+    }
+    return 0;
+}
+
+static int html_text_looks_mislabeled(const char *text, size_t length)
+{
+    size_t i;
 
     if (!text || !length) return 0;
     for (i = 0U; i < length; ++i) {
         if (text[i] == '<') {
-            size_t pos = i + 1U, start, j;
+            size_t pos = i + 1U, start;
             while (pos < length && isspace((unsigned char)text[pos])) ++pos;
             if (pos < length && text[pos] == '/') ++pos;
             while (pos < length && isspace((unsigned char)text[pos])) ++pos;
@@ -838,37 +962,47 @@ static int html_text_looks_mislabeled(const char *text, size_t length)
                    (isalnum((unsigned char)text[pos]) || text[pos] == ':' ||
                     text[pos] == '-' || text[pos] == '_'))
                 ++pos;
-            if (pos > start) {
-                for (j = 0U; j < sizeof(tags) / sizeof(tags[0]); ++j) {
-                    size_t tag_length = strlen(tags[j]);
-                    if (pos - start == tag_length &&
-                        ci_equal_n(text + start, tags[j], tag_length)) {
-                        ++tag_hits;
-                        break;
-                    }
-                }
-            }
+            if (html_name_is_common_markup(text + start, pos - start))
+                return 1;
         } else if (text[i] == '&') {
-            size_t end = i + 1U;
-            while (end < length && end - i <= 16U && text[end] != ';' &&
-                   text[end] != '<' && !isspace((unsigned char)text[end]))
-                ++end;
-            if (end < length && text[end] == ';') {
-                AmgBuffer entity;
-                amg_buffer_init(&entity);
-                if (append_named_html_entity(text + i + 1U,
-                                             end - i - 1U, &entity) == AMG_OK) {
-                    if (!(entity.length == end - i + 1U && entity.data &&
-                          entity.data[0] == '&'))
-                        ++entity_hits;
-                }
-                amg_buffer_free(&entity);
-                i = end;
-            }
+            size_t after = 0U, name_length = 0U;
+            const char *name = NULL;
+            int closing = 0;
+            if (html_find_escaped_tag(text, length, i, &after, &name,
+                                      &name_length, &closing) &&
+                html_name_is_common_markup(name, name_length))
+                return 1;
         }
-        if (tag_hits >= 1U || entity_hits >= 2U) return 1;
     }
     return 0;
+}
+
+static int plain_text_decode_html_entities(const char *input, size_t length,
+                                           AmgBuffer *output)
+{
+    size_t i = 0U;
+    int result;
+
+    if ((!input && length) || !output) return AMG_ERR_ARGUMENT;
+    while (i < length) {
+        if (input[i] == '&') {
+            size_t end = i + 1U;
+            while (end < length && end - i <= 16U && input[end] != ';' &&
+                   input[end] != '<' && !isspace((unsigned char)input[end]))
+                ++end;
+            if (end < length && input[end] == ';') {
+                result = append_named_html_entity(input + i + 1U,
+                                                  end - i - 1U, output);
+                if (result != AMG_OK) return result;
+                i = end + 1U;
+                continue;
+            }
+        }
+        if (amg_buffer_append_char(output, (unsigned char)input[i]) != AMG_OK)
+            return AMG_ERR_MEMORY;
+        ++i;
+    }
+    return AMG_OK;
 }
 
 static const char *param_value(const char *header, const char *name, char *buffer, size_t size)
@@ -1332,8 +1466,8 @@ static int extract_entity(const char *message, size_t length, unsigned depth,
                     result = amg_html_to_text((const char *)decoded.data,
                                               decoded.length, output);
                 else
-                    result = amg_buffer_append(output, decoded.data,
-                                               decoded.length);
+                    result = plain_text_decode_html_entities(
+                        (const char *)decoded.data, decoded.length, output);
             } else if (ci_starts_with(content_type, "text/html"))
                 result = amg_html_to_text((const char *)decoded.data,
                                           decoded.length, output);

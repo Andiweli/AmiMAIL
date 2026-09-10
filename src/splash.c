@@ -31,7 +31,7 @@
 
 #define SPLASH_BANNER_WIDTH 170U
 #define SPLASH_BANNER_HEIGHT 28U
-#define SPLASH_BANNER_COLORS 8U
+#define SPLASH_BANNER_COLORS 16U
 #define SPLASH_MARGIN_X 12UL
 #define SPLASH_MARGIN_Y 8UL
 #define SPLASH_BANNER_TEXT_GAP 7UL
@@ -160,8 +160,8 @@ static void splash_draw_banner(void)
     top = (LONG)slot->TopEdge;
 
     if (slot->Width > 0 && slot->Height > 0) {
-        /* AmiMAIL CMAP index 2 is the exact #888888 banner background. */
-        SetAPen(rastport, (ULONG)splash_pens[2]);
+        /* AmiMAIL CMAP index 7 is the exact #999999 banner background. */
+        SetAPen(rastport, (ULONG)splash_pens[7]);
         RectFill(rastport,
                  left, top,
                  left + (LONG)slot->Width - 1L,
@@ -175,7 +175,7 @@ static void splash_draw_banner(void)
     width = splash_be16(header);
     height = splash_be16(header + 2U);
     planes = header[8U];
-    if (!width || !height || planes != 3U || header[10U] != 0U) return;
+    if (!width || !height || planes != 4U || header[10U] != 0U) return;
     row_bytes = ((width + 15U) / 16U) * 2U;
     if ((size_t)row_bytes * planes * height > body_length) return;
 

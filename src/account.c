@@ -11,6 +11,7 @@ void amg_account_init(AmgAccount *account)
 {
     if (!account) return;
     memset(account, 0, sizeof(*account));
+    account->enabled = 0;
     account->imap_port = 993;
     account->smtp_port = 465;
     account->imap_starttls = 0;
@@ -23,6 +24,71 @@ void amg_account_init(AmgAccount *account)
     account->notification_sound = 0;
     account->notification_sound_path[0] = 0;
     account->auth_mode = AMG_AUTH_PASSWORD;
+}
+
+int amg_account_copy(AmgAccount *destination, const AmgAccount *source)
+{
+    AmgAccount copy;
+    if (!destination || !source) return AMG_ERR_ARGUMENT;
+    copy = *source;
+    copy.imap_password = NULL;
+    copy.smtp_password = NULL;
+    copy.refresh_token = NULL;
+    if (amg_account_set_secret(&copy.imap_password,
+                               source->imap_password) != AMG_OK ||
+        amg_account_set_secret(&copy.smtp_password,
+                               source->smtp_password) != AMG_OK ||
+        amg_account_set_secret(&copy.refresh_token,
+                               source->refresh_token) != AMG_OK) {
+        amg_account_clear(&copy);
+        return AMG_ERR_MEMORY;
+    }
+    amg_account_clear(destination);
+    *destination = copy;
+    return AMG_OK;
+}
+
+void amg_account_set_init(AmgAccountSet *set)
+{
+    size_t index;
+    if (!set) return;
+    memset(set, 0, sizeof(*set));
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
+        amg_account_init(&set->accounts[index]);
+        set->order[index] = index;
+    }
+    set->accounts[0].enabled = 1;
+    set->current = 0U;
+}
+
+void amg_account_set_clear(AmgAccountSet *set)
+{
+    size_t index;
+    if (!set) return;
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index)
+        amg_account_clear(&set->accounts[index]);
+    amg_secure_clear(set, sizeof(*set));
+}
+
+size_t amg_account_set_first_enabled(const AmgAccountSet *set)
+{
+    size_t position;
+    if (!set) return 0U;
+    for (position = 0U; position < AMG_MAX_ACCOUNTS; ++position) {
+        size_t index = set->order[position];
+        if (index < AMG_MAX_ACCOUNTS && set->accounts[index].enabled)
+            return index;
+    }
+    return 0U;
+}
+
+size_t amg_account_set_enabled_count(const AmgAccountSet *set)
+{
+    size_t index, count = 0U;
+    if (!set) return 0U;
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index)
+        if (set->accounts[index].enabled) ++count;
+    return count;
 }
 
 void amg_account_clear(AmgAccount *account)
@@ -174,6 +240,7 @@ static void normalize_google_app_password(char **secret)
 void amg_account_normalize(AmgAccount *account)
 {
     if (!account) return;
+    trim_ascii(account->account_name);
     trim_ascii(account->display_name);
     trim_ascii(account->email);
     trim_ascii(account->imap_host);

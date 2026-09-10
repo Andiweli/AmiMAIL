@@ -14,6 +14,7 @@
 
 #include <clib/alib_protos.h>
 #include <classes/window.h>
+#include <devices/inputevent.h>
 #include <dos/dos.h>
 #include <exec/lists.h>
 #include <exec/memory.h>
@@ -24,7 +25,9 @@
 #include <gadgets/string.h>
 #include <gadgets/texteditor.h>
 #include <intuition/classes.h>
+#include <intuition/gadgetclass.h>
 #include <intuition/intuition.h>
+#include <intuition/icclass.h>
 #include <libraries/asl.h>
 #include <proto/asl.h>
 #include <proto/button.h>
@@ -36,6 +39,7 @@
 #include <proto/scroller.h>
 #include <proto/string.h>
 #include <proto/texteditor.h>
+#include <proto/utility.h>
 #include <proto/window.h>
 #include <reaction/reaction.h>
 #include <reaction/reaction_macros.h>
@@ -52,6 +56,434 @@
 #define ButtonObject NewObject(NULL, (CONST_STRPTR)"button.gadget"
 
 #define T(id, en) amg_tr((id), (en))
+
+#define COMPOSE_WINDOW_STATE_DRAWER "ENVARC:AmiMail"
+#define COMPOSE_WINDOW_STATE_PATH "ENVARC:AmiMail/compose-window.state"
+#define COMPOSE_WINDOW_STATE_TEMP "ENVARC:AmiMail/compose-window.state.new"
+#define COMPOSE_WINDOW_STATE_HEADER "AMIMAIL-COMPOSE-WINDOW-1"
+
+#define COMPOSE_RAWKEY_A 0x20U
+#define COMPOSE_RAWKEY_X 0x32U
+#define COMPOSE_RAWKEY_C 0x33U
+#define COMPOSE_RAWKEY_V 0x34U
+
+/* The editable compose TextEditor is deliberately not connected to the
+ * generic modelclass link used by the read-only preview.  Instead, let the
+ * scroller notify the editor directly and route the editor's own property
+ * notifications through IDCMP_IDCMPUPDATE.  texteditor.gadget documents
+ * Prop_First/Entries/Visible specifically as the scrollbar interface.  This
+ * keeps updates event-driven without replacing the editor's mouse handling. */
+static struct TagItem compose_scroller_to_texteditor_map[] = {
+    { SCROLLER_Top, GA_TEXTEDITOR_Prop_First },
+    { TAG_DONE, 0 }
+};
+
+typedef struct ComposeScrollerSyncState {
+    ULONG first;
+    ULONG entries;
+    WORD editor_height;
+    int valid;
+} ComposeScrollerSyncState;
+
+typedef struct ComposeInputHookState {
+    int scroller_sync_pending;
+} ComposeInputHookState;
+
+static int compose_connect_texteditor_scroller(struct Gadget *editor,
+                                                struct Gadget *scroller)
+{
+    if (!editor || !scroller) return 0;
+
+    /* Editor -> application: property changes arrive as IDCMP_IDCMPUPDATE
+     * and are filtered by compose_idcmp_subentry(). */
+    SetAttrs((Object *)editor,
+             ICA_TARGET, ICTARGET_IDCMP,
+             TAG_DONE);
+
+    /* Scroller -> editor: moving the prop changes only the first line. */
+    SetAttrs((Object *)scroller,
+             ICA_TARGET, (ULONG)(uintptr_t)editor,
+             ICA_MAP, (ULONG)(uintptr_t)compose_scroller_to_texteditor_map,
+             TAG_DONE);
+    return 1;
+}
+
+static void compose_disconnect_texteditor_scroller(struct Gadget *editor,
+                                                    struct Gadget *scroller)
+{
+    if (editor)
+        SetAttrs((Object *)editor, ICA_TARGET, 0UL, TAG_DONE);
+    if (scroller)
+        SetAttrs((Object *)scroller,
+                 ICA_TARGET, 0UL,
+                 ICA_MAP, 0UL,
+                 TAG_DONE);
+}
+
+static int compose_update_contains_scroll_property(struct TagItem *tags)
+{
+    struct TagItem *state = tags;
+    struct TagItem *tag;
+    if (!tags) return 0;
+    while ((tag = NextTagItem(&state)) != NULL) {
+        if (tag->ti_Tag == GA_TEXTEDITOR_Prop_First ||
+            tag->ti_Tag == GA_TEXTEDITOR_Prop_Entries ||
+            tag->ti_Tag == GA_TEXTEDITOR_Prop_Visible)
+            return 1;
+    }
+    return 0;
+}
+
+static ULONG compose_idcmp_subentry(struct Hook *hook, APTR object,
+                                    APTR message_ptr)
+{
+    ComposeInputHookState *state =
+        hook ? (ComposeInputHookState *)hook->h_Data : NULL;
+    struct IntuiMessage *message = (struct IntuiMessage *)message_ptr;
+    (void)object;
+
+    if (!state || !message) return 0UL;
+
+    if (message->Class == IDCMP_IDCMPUPDATE &&
+        compose_update_contains_scroll_property(
+            (struct TagItem *)message->IAddress))
+        state->scroller_sync_pending = 1;
+
+    return 0UL;
+}
+
+static void compose_init_input_hook(struct Hook *hook,
+                                    ComposeInputHookState *state)
+{
+    if (!hook || !state) return;
+    memset(state, 0, sizeof(*state));
+    memset(hook, 0, sizeof(*hook));
+    hook->h_Entry = (__typeof__(hook->h_Entry))HookEntry;
+    hook->h_SubEntry =
+        (__typeof__(hook->h_SubEntry))compose_idcmp_subentry;
+    hook->h_Data = state;
+}
+
+static void compose_text_end_position(const unsigned char *text,
+                                      ULONG *end_x, ULONG *end_y)
+{
+    ULONG x = 0U, y = 0U;
+    const unsigned char *p =
+        text ? text : (const unsigned char *)"";
+    while (*p) {
+        if (*p == '\r') {
+            if (p[1] == '\n') ++p;
+            ++y;
+            x = 0U;
+        } else if (*p == '\n') {
+            ++y;
+            x = 0U;
+        } else {
+            ++x;
+        }
+        ++p;
+    }
+    if (end_x) *end_x = x;
+    if (end_y) *end_y = y;
+}
+
+static ULONG compose_texteditor_super_arexx(Class *cl, Object *object,
+                                             struct GadgetInfo *ginfo,
+                                             const char *command)
+{
+    struct GP_TEXTEDITOR_ARexxCmd message;
+    if (!cl || !object || !command) return 0UL;
+    memset(&message, 0, sizeof(message));
+    message.MethodID = GM_TEXTEDITOR_ARexxCmd;
+    message.GInfo = ginfo;
+    message.command = (STRPTR)command;
+    return DoSuperMethodA(cl, object, (Msg)&message);
+}
+
+static ULONG compose_texteditor_super_mark_all(Class *cl, Object *object,
+                                                struct GadgetInfo *ginfo)
+{
+    struct GP_TEXTEDITOR_ExportText export_message;
+    struct GP_TEXTEDITOR_MarkText mark_message;
+    STRPTR text;
+    ULONG end_x = 0U, end_y = 0U;
+    ULONG result;
+
+    if (!cl || !object) return 0UL;
+    memset(&export_message, 0, sizeof(export_message));
+    export_message.MethodID = GM_TEXTEDITOR_ExportText;
+    export_message.GInfo = ginfo;
+    text = (STRPTR)(uintptr_t)DoSuperMethodA(
+        cl, object, (Msg)&export_message);
+    if (!text) return 0UL;
+
+    compose_text_end_position(text, &end_x, &end_y);
+    memset(&mark_message, 0, sizeof(mark_message));
+    mark_message.MethodID = GM_TEXTEDITOR_MarkText;
+    mark_message.GInfo = ginfo;
+    mark_message.start_crsr_x = 0U;
+    mark_message.start_crsr_y = 0U;
+    mark_message.stop_crsr_x = end_x;
+    mark_message.stop_crsr_y = end_y;
+    result = DoSuperMethodA(cl, object, (Msg)&mark_message);
+    FreeVec(text);
+    return result;
+}
+
+static int compose_texteditor_arexx(struct Gadget *editor,
+                                    struct Window *window,
+                                    const char *command)
+{
+    struct GP_TEXTEDITOR_ARexxCmd message;
+    if (!editor || !window || !command) return 0;
+    memset(&message, 0, sizeof(message));
+    message.MethodID = GM_TEXTEDITOR_ARexxCmd;
+    message.GInfo = NULL;
+    message.command = (STRPTR)command;
+    return DoGadgetMethodA(editor, window, NULL, (Msg)&message) != 0UL;
+}
+
+static int compose_texteditor_mark_all(struct Gadget *editor,
+                                       struct Window *window)
+{
+    struct GP_TEXTEDITOR_MarkText mark_message;
+    STRPTR text;
+    ULONG end_x = 0U, end_y = 0U;
+    ULONG result;
+
+    if (!editor || !window) return 0;
+    text = (STRPTR)(uintptr_t)DoGadgetMethod(
+        editor, window, NULL, GM_TEXTEDITOR_ExportText, 0UL);
+    if (!text) return 0;
+
+    compose_text_end_position(text, &end_x, &end_y);
+    memset(&mark_message, 0, sizeof(mark_message));
+    mark_message.MethodID = GM_TEXTEDITOR_MarkText;
+    mark_message.GInfo = NULL;
+    mark_message.start_crsr_x = 0U;
+    mark_message.start_crsr_y = 0U;
+    mark_message.stop_crsr_x = end_x;
+    mark_message.stop_crsr_y = end_y;
+    result = DoGadgetMethodA(editor, window, NULL, (Msg)&mark_message);
+    FreeVec(text);
+    return result != 0UL;
+}
+
+static int compose_handle_edit_menu(ULONG menu_code,
+                                    struct Window *window,
+                                    struct Gadget *body_gadget)
+{
+    switch (menu_code) {
+        case MENU_EDIT_COPY:
+            return compose_texteditor_arexx(body_gadget, window, "COPY");
+        case MENU_EDIT_CUT:
+            return compose_texteditor_arexx(body_gadget, window, "CUT");
+        case MENU_EDIT_PASTE:
+            return compose_texteditor_arexx(body_gadget, window, "PASTE");
+        case MENU_EDIT_SELECT_ALL:
+            return compose_texteditor_mark_all(body_gadget, window);
+        default:
+            return 0;
+    }
+}
+
+/*
+ * ReAction texteditor.gadget V44/V47 deliberately ignores auto-repeat for
+ * Return/Enter on some classic systems.  Handling this in window.class does
+ * not work reliably because the active child receives GM_HANDLEINPUT before
+ * a RAWKEY message ever reaches the window IDCMP.
+ *
+ * Use a private subclass of texteditor.gadget instead.  The subclass sees
+ * exactly the InputEvents that the active editor receives.  For repeated
+ * Return/Enter only, insert one newline and consume that repeat event.
+ * Ordinary Return/Enter and every other input event are still handled by the
+ * original texteditor.gadget unchanged.
+ */
+static ULONG compose_texteditor_dispatcher(struct Hook *hook, APTR object_ptr,
+                                           APTR message_ptr)
+{
+    Class *cl = hook ? (Class *)hook->h_Data : NULL;
+    Object *object = (Object *)object_ptr;
+    Msg message = (Msg)message_ptr;
+
+    if (!cl || !object || !message) return 0UL;
+
+    if (message->MethodID == GM_HANDLEINPUT) {
+        struct gpInput *input = (struct gpInput *)message_ptr;
+        struct InputEvent *event = input->gpi_IEvent;
+
+        if (event && event->ie_Class == IECLASS_RAWKEY &&
+            (event->ie_Qualifier & IEQUALIFIER_RCOMMAND) &&
+            !(event->ie_Qualifier & IEQUALIFIER_REPEAT) &&
+            !(event->ie_Code & IECODE_UP_PREFIX)) {
+            UWORD code = event->ie_Code & (UWORD)~IECODE_UP_PREFIX;
+            switch (code) {
+                case COMPOSE_RAWKEY_C:
+                    (void)compose_texteditor_super_arexx(
+                        cl, object, input->gpi_GInfo, "COPY");
+                    return GMR_MEACTIVE;
+                case COMPOSE_RAWKEY_X:
+                    (void)compose_texteditor_super_arexx(
+                        cl, object, input->gpi_GInfo, "CUT");
+                    return GMR_MEACTIVE;
+                case COMPOSE_RAWKEY_V:
+                    (void)compose_texteditor_super_arexx(
+                        cl, object, input->gpi_GInfo, "PASTE");
+                    return GMR_MEACTIVE;
+                case COMPOSE_RAWKEY_A:
+                    (void)compose_texteditor_super_mark_all(
+                        cl, object, input->gpi_GInfo);
+                    return GMR_MEACTIVE;
+            }
+        }
+
+        if (event && event->ie_Class == IECLASS_RAWKEY &&
+            (event->ie_Qualifier & IEQUALIFIER_REPEAT)) {
+            UWORD code = event->ie_Code;
+
+            if (!(code & IECODE_UP_PREFIX)) {
+                code &= (UWORD)~IECODE_UP_PREFIX;
+                if (code == 0x43U || code == 0x44U) {
+                    struct GP_TEXTEDITOR_InsertText insert;
+
+                    insert.MethodID = GM_TEXTEDITOR_InsertText;
+                    insert.GInfo = input->gpi_GInfo;
+                    insert.text = (STRPTR)"\n";
+                    insert.pos = (LONG)GV_TEXTEDITOR_InsertText_Cursor;
+                    (void)DoSuperMethodA(cl, object, (Msg)&insert);
+                    return GMR_MEACTIVE;
+                }
+            }
+        }
+    }
+
+    return DoSuperMethodA(cl, object, message);
+}
+
+static Class *compose_make_texteditor_class(void)
+{
+    Class *cl = MakeClass(NULL, NULL, TEXTEDITOR_GetClass(), 0UL, 0UL);
+    if (!cl) return NULL;
+
+    cl->cl_Dispatcher.h_Entry =
+        (__typeof__(cl->cl_Dispatcher.h_Entry))HookEntry;
+    cl->cl_Dispatcher.h_SubEntry =
+        (__typeof__(cl->cl_Dispatcher.h_SubEntry))
+            compose_texteditor_dispatcher;
+    cl->cl_Dispatcher.h_Data = cl;
+    return cl;
+}
+
+/* Keep the external compose scrollbar in sync without periodic polling.
+ * The call is made only after a real TextEditor property notification or a
+ * window resize.  The line count and editor height are cached so unchanged
+ * values never redraw the scroller. */
+static void compose_sync_texteditor_scroller(
+    struct Window *window, struct Gadget *editor, struct Gadget *scroller,
+    ComposeScrollerSyncState *state, int force)
+{
+    ULONG first = 0U, entries = 1U;
+    WORD editor_height;
+
+    if (!window || !editor || !scroller || !state) return;
+    GetAttr(GA_TEXTEDITOR_Prop_First, (Object *)editor, &first);
+    GetAttr(GA_TEXTEDITOR_Prop_Entries, (Object *)editor, &entries);
+    if (entries < 1U) entries = 1U;
+    editor_height = editor->Height;
+
+    if (!force && state->valid &&
+        state->first == first && state->entries == entries &&
+        state->editor_height == editor_height)
+        return;
+
+    sync_texteditor_scroller(window, editor, scroller, 0U, 0);
+
+    GetAttr(GA_TEXTEDITOR_Prop_First, (Object *)editor, &state->first);
+    GetAttr(GA_TEXTEDITOR_Prop_Entries, (Object *)editor, &state->entries);
+    if (state->entries < 1U) state->entries = 1U;
+    state->editor_height = editor->Height;
+    state->valid = 1;
+}
+
+static void compose_state_ensure_drawer(void)
+{
+    BPTR lock = Lock((CONST_STRPTR)COMPOSE_WINDOW_STATE_DRAWER, ACCESS_READ);
+    if (lock) {
+        UnLock(lock);
+        return;
+    }
+    lock = CreateDir((CONST_STRPTR)COMPOSE_WINDOW_STATE_DRAWER);
+    if (lock) UnLock(lock);
+}
+
+static ULONG compose_state_clamp(ULONG value, ULONG minimum, ULONG maximum)
+{
+    if (maximum < minimum) minimum = maximum;
+    if (value < minimum) return minimum;
+    if (value > maximum) return maximum;
+    return value;
+}
+
+static int compose_state_load(const struct Screen *screen, ULONG *left,
+                              ULONG *top, ULONG *width, ULONG *height)
+{
+    FILE *file;
+    char header[64];
+    unsigned long saved_left, saved_top, saved_width, saved_height;
+    ULONG max_width, max_height, max_left, max_top;
+    if (!screen || !left || !top || !width || !height) return 0;
+    file = fopen(COMPOSE_WINDOW_STATE_PATH, "rb");
+    if (!file) return 0;
+    if (!fgets(header, sizeof(header), file) ||
+        strncmp(header, COMPOSE_WINDOW_STATE_HEADER,
+                strlen(COMPOSE_WINDOW_STATE_HEADER)) != 0 ||
+        fscanf(file, "left=%lu\ntop=%lu\nwidth=%lu\nheight=%lu\n",
+               &saved_left, &saved_top, &saved_width, &saved_height) != 4) {
+        fclose(file);
+        return 0;
+    }
+    fclose(file);
+
+    max_width = (ULONG)screen->Width;
+    max_height = (ULONG)screen->Height;
+    if (max_width > 20UL) max_width -= 20UL;
+    if (max_height > 20UL) max_height -= 20UL;
+    *width = compose_state_clamp((ULONG)saved_width, 440UL, max_width);
+    *height = compose_state_clamp((ULONG)saved_height, 300UL, max_height);
+    max_left = (ULONG)screen->Width > *width
+        ? (ULONG)screen->Width - *width : 0UL;
+    max_top = (ULONG)screen->Height > *height
+        ? (ULONG)screen->Height - *height : 0UL;
+    *left = compose_state_clamp((ULONG)saved_left, 0UL, max_left);
+    *top = compose_state_clamp((ULONG)saved_top, 0UL, max_top);
+    return 1;
+}
+
+static void compose_state_save(const struct Window *window)
+{
+    FILE *file;
+    int failed = 0;
+    if (!window) return;
+    compose_state_ensure_drawer();
+    file = fopen(COMPOSE_WINDOW_STATE_TEMP, "wb");
+    if (!file) return;
+    if (fprintf(file, "%s\nleft=%lu\ntop=%lu\nwidth=%lu\nheight=%lu\n",
+                COMPOSE_WINDOW_STATE_HEADER,
+                (unsigned long)(window->LeftEdge < 0 ? 0 : window->LeftEdge),
+                (unsigned long)(window->TopEdge < 0 ? 0 : window->TopEdge),
+                (unsigned long)window->Width,
+                (unsigned long)window->Height) < 0)
+        failed = 1;
+    if (fclose(file) != 0) failed = 1;
+    if (failed) {
+        DeleteFile((CONST_STRPTR)COMPOSE_WINDOW_STATE_TEMP);
+        return;
+    }
+    DeleteFile((CONST_STRPTR)COMPOSE_WINDOW_STATE_PATH);
+    if (!Rename((CONST_STRPTR)COMPOSE_WINDOW_STATE_TEMP,
+                (CONST_STRPTR)COMPOSE_WINDOW_STATE_PATH))
+        DeleteFile((CONST_STRPTR)COMPOSE_WINDOW_STATE_TEMP);
+}
 
 enum ComposeGadgetId {
     GID_COMPOSE_TO = 200,
@@ -1213,7 +1645,6 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     struct Window *window;
     struct Gadget *to_gadget, *cc_gadget, *bcc_gadget, *subject_gadget;
     struct Gadget *body_gadget, *body_scroller;
-    TextEditorScrollLink body_scroll_link;
     struct Gadget *attachments_gadget, *attachments_scroller;
     struct Gadget *compose_status;
     struct List attachment_list;
@@ -1231,8 +1662,12 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     int edit_draft = mode == COMPOSE_MODE_EDIT_DRAFT;
     int forward_mode = mode == COMPOSE_MODE_FORWARD;
     int done = 0, submitted = 0, sent_queued = 0;
+    int select_all_pending = 0;
+    ComposeScrollerSyncState body_scroll_state;
+    ComposeInputHookState compose_input_state;
+    struct Hook compose_idcmp_hook;
+    Class *compose_texteditor_class = NULL;
 
-    memset(&body_scroll_link, 0, sizeof(body_scroll_link));
     if (gui->compose_open) {
         if (gui->compose_window) {
             WindowToFront(gui->compose_window);
@@ -1242,6 +1677,9 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     }
 
     memset(attachments, 0, sizeof(attachments));
+    memset(&body_scroll_state, 0, sizeof(body_scroll_state));
+    memset(&compose_input_state, 0, sizeof(compose_input_state));
+    memset(&compose_idcmp_hook, 0, sizeof(compose_idcmp_hook));
     if (reply_mode) {
         initial_to = gui->reply_to_local;
         initial_cc = gui->reply_cc_local;
@@ -1304,6 +1742,8 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
             compose_left = ((ULONG)gui->screen->Width - compose_width) / 2UL;
         if ((ULONG)gui->screen->Height > compose_height)
             compose_top = ((ULONG)gui->screen->Height - compose_height) / 2UL;
+        (void)compose_state_load(gui->screen, &compose_left, &compose_top,
+                                 &compose_width, &compose_height);
     }
 
     body_scroller = create_vertical_scroller(GID_COMPOSE_BODY_SCROLL);
@@ -1319,13 +1759,24 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         return 0;
     }
 
+    compose_texteditor_class = compose_make_texteditor_class();
+    if (!compose_texteditor_class) {
+        DisposeObject((Object *)attachments_scroller);
+        DisposeObject((Object *)body_scroller);
+        amg_error_set(error, AMG_ERR_MEMORY,
+                      T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_CREATED,
+                        "New mail window could not be created."));
+        cleanup_compose_attachments(attachments, attachment_count);
+        return 0;
+    }
+
     /* Apply the saved signature to newly created messages. Drafts already
      * contain exactly what the user saved and must not receive it twice.
      * In replies/forwards the signature sits between the typing area and the
      * quoted/forwarded original. For a mailto: body it follows that body. */
     if (!edit_draft) {
         char signature_local[GUI_SIGNATURE_MAX];
-        gui_signature_load(signature_local, sizeof(signature_local));
+        gui_signature_load(gui, signature_local, sizeof(signature_local));
         if (signature_local[0]) {
             initial_body_with_signature =
                 (char *)calloc(1U, GUI_REPLY_BODY_MAX);
@@ -1350,6 +1801,8 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         }
     }
 
+    compose_init_input_hook(&compose_idcmp_hook, &compose_input_state);
+
     dialog = WindowObject,
         WA_Title, edit_draft
             ? T(MSG_AMIMAIL_EDIT_DRAFT, "AmiMail - Edit draft")
@@ -1360,7 +1813,10 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                     : T(MSG_AMIMAIL_NEW_MAIL, "AmiMail - New mail"))),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                       WFLG_SIZEGADGET | WFLG_ACTIVATE,
-        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
+        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_MENUPICK |
+                  IDCMP_RAWKEY | IDCMP_IDCMPUPDATE | IDCMP_NEWSIZE,
+        WINDOW_IDCMPHook, &compose_idcmp_hook,
+        WINDOW_IDCMPHookBits, IDCMP_IDCMPUPDATE,
         WA_PubScreen, gui->screen,
         WA_Left, compose_left,
         WA_Top, compose_top,
@@ -1368,6 +1824,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         WA_Height, compose_height,
         WA_MinWidth, 440,
         WA_MinHeight, 300,
+        WINDOW_NewMenu, gui_compose_menu_definition(),
         WINDOW_ParentGroup, VGroupObject,
             LAYOUT_SpaceOuter, TRUE,
             LAYOUT_SpaceInner, TRUE,
@@ -1469,7 +1926,8 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                     LAYOUT_SpaceOuter, FALSE,
                     LAYOUT_SpaceInner, FALSE,
                     LAYOUT_AddChild,
-                        body_gadget = (struct Gadget *)TextEditorObject,
+                        body_gadget = (struct Gadget *)NewObject(
+                            compose_texteditor_class, NULL,
                             GA_ID, GID_COMPOSE_BODY,
                             GA_TabCycle, TRUE,
                             GA_TEXTEDITOR_Contents,
@@ -1478,7 +1936,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                             GA_TEXTEDITOR_IndentWidth, 4,
                             GA_TEXTEDITOR_TabKeyPolicy,
                                 GV_TEXTEDITOR_TabKey_IndentsAfter,
-                        EndObject,
+                            TAG_DONE),
                     LAYOUT_AddChild, body_scroller,
                     CHILD_MinWidth, GUI_SCROLLBAR_WIDTH,
                     CHILD_MaxWidth, GUI_SCROLLBAR_WIDTH,
@@ -1559,15 +2017,16 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     EndWindow;
 
     if (!dialog) {
+        FreeClass(compose_texteditor_class);
         amg_error_set(error, AMG_ERR_MEMORY,
                       T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_CREATED, "New mail window could not be created."));
         cleanup_compose_attachments(attachments, attachment_count);
         free(initial_body_with_signature);
         return 0;
     }
-    if (!connect_texteditor_scroller(body_gadget, body_scroller,
-                                     &body_scroll_link)) {
+    if (!compose_connect_texteditor_scroller(body_gadget, body_scroller)) {
         DisposeObject(dialog);
+        FreeClass(compose_texteditor_class);
         amg_error_set(error, AMG_ERR_MEMORY,
                       T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_CREATED,
                         "New mail window could not be created."));
@@ -1578,9 +2037,9 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
 
     window = RA_OpenWindow(dialog);
     if (!window) {
-        disconnect_texteditor_scroller(body_gadget, body_scroller,
-                                       &body_scroll_link);
+        compose_disconnect_texteditor_scroller(body_gadget, body_scroller);
         DisposeObject(dialog);
+        FreeClass(compose_texteditor_class);
         amg_error_set(error, AMG_ERR_IO,
                       T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_OPENED, "New mail window could not be opened."));
         cleanup_compose_attachments(attachments, attachment_count);
@@ -1601,7 +2060,8 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         update_compose_status(compose_status, window, attachments,
                               attachment_count);
     }
-    sync_texteditor_scroller(window, body_gadget, body_scroller, 0, 0);
+    compose_sync_texteditor_scroller(
+        window, body_gadget, body_scroller, &body_scroll_state, 1);
     sync_listbrowser_scroller(window, attachments_gadget,
                               attachments_scroller);
 
@@ -1632,11 +2092,34 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                         }
                         break;
 
+                    case WMHI_MENUPICK:
+                    {
+                        ULONG menu_code = result & 0xffffUL;
+                        if (menu_code == MENU_EDIT_SELECT_ALL) {
+                            /* Defer selection until all menu mouse events
+                             * have been drained. Otherwise the mouse-up that
+                             * closes the menu can immediately clear the mark. */
+                            select_all_pending = 1;
+                        } else if (menu_code == MENU_EDIT_COPY ||
+                                   menu_code == MENU_EDIT_CUT ||
+                                   menu_code == MENU_EDIT_PASTE) {
+                            (void)compose_handle_edit_menu(
+                                menu_code, window, body_gadget);
+                        } else {
+                            handle_menu(gui, menu_code, error);
+                            if (!gui->running) done = 1;
+                        }
+                        break;
+                    }
+
                     case WMHI_GADGETUP:
                         switch (result & WMHI_GADGETMASK) {
                             case GID_COMPOSE_CANCEL:
+                                /* Keep all destructive/save Yes/No
+                                 * requesters centered over the main AmiMail
+                                 * window for a consistent UI position. */
                                 if (confirm_question_dialog_for_window(
-                                        gui, window,
+                                        gui, gui->window,
                                         T(MSG_DO_YOU_WANT_TO_SAVE_THE_DRAFT, "Do you want to save the draft?"),
                                         NULL, 310L)) {
                                     if (queue_composed_mail(
@@ -1669,11 +2152,6 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                             case GID_COMPOSE_BCC_CONTACTS:
                                 gui_contacts_select_emails(
                                     gui, window, bcc_gadget, error);
-                                break;
-
-                            case GID_COMPOSE_BODY_SCROLL:
-                                handle_texteditor_scroller(
-                                    window, body_gadget, body_scroller, 0);
                                 break;
 
                             case GID_COMPOSE_ATTACHMENTS_SCROLL:
@@ -1715,18 +2193,31 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                 }
             }
             if (!done) {
-                sync_texteditor_scroller(
-                    window, body_gadget, body_scroller, 0, 0);
+                if (select_all_pending) {
+                    /* Match the reliable RAmiga+A path after the menu has
+                     * fully closed: reactivate the editor, then mark it. */
+                    ActivateGadget(body_gadget, window, NULL);
+                    (void)compose_texteditor_mark_all(body_gadget, window);
+                    select_all_pending = 0;
+                }
+                if (compose_input_state.scroller_sync_pending ||
+                    body_scroll_state.editor_height != body_gadget->Height) {
+                    compose_sync_texteditor_scroller(
+                        window, body_gadget, body_scroller,
+                        &body_scroll_state, 0);
+                    compose_input_state.scroller_sync_pending = 0;
+                }
                 sync_listbrowser_scroller(
                     window, attachments_gadget, attachments_scroller);
             }
         }
     }
+    compose_state_save(window);
     gui->compose_window = NULL;
     gui->compose_open = 0;
-    disconnect_texteditor_scroller(body_gadget, body_scroller,
-                                   &body_scroll_link);
+    compose_disconnect_texteditor_scroller(body_gadget, body_scroller);
     DisposeObject(dialog);
+    FreeClass(compose_texteditor_class);
     FreeListBrowserList(&attachment_list);
     if (!submitted)
         cleanup_compose_attachments(attachments, attachment_count);

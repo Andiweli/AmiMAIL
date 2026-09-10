@@ -11,13 +11,15 @@
 #include <exec/ports.h>
 #include <exec/tasks.h>
 #include <gadgets/listbrowser.h>
+#include <libraries/gadtools.h>
 #include <intuition/classes.h>
 #include <intuition/intuition.h>
 #include <utility/hooks.h>
 
 struct DiskObject;
 
-#define BANNER_COLOR_COUNT 8U
+#define BANNER_COLOR_COUNT 16U
+#define APP_HEADER_COLOR_COUNT 16U
 #define GUI_REPLY_BODY_MAX 32768U
 #define GUI_SCROLLBAR_WIDTH 16
 #define GUI_URL_MAX 1024U
@@ -32,10 +34,7 @@ struct DiskObject;
 #define GUI_MAIN_MIN_HEIGHT 320L
 #define GUI_SIGNATURE_MAX 2048U
 
-#define ACCOUNT_PATH "ENVARC:AmiMail/account.cfg"
 #define ACCOUNT_DRAWER "ENVARC:AmiMail"
-#define SESSION_KEY_PATH "ENV:AmiMail.session-key"
-#define PERSISTENT_KEY_PATH "ENVARC:AmiMail/account.key"
 
 enum MainGadgetId {
     GID_NEW_MAIL = 1,
@@ -54,7 +53,8 @@ enum MainGadgetId {
     GID_SAVE_ATTACHMENTS,
     GID_STATUS,
     GID_UPDATE,
-    GID_REPLY_MENU
+    GID_REPLY_MENU,
+    GID_ACCOUNT_TABS
 };
 
 
@@ -111,9 +111,28 @@ typedef struct TextEditorScrollLink {
     Object *scroller_to_editor;
 } TextEditorScrollLink;
 
+typedef struct GuiAccountRuntime {
+    unsigned long inbox_latest_uid;
+    unsigned long inbox_uid_validity;
+    int inbox_baseline_ready;
+    unsigned long inbox_unseen_count;
+    int inbox_unseen_known;
+    int periodic_check_pending;
+    int network_reconfigure_pending;
+} GuiAccountRuntime;
+
 struct AmgGui {
+    AmgAccountSet *account_set;
     AmgAccount *account;
     AmgNetwork *network;
+    AmgNetwork *networks[AMG_MAX_ACCOUNTS];
+    GuiAccountRuntime account_runtime[AMG_MAX_ACCOUNTS];
+    size_t active_account;
+    size_t account_tab_map[AMG_MAX_ACCOUNTS];
+    size_t account_tab_count;
+    char account_tab_labels[AMG_MAX_ACCOUNTS][256];
+    struct List account_tabs_list;
+    struct Gadget *account_tabs_gadget;
     Object *window_object;
     struct Window *window;
     struct MsgPort *app_port;
@@ -184,6 +203,8 @@ struct AmgGui {
     struct Screen *screen;
     LONG banner_pens[BANNER_COLOR_COUNT];
     unsigned char banner_pen_owned[BANNER_COLOR_COUNT];
+    LONG app_header_pens[APP_HEADER_COLOR_COUNT];
+    unsigned char app_header_pen_owned[APP_HEADER_COLOR_COUNT];
     LONG unread_pen;
     unsigned char unread_pen_owned;
     LONG text_pen;
@@ -235,6 +256,11 @@ void periodic_timer_cleanup(AmgGui *gui);
 ULONG gui_runtime_signal_mask(AmgGui *gui);
 void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
                                  AmgError *error);
+int gui_switch_account(AmgGui *gui, size_t account_index, int fetch,
+                       AmgError *error);
+void gui_rebuild_account_tabs(AmgGui *gui);
+void gui_reload_account_states(AmgGui *gui);
+void gui_process_background_network(AmgGui *gui, size_t account_index);
 int rawkey_is_rcommand_letter(Object *window_object, ULONG result,
                               char letter);
 int rawkey_is_delete(ULONG result);
@@ -285,14 +311,17 @@ void gui_state_prepare_window(AmgGui *gui);
 void gui_state_save_window(const AmgGui *gui);
 void gui_state_set_mail_status_active(void);
 void gui_state_set_mail_status_inactive(void);
+void gui_state_sync_mail_status(AmgGui *gui);
 void gui_state_set_inbox_unseen(AmgGui *gui, unsigned long count);
 void gui_state_adjust_inbox_unseen(AmgGui *gui, long delta);
 void gui_state_load_inbox_notification(AmgGui *gui);
 void gui_state_save_inbox_notification(const AmgGui *gui);
+void gui_state_save_account_notification(const AmgGui *gui,
+                                         size_t account_index);
 
 /* Signature preferences. */
-void gui_signature_load(char *buffer, size_t capacity);
-int gui_signature_save(const char *text);
+void gui_signature_load(const AmgGui *gui, char *buffer, size_t capacity);
+int gui_signature_save(const AmgGui *gui, const char *text);
 
 /* Workbench iconification and notification sound. */
 void gui_iconify(AmgGui *gui);
@@ -303,6 +332,8 @@ ULONG gui_notify_signal_mask(const AmgGui *gui);
 void gui_notify_handle_signal(AmgGui *gui);
 int gui_notify_preview_sound(AmgGui *gui, const char *path);
 void gui_notify_new_mail(AmgGui *gui);
+void gui_notify_new_mail_for_account(AmgGui *gui,
+                                     const AmgAccount *account);
 
 /* GitHub release check/download GUI integration. */
 void gui_update_refresh_gadget(AmgGui *gui);
@@ -323,6 +354,19 @@ void fetch_mail(AmgGui *gui, AmgError *error);
 void cancel_pending_move(AmgGui *gui);
 void handle_main_gadget(AmgGui *gui, ULONG gadget_id, AmgError *error);
 void handle_main_shortcut(AmgGui *gui, char letter, AmgError *error);
+#define MENU_ACCOUNT FULLMENUNUM(0, 0, NOSUB)
+#define MENU_CONTACTS FULLMENUNUM(0, 2, NOSUB)
+#define MENU_SIGNATURE FULLMENUNUM(0, 3, NOSUB)
+#define MENU_ABOUT FULLMENUNUM(0, 5, NOSUB)
+#define MENU_QUIT FULLMENUNUM(0, 7, NOSUB)
+#define MENU_EDIT_COPY FULLMENUNUM(1, 0, NOSUB)
+#define MENU_EDIT_CUT FULLMENUNUM(1, 1, NOSUB)
+#define MENU_EDIT_PASTE FULLMENUNUM(1, 2, NOSUB)
+#define MENU_EDIT_SELECT_ALL FULLMENUNUM(1, 4, NOSUB)
+#define MENU_EMPTY_TRASH FULLMENUNUM(1, 6, NOSUB)
+#define MENU_EMPTY_SPAM FULLMENUNUM(1, 7, NOSUB)
+
+struct NewMenu *gui_compose_menu_definition(void);
 void handle_menu(AmgGui *gui, ULONG menu_code, AmgError *error);
 
 /* Main-window/layout/rendering module entry points. Private to src/gui_*.c. */
@@ -414,7 +458,6 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
 
 /* Dialog module entry points.  These are intentionally not public API. */
 int account_is_locked(const AmgAccount *account);
-int unlock_account_dialog(AmgGui *gui, AmgError *error);
 int account_dialog(AmgGui *gui, AmgError *error);
 void about_dialog(AmgGui *gui);
 int confirm_question_dialog_for_window(AmgGui *gui,

@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_EN.guide
-@$VER: AmiMAIL_EN.guide 1.5 (29.08.2026)
+@$VER: AmiMAIL_EN.guide 2.0 (03.09.2026)
 
-@NODE MAIN "AmiMAIL 1.5 - Guide"
-AmiMAIL 1.5
+@NODE MAIN "AmiMAIL 2.0 - Guide"
+AmiMAIL 2.0
 Native IMAP/SMTP mail client for AmigaOS 3.2+
 ReAction, IMAP, SMTP and AmiSSL
 
@@ -11,7 +11,7 @@ Contents:
 @{"About AmiMAIL" LINK OVERVIEW}
 @{"Requirements" LINK REQUIREMENTS}
 @{"Installation" LINK INSTALL}
-@{"First start and account" LINK ACCOUNT}
+@{"First start and accounts" LINK ACCOUNT}
 @{"IMAP/SMTP and TLS" LINK SERVERS}
 @{"Mapping system folders" LINK FOLDERS}
 @{"The main window" LINK MAINWINDOW}
@@ -35,8 +35,8 @@ AmiMAIL is a native general-purpose IMAP/SMTP mail client for AmigaOS 3.2+.
 Unlike AmiGmail, AmiMAIL is not restricted to Gmail and can be configured
 for normal IMAP/SMTP providers.
 
-AmiMAIL intentionally uses a single-account design. The interface is based
-on ReAction and encrypted network connections use AmiSSL.
+AmiMAIL supports up to five independently configured mail accounts. The
+interface is based on ReAction and encrypted network connections use AmiSSL.
 
 The focus is classic Amiga operation, modest resource requirements and a
 robust plain-text-oriented mail workflow.
@@ -76,22 +76,48 @@ or update AmiSSL.
 @{"Back to contents" LINK MAIN}
 @ENDNODE
 
-@NODE ACCOUNT "First start and account"
+@NODE ACCOUNT "First start and accounts"
 On first use, open Account settings and enter the information supplied by
 your mail provider.
 
-- Name: visible sender name; it is sent as Name <address> in the From:
-  header.
+AmiMAIL can manage up to five accounts. Account settings show only actually
+configured accounts as native ReAction tabs.
+
+- "+" creates another account, up to a maximum of five.
+- "-" removes the selected account. Its files are deleted only after Save;
+  Cancel discards the change.
+- "<" and ">" change the account order. The same order is used for the
+  account tabs in the main window and Signature window.
+- At least one configured account remains.
+- At least one account must have "Activate account" enabled.
+
+An inactive account remains fully configured, but it does not fetch mail and
+does not appear as a selectable account tab in the main window.
+
+Important fields:
+
+- Account name: a freely chosen short name for the account. It is used on
+  account tabs. If no account name is set, the e-mail address is used as a
+  fallback.
+- Sender name: the visible name in the From: header, for example
+  "John Smith <address@example.com>".
 - E-mail address: the address used as the message sender.
 - IMAP server, port, username and password.
 - SMTP server, port and, if needed, separate SMTP credentials.
 
+Server settings, credentials, system-folder mapping, fetch preferences and
+notification sound are stored separately for each account.
+
 AmiMAIL can use the same credentials for SMTP and IMAP, or retain separate
 SMTP credentials.
 
-Credentials are stored locally in protected form. A master password can be
-requested at startup. Optionally, AmiMAIL can persist a derived key so the
-master-password requester is skipped on later starts.
+Credentials are stored locally in protected form. AmiMAIL creates and uses a
+local per-account key automatically. No master password is required at program
+startup or when changing or saving an account.
+
+If a very old encrypted account cannot be opened because its matching local
+key is unavailable, its public settings remain available. In that case, only
+the IMAP/SMTP password needs to be entered again before saving the account.
 
 
 @{"Back to contents" LINK MAIN}
@@ -122,11 +148,22 @@ Trash, Deleted Messages or different Drafts folders.
 The mapping affects draft storage, sent-message copies, deletion and the
 related main-window actions.
 
+For Gmail/Google Mail accounts, the non-selectable "[Gmail]" or
+"[Google Mail]" namespace container is hidden when no custom visible
+subfolders remain after the system folders have been mapped.
+
 
 @{"Back to contents" LINK MAIN}
 @ENDNODE
 
 @NODE MAINWINDOW "The main window"
+The account tab bar is directly below the graphical header. Main actions such
+as New Mail, Fetch, Reply and Delete are immediately below the tabs.
+
+The tabs show active accounts only and use the configured Account name. If no
+Account name is set, the e-mail address is used as a fallback. Their order is
+the account order configured in Account settings.
+
 The folder list is on the left. The message list is in the upper-right area
 and the message preview is below it.
 
@@ -138,7 +175,9 @@ The main window stays fully interactive while the Compose window is open.
 Message selection, preview updates, manual fetch and network events continue
 to be processed.
 
-Window position and size are saved on normal exit.
+Main-window position and size are saved on normal exit. ReAction remains
+responsible for the window backfill, allowing configured background patterns
+to be used.
 
 
 @{"Back to contents" LINK MAIN}
@@ -162,13 +201,16 @@ adjacent selection area.
 New Mail opens the Compose window with To, CC, BCC, Subject, message body
 and attachments.
 
-The configured name is written as the visible sender name in the
+The configured Sender name is written as the visible name in the
 RFC-compliant From: header. The SMTP envelope still uses only the plain
 e-mail address.
 
 Reply All filters the user's own address and duplicate recipients. Forward
 creates a new message without prefilled recipients and can retain existing
 attachments.
+
+The Compose window position and size are saved. The same shared geometry is
+used for replies, Reply All, forwards and editing drafts.
 
 The main window remains active while composing.
 
@@ -205,13 +247,24 @@ Inline images from HTML mail are not automatically loaded.
 
 @NODE HTMLMAIL "HTML mail"
 AmiMAIL does not contain a full HTML browser. A clean text/plain part is
-preferred when available.
+preferred when available, and its existing paragraphs and blank lines are
+preserved.
 
 HTML-only messages are converted locally to plain text. Paragraphs, line
 breaks, lists and links are retained where practical.
 
 CSS, style/script/head content, tracking pixels and other external content
-are not loaded. HTML entities and numeric entities are decoded.
+are not loaded. Extremely long tracking-only URLs are omitted from the
+preview.
+
+HTML entities and numeric entities are decoded. UTF-8 characters are mapped
+to useful Amiga output where practical, including the Euro symbol,
+typographic quotation marks, apostrophes and en/em dashes. Emoji and
+pictographs that cannot be represented directly are shown as "[Grafik]".
+
+For HTML images, useful alt text is shown as plain text. Images without useful
+alt text are represented as "[Grafik]"; hidden images and tracking pixels are
+omitted.
 
 For broken multipart/alternative messages whose supposed plain-text part is
 actually generated CSS/HTML debris, AmiMAIL can automatically use the HTML
@@ -228,9 +281,12 @@ created, edited and deleted, and CSV or VCard files can be imported.
 Contacts can be added to To, CC and BCC from a multi-selection list in the
 Compose window.
 
-Edit -> Signature... manages the local signature. It is inserted
-automatically in new messages, replies, Reply All, forwards and mailto:
-drafts.
+Edit -> Signature... manages a separate signature for each active mail
+account. The Signature window uses the same Account names and order as the
+account tabs.
+
+The signature belonging to the account being used is inserted automatically
+in new messages, replies, Reply All, forwards and mailto: drafts.
 
 
 @{"Back to contents" LINK MAIN}
@@ -238,10 +294,10 @@ drafts.
 
 @NODE NOTIFY "Notifications and iconify"
 AmiMAIL can play a configured notification sound through AmigaOS DataTypes
-when new mail arrives.
+for each active account when new mail arrives.
 
-The main window can be iconified. The network worker, periodic fetch and
-status handling continue in the background.
+The main window can be iconified. Network workers for active accounts,
+periodic fetch and status handling continue in the background.
 
 The current Inbox state is exposed during runtime through the AmiMAILStatus
 environment variable.
@@ -299,12 +355,12 @@ in bug reports.
 @ENDNODE
 
 @NODE ABOUT "About / Copyright"
-AmiMAIL 1.5 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
+AmiMAIL 2.0 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 
-AmiMAIL uses ReAction, IMAP, SMTP and AmiSSL and intentionally follows a
-single-account design.
+AmiMAIL uses ReAction, IMAP, SMTP and AmiSSL and supports up to five
+independently configured mail accounts.
 
 
 @{"Back to contents" LINK MAIN}

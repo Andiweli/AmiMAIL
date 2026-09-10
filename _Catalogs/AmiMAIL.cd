@@ -1,4 +1,4 @@
-## version 1
+## version 5
 ## language english
 ## basename AmiMAIL
 
@@ -1444,3 +1444,82 @@ Spam
 
 MSG_SYSTEM_TRASH (1156158537//)
 Trash
+
+MSG_ACCOUNT (2100000001//)
+Account
+
+MSG_ACCOUNT_1 (2100000002//)
+Account 1
+
+MSG_ACCOUNT_2 (2100000003//)
+Account 2
+
+MSG_ACCOUNT_3 (2100000004//)
+Account 3
+
+MSG_ACCOUNT_VALUE_DETAIL (2100000005//)
+Account %lu: %s
+
+MSG_ACTIVE_ACCOUNT (2100000006//)
+Active account:
+
+MSG_ACTIVATE_ACCOUNT (2100000007//)
+Activate account
+
+MSG_CONFIGURE_THIS_ACCOUNT_THEN_SAVE (2100000008//)
+Configure this account, then Save.
+
+MSG_AT_LEAST_ONE_ACCOUNT_MUST_BE_ACTIVE (2100000009//)
+At least one account must be active.
+
+MSG_ACCOUNT_VALUE_UNLOCK_BEFORE_CHANGING_SETTINGS (2100000010//)
+Account %lu: unlock the account before changing its settings.
+
+MSG_MAIL_ACCOUNTS_SAVED (2100000011//)
+Mail accounts saved.
+
+MSG_CLOSE_THE_COMPOSE_WINDOW_BEFORE_SWITCHING_ACCOUNTS (2100000012//)
+Close the compose window before switching accounts.
+
+MSG_LOADING_MAIL_FOLDERS (2100000013//)
+Loading mail folders...
+
+MSG_ACCOUNT_VALUE (2100000014//)
+Account %lu
+
+MSG_ALLOW_CHANGES_WITHOUT_MASTER_PASSWORD (2100000015//)
+Allow changes without master password
+
+MSG_ACCOUNT_UNLOCKED_FUTURE_STARTS_ARE_AUTOMATIC (2100000016//)
+Account unlocked; future starts are automatic.
+
+MSG_UNLOCK_ONCE_FUTURE_STARTS_ARE_AUTOMATIC (2100000017//)
+Unlock once; future starts are automatic.
+
+MSG_ACCOUNT_SAVED_STARTUP_KEY_COULD_NOT_BE_STORED (2100000018//)
+Account saved; automatic startup key could not be stored.
+
+MSG_ACCOUNT_NAME (2100000019//)
+Account name:
+
+MSG_SENDER_NAME (2100000020//)
+Sender name:
+
+
+MSG_COPY (2100000021//)
+Copy
+
+MSG_CUT (2100000022//)
+Cut
+
+MSG_PASTE (2100000023//)
+Paste
+
+MSG_SELECT_ALL (2100000024//)
+Select All
+
+MSG_ICON_BY_MARTIN_MASON_MERZ (2100000025//)
+Icon by Martin 'Mason' Merz
+
+MSG_THANKS_TO_ALL_TESTERS_WHO_HELP_TO_CONTINUOUSLY_IMPROVE_AMIMAIL (2100000026//)
+Thanks to all testers who help to continuously improve AmiMAIL.

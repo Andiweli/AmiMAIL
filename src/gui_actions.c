@@ -11,11 +11,13 @@
 #include <dos/dos.h>
 #include <exec/memory.h>
 #include <gadgets/button.h>
+#include <gadgets/clicktab.h>
 #include <gadgets/layout.h>
 #include <gadgets/listbrowser.h>
 #include <gadgets/texteditor.h>
 #include <libraries/gadtools.h>
 #include <proto/button.h>
+#include <proto/clicktab.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
 #include <proto/graphics.h>
@@ -52,22 +54,17 @@ enum ReplyMenuGadgetId {
 };
 
 enum SignatureGadgetId {
-    GID_SIGNATURE_EDITOR = 420,
+    GID_SIGNATURE_TABS = 420,
+    GID_SIGNATURE_EDITOR,
     GID_SIGNATURE_SAVE,
     GID_SIGNATURE_CANCEL
 };
 
-#define MENU_ACCOUNT FULLMENUNUM(0, 0, NOSUB)
-#define MENU_ABOUT FULLMENUNUM(0, 1, NOSUB)
-#define MENU_QUIT FULLMENUNUM(0, 3, NOSUB)
-#define MENU_CONTACTS FULLMENUNUM(1, 0, NOSUB)
-#define MENU_SIGNATURE FULLMENUNUM(1, 1, NOSUB)
-#define MENU_EMPTY_TRASH FULLMENUNUM(1, 3, NOSUB)
-#define MENU_EMPTY_SPAM FULLMENUNUM(1, 4, NOSUB)
-
 #define GUI_PREFS_DRAWER "ENVARC:AmiMail"
 #define SIGNATURE_PATH "ENVARC:AmiMail/signature.txt"
 #define SIGNATURE_TEMP "ENVARC:AmiMail/signature.txt.new"
+#define SIGNATURE_ALT_PATH_FORMAT "ENVARC:AmiMail/signature-%lu.txt"
+#define SIGNATURE_ALT_TEMP_FORMAT "ENVARC:AmiMail/signature-%lu.txt.new"
 
 
 static void ensure_gui_prefs_drawer(void)
@@ -81,71 +78,208 @@ static void ensure_gui_prefs_drawer(void)
     if (lock) UnLock(lock);
 }
 
-void gui_signature_load(char *buffer, size_t capacity)
+static int signature_path_for_account(size_t account_index, int temporary,
+                                      char *path, size_t capacity)
+{
+    int written;
+    if (!path || capacity == 0U) return 0;
+    if (account_index == 0U) {
+        written = snprintf(path, capacity, "%s",
+                           temporary ? SIGNATURE_TEMP : SIGNATURE_PATH);
+    } else {
+        written = snprintf(path, capacity,
+                           temporary ? SIGNATURE_ALT_TEMP_FORMAT
+                                     : SIGNATURE_ALT_PATH_FORMAT,
+                           (unsigned long)(account_index + 1U));
+    }
+    return written >= 0 && (size_t)written < capacity;
+}
+
+static size_t signature_account_index(const AmgGui *gui)
+{
+    if (!gui || gui->active_account >= AMG_MAX_ACCOUNTS) return 0U;
+    return gui->active_account;
+}
+
+static void signature_load_for_account(size_t account_index, char *buffer,
+                                       size_t capacity)
 {
     FILE *file;
+    char path[128];
     size_t length;
     if (!buffer || !capacity) return;
     buffer[0] = 0;
-    file = fopen(SIGNATURE_PATH, "rb");
+    if (!signature_path_for_account(account_index, 0, path, sizeof(path)))
+        return;
+    file = fopen(path, "rb");
     if (!file) return;
     length = fread(buffer, 1U, capacity - 1U, file);
     buffer[length] = 0;
     fclose(file);
 }
 
-int gui_signature_save(const char *text)
+void gui_signature_load(const AmgGui *gui, char *buffer, size_t capacity)
+{
+    signature_load_for_account(signature_account_index(gui), buffer, capacity);
+}
+
+static int signature_save_for_account(size_t account_index, const char *text)
 {
     FILE *file;
+    char path[128];
+    char temporary_path[128];
     size_t length;
     int write_failed = 0;
     if (!text) text = "";
     length = strlen(text);
     if (length >= GUI_SIGNATURE_MAX) return 0;
+    if (!signature_path_for_account(account_index, 0, path, sizeof(path)) ||
+        !signature_path_for_account(account_index, 1, temporary_path,
+                                    sizeof(temporary_path)))
+        return 0;
 
     ensure_gui_prefs_drawer();
-    file = fopen(SIGNATURE_TEMP, "wb");
+    file = fopen(temporary_path, "wb");
     if (!file) return 0;
     if (length && fwrite(text, 1U, length, file) != length)
         write_failed = 1;
     if (fclose(file) != 0) write_failed = 1;
     if (write_failed) {
-        DeleteFile((STRPTR)SIGNATURE_TEMP);
+        DeleteFile((STRPTR)temporary_path);
         return 0;
     }
-    DeleteFile((STRPTR)SIGNATURE_PATH);
-    if (!Rename((STRPTR)SIGNATURE_TEMP, (STRPTR)SIGNATURE_PATH)) {
-        DeleteFile((STRPTR)SIGNATURE_TEMP);
+    DeleteFile((STRPTR)path);
+    if (!Rename((STRPTR)temporary_path, (STRPTR)path)) {
+        DeleteFile((STRPTR)temporary_path);
         return 0;
     }
     return 1;
+}
+
+int gui_signature_save(const AmgGui *gui, const char *text)
+{
+    return signature_save_for_account(signature_account_index(gui), text);
+}
+
+static int signature_capture_editor(struct Gadget *editor,
+                                    struct Window *window,
+                                    char *destination)
+{
+    STRPTR text;
+    size_t length;
+    if (!editor || !window || !destination) return 0;
+    text = (STRPTR)(uintptr_t)DoGadgetMethod(
+        editor, window, NULL, GM_TEXTEDITOR_ExportText, 0UL);
+    if (!text) return 0;
+    length = strlen((const char *)text);
+    if (length >= GUI_SIGNATURE_MAX) {
+        FreeVec(text);
+        return -1;
+    }
+    memcpy(destination, text, length + 1U);
+    FreeVec(text);
+    return 1;
+}
+
+static void signature_free_tabs(struct List *list)
+{
+    struct Node *node;
+    if (!list) return;
+    while ((node = RemHead(list)) != NULL)
+        FreeClickTabNode(node);
+    NewList(list);
 }
 
 static void signature_dialog(AmgGui *gui)
 {
     Object *dialog;
     struct Window *window;
+    struct Gadget *tabs_gadget;
     struct Gadget *editor;
-    char signature[GUI_SIGNATURE_MAX];
+    struct List tabs_list;
+    char tab_labels[AMG_MAX_ACCOUNTS][256];
+    size_t tab_map[AMG_MAX_ACCOUNTS];
+    char signatures[AMG_MAX_ACCOUNTS][GUI_SIGNATURE_MAX];
+    int dirty[AMG_MAX_ACCOUNTS];
+    size_t tab_count = 0U;
+    size_t current_slot;
+    size_t index, position;
     ULONG signal_mask = 0UL;
+    ULONG current_tab;
     LONG char_width = 8L, line_height = 8L;
     LONG editor_width, editor_height, signature_gap, button_height;
     int done = 0;
+    int saved = 0;
 
-    if (!gui || !gui->screen) return;
-    gui_signature_load(signature, sizeof(signature));
+    if (!gui || !gui->screen || !gui->account_set) return;
+    NewList(&tabs_list);
+    memset(signatures, 0, sizeof(signatures));
+    memset(dirty, 0, sizeof(dirty));
+    for (position = 0U; position < AMG_MAX_ACCOUNTS; ++position) {
+        AmgAccount *account;
+        struct Node *node;
+        const char *label;
+        index = gui->account_set->order[position];
+        if (index >= AMG_MAX_ACCOUNTS) continue;
+        account = &gui->account_set->accounts[index];
+        if (!account->enabled) continue;
+        tab_map[tab_count] = index;
+        label = account->account_name[0] ? account->account_name :
+                (account->email[0] ? account->email :
+                 T(MSG_ACCOUNT, "Account"));
+        snprintf(tab_labels[tab_count], sizeof(tab_labels[tab_count]),
+                 "%s", label);
+        if (!tab_labels[tab_count][0])
+            amg_tr_snprintf(tab_labels[tab_count], sizeof(tab_labels[tab_count]),
+                            MSG_ACCOUNT_VALUE, "Account %lu",
+                            (unsigned long)(index + 1U));
+        node = AllocClickTabNode(
+            TNA_Text, (ULONG)(uintptr_t)tab_labels[tab_count],
+            TNA_Number, (ULONG)tab_count, TAG_DONE);
+        if (node) {
+            AddTail(&tabs_list, node);
+            signature_load_for_account(index, signatures[index],
+                                       sizeof(signatures[index]));
+            ++tab_count;
+        }
+    }
+    if (tab_count == 0U) {
+        tab_map[0] = 0U;
+        snprintf(tab_labels[0], sizeof(tab_labels[0]), "%s",
+                 T(MSG_ACCOUNT_VALUE, "Account 1"));
+        {
+            struct Node *node = AllocClickTabNode(
+                TNA_Text, (ULONG)(uintptr_t)tab_labels[0],
+                TNA_Number, 0UL, TAG_DONE);
+            if (node) {
+                AddTail(&tabs_list, node);
+                ++tab_count;
+                signature_load_for_account(0U, signatures[0],
+                                           sizeof(signatures[0]));
+            }
+        }
+    }
+    if (tab_count == 0U) return;
+    current_slot = signature_account_index(gui);
+    current_tab = 0UL;
+    for (index = 0U; index < tab_count; ++index) {
+        if (tab_map[index] == current_slot) {
+            current_tab = (ULONG)index;
+            break;
+        }
+    }
+    current_slot = tab_map[current_tab];
     if (gui->screen->RastPort.TxWidth > 0)
         char_width = (LONG)gui->screen->RastPort.TxWidth;
     if (gui->screen->RastPort.TxHeight > 0)
         line_height = (LONG)gui->screen->RastPort.TxHeight;
-
-    /* Visible editing area: roughly 60 screen-font characters by 5 lines. */
     editor_width = char_width * 60L + 12L;
     editor_height = line_height * 5L + 8L;
     signature_gap = (line_height + 1L) / 2L;
     if (signature_gap < 2L) signature_gap = 2L;
     button_height = line_height + 8L;
 
+    tabs_gadget = NULL;
     editor = NULL;
     dialog = WindowObject,
         WA_Title, T(MSG_AMIMAIL_SIGNATURE, "AmiMail - Signature"),
@@ -155,19 +289,43 @@ static void signature_dialog(AmgGui *gui)
         WA_PubScreen, gui->screen,
         WINDOW_Position, WPOS_CENTERSCREEN,
         WINDOW_ParentGroup, VGroupObject,
-            /* Let the layout determine the complete requester height.  This
-             * keeps the normal ReAction outer margin below the buttons instead
-             * of turning an oversized fixed WA_Height into empty lines. */
             LAYOUT_SpaceOuter, TRUE,
             LAYOUT_SpaceInner, FALSE,
             LAYOUT_ShrinkWrap, TRUE,
+            LAYOUT_AddChild,
+                tabs_gadget = (struct Gadget *)NewObject(
+                    CLICKTAB_GetClass(), NULL,
+                    GA_ID, GID_SIGNATURE_TABS,
+                    GA_RelVerify, TRUE,
+                    GA_BackFill, LAYERS_NOBACKFILL,
+                    CLICKTAB_Labels, (ULONG)(uintptr_t)&tabs_list,
+                    CLICKTAB_Current, current_tab,
+                    CLICKTAB_AutoFit, TRUE,
+                    CLICKTAB_PageGroupBorder, FALSE,
+                    CLICKTAB_TabsOffsetAsLayoutSpacing, TRUE,
+                    TAG_DONE),
+            CHILD_MinWidth, editor_width,
+            CHILD_MaxWidth, editor_width,
+            CHILD_WeightedWidth, 0,
+            CHILD_WeightedHeight, 0,
+
+            /* Keep the editor clear of the clicktab baseline.  Classic
+             * ReAction/font combinations can otherwise clip its top edge by
+             * one pixel, just like the first row in the account dialog. */
+            LAYOUT_AddChild, HGroupObject,
+                LAYOUT_SpaceOuter, FALSE,
+                LAYOUT_SpaceInner, FALSE,
+            EndObject,
+            CHILD_MinHeight, 2,
+            CHILD_MaxHeight, 2,
+            CHILD_WeightedHeight, 0,
 
             LAYOUT_AddChild,
                 editor = (struct Gadget *)TextEditorObject,
                     GA_ID, GID_SIGNATURE_EDITOR,
                     GA_TabCycle, TRUE,
                     GA_TEXTEDITOR_Contents,
-                        (ULONG)(uintptr_t)signature,
+                        (ULONG)(uintptr_t)signatures[current_slot],
                 EndObject,
             CHILD_MinWidth, editor_width,
             CHILD_MaxWidth, editor_width,
@@ -175,8 +333,6 @@ static void signature_dialog(AmgGui *gui)
             CHILD_MinHeight, editor_height,
             CHILD_MaxHeight, editor_height,
             CHILD_WeightedHeight, 0,
-
-            /* Exactly half a text line between editor and buttons. */
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, FALSE,
@@ -184,7 +340,6 @@ static void signature_dialog(AmgGui *gui)
             CHILD_MinHeight, signature_gap,
             CHILD_MaxHeight, signature_gap,
             CHILD_WeightedHeight, 0,
-
             LAYOUT_AddChild, HGroupObject,
                 LAYOUT_SpaceOuter, FALSE,
                 LAYOUT_SpaceInner, TRUE,
@@ -207,13 +362,18 @@ static void signature_dialog(AmgGui *gui)
     EndWindow;
 
     if (!dialog) {
-        status_local(gui, T(MSG_SIGNATURE_EDITOR_COULD_NOT_BE_OPENED, "Signature editor could not be opened."));
+        signature_free_tabs(&tabs_list);
+        status_local(gui, T(MSG_SIGNATURE_EDITOR_COULD_NOT_BE_OPENED,
+                            "Signature editor could not be opened."));
         return;
     }
     window = RA_OpenWindow(dialog);
     if (!window) {
+        SetAttrs((Object *)tabs_gadget, CLICKTAB_Labels, (ULONG)~0UL, TAG_DONE);
         DisposeObject(dialog);
-        status_local(gui, T(MSG_SIGNATURE_EDITOR_COULD_NOT_BE_OPENED, "Signature editor could not be opened."));
+        signature_free_tabs(&tabs_list);
+        status_local(gui, T(MSG_SIGNATURE_EDITOR_COULD_NOT_BE_OPENED,
+                            "Signature editor could not be opened."));
         return;
     }
     WindowToFront(window);
@@ -239,30 +399,64 @@ static void signature_dialog(AmgGui *gui)
                         }
                         break;
                     case WMHI_GADGETUP:
-                        if ((result & WMHI_GADGETMASK) ==
-                            GID_SIGNATURE_CANCEL) {
+                        if ((result & WMHI_GADGETMASK) == GID_SIGNATURE_TABS) {
+                            int capture = signature_capture_editor(
+                                editor, window, signatures[current_slot]);
+                            if (capture < 0) {
+                                status_local(gui, T(MSG_SIGNATURE_IS_TOO_LONG,
+                                                    "Signature is too long."));
+                                SetAttrs((Object *)tabs_gadget,
+                                         CLICKTAB_Current, current_tab,
+                                         TAG_DONE);
+                            } else if (capture > 0) {
+                                dirty[current_slot] = 1;
+                                GetAttr(CLICKTAB_Current,
+                                        (Object *)tabs_gadget, &current_tab);
+                                if (current_tab < tab_count) {
+                                    current_slot = tab_map[current_tab];
+                                    SetGadgetAttrs(editor, window, NULL,
+                                        GA_TEXTEDITOR_Contents,
+                                            (ULONG)(uintptr_t)signatures[current_slot],
+                                        GA_TEXTEDITOR_Prop_First, 0,
+                                        TAG_DONE);
+                                    ActivateGadget(editor, window, NULL);
+                                }
+                            }
+                        } else if ((result & WMHI_GADGETMASK) ==
+                                   GID_SIGNATURE_CANCEL) {
                             done = 1;
                         } else if ((result & WMHI_GADGETMASK) ==
                                    GID_SIGNATURE_SAVE) {
-                            STRPTR text = (STRPTR)(uintptr_t)DoGadgetMethod(
-                                editor, window, NULL,
-                                GM_TEXTEDITOR_ExportText, 0UL);
-                            if (!text) {
-                                status_local(gui,
-                                    T(MSG_SIGNATURE_COULD_NOT_BE_READ, "Signature could not be read."));
-                            } else if (strlen((const char *)text) >= GUI_SIGNATURE_MAX) {
-                                status_local(gui,
-                                    T(MSG_SIGNATURE_IS_TOO_LONG, "Signature is too long."));
-                                FreeVec(text);
-                            } else if (!gui_signature_save((const char *)text)) {
-                                status_local(gui,
-                                    T(MSG_SIGNATURE_COULD_NOT_BE_SAVED, "Signature could not be saved."));
-                                FreeVec(text);
+                            int capture = signature_capture_editor(
+                                editor, window, signatures[current_slot]);
+                            if (capture < 0) {
+                                status_local(gui, T(MSG_SIGNATURE_IS_TOO_LONG,
+                                                    "Signature is too long."));
+                            } else if (capture == 0) {
+                                status_local(gui, T(MSG_SIGNATURE_COULD_NOT_BE_READ,
+                                                    "Signature could not be read."));
                             } else {
-                                FreeVec(text);
-                                status_local(gui,
-                                    T(MSG_SIGNATURE_WAS_SAVED, "Signature was saved."));
-                                done = 1;
+                                dirty[current_slot] = 1;
+                                saved = 1;
+                                for (index = 0U; index < tab_count; ++index) {
+                                    size_t slot = tab_map[index];
+                                    if (dirty[slot] &&
+                                        !signature_save_for_account(
+                                            slot, signatures[slot])) {
+                                        saved = 0;
+                                        break;
+                                    }
+                                }
+                                if (!saved) {
+                                    status_local(gui,
+                                        T(MSG_SIGNATURE_COULD_NOT_BE_SAVED,
+                                          "Signature could not be saved."));
+                                } else {
+                                    status_local(gui,
+                                        T(MSG_SIGNATURE_WAS_SAVED,
+                                          "Signature was saved."));
+                                    done = 1;
+                                }
                             }
                         }
                         break;
@@ -270,7 +464,11 @@ static void signature_dialog(AmgGui *gui)
             }
         }
     }
+    if (tabs_gadget)
+        SetAttrs((Object *)tabs_gadget, CLICKTAB_Labels, (ULONG)~0UL,
+                 TAG_DONE);
     DisposeObject(dialog);
+    signature_free_tabs(&tabs_list);
 }
 
 static int ensure_account(AmgGui *gui, AmgError *error)
@@ -413,14 +611,37 @@ static void update_reply_button_mode(AmgGui *gui)
 {
     const char *text;
     int drafts;
+    static char reply_label[128];
+    size_t used;
+    int marked;
     if (!gui || !gui->reply_gadget) return;
     drafts = current_mailbox_is_drafts(gui);
-    text = drafts
-        ? T(MSG_EDIT, "_Edit")
-        : T(MSG_REPLY, "Reply");
+    if (drafts) {
+        text = T(MSG_EDIT, "_Edit");
+    } else {
+        const char *source = T(MSG_REPLY, "Reply");
+        used = 0U;
+        marked = 0;
+        while (*source && used + 1U < sizeof(reply_label)) {
+            if (*source == '_') {
+                ++source;
+                continue;
+            }
+            if (!marked && (*source == 'w' || *source == 'W') &&
+                used + 2U < sizeof(reply_label)) {
+                reply_label[used++] = '_';
+                marked = 1;
+            }
+            reply_label[used++] = *source++;
+        }
+        reply_label[used] = 0;
+        text = reply_label;
+    }
     if (gui->window) {
         SetGadgetAttrs(gui->reply_gadget, gui->window, NULL,
                        GA_Text, (ULONG)(uintptr_t)text,
+                       GA_ActivateKey,
+                           drafts ? 0UL : (ULONG)(uintptr_t)"W",
                        TAG_DONE);
         if (gui->reply_menu_gadget)
             SetGadgetAttrs(gui->reply_menu_gadget, gui->window, NULL,
@@ -432,6 +653,8 @@ static void update_reply_button_mode(AmgGui *gui)
     } else {
         SetAttrs((Object *)gui->reply_gadget,
                  GA_Text, (ULONG)(uintptr_t)text,
+                 GA_ActivateKey,
+                     drafts ? 0UL : (ULONG)(uintptr_t)"W",
                  TAG_DONE);
         if (gui->reply_menu_gadget)
             SetAttrs((Object *)gui->reply_menu_gadget,
@@ -591,6 +814,15 @@ static int reply_action_popup(AmgGui *gui)
 
     DisposeObject(popup);
     set_reply_menu_arrow(gui, 0);
+
+    /* A temporary activated popup deactivates the main window. Restore the
+     * main window after a menu selection/keyboard close. If the popup became
+     * inactive because the user clicked into another application, do not
+     * steal focus back from that application. */
+    if (gui->window &&
+        (!inactive || (gui->window->Flags & WFLG_WINDOWACTIVE)))
+        ActivateWindow(gui->window);
+
     return selection;
 }
 
@@ -1518,35 +1750,144 @@ void handle_network(AmgGui *gui)
     }
 }
 
+void gui_process_background_network(AmgGui *gui, size_t account_index)
+{
+    AmgNetworkEvent event;
+    AmgNetwork *network;
+    GuiAccountRuntime *runtime;
+    AmgAccount *account;
+    if (!gui || !gui->account_set || account_index >= AMG_MAX_ACCOUNTS ||
+        account_index == gui->active_account)
+        return;
+    network = gui->networks[account_index];
+    runtime = &gui->account_runtime[account_index];
+    account = &gui->account_set->accounts[account_index];
+    while (amg_network_poll(network, &event) > 0) {
+        if (event.result == AMG_OK &&
+            (event.type == AMG_NET_CONNECT ||
+             event.type == AMG_NET_RECONFIGURE)) {
+            char uid_validity[32];
+            snprintf(uid_validity, sizeof(uid_validity), "%lu",
+                     runtime->inbox_baseline_ready
+                        ? runtime->inbox_uid_validity : 0UL);
+            if (amg_network_request(
+                    network, AMG_NET_CHECK_INBOX,
+                    runtime->inbox_baseline_ready
+                        ? runtime->inbox_latest_uid : 0UL,
+                    uid_validity, "background", NULL) == AMG_OK)
+                runtime->periodic_check_pending = 1;
+        } else if (event.type == AMG_NET_CHECK_INBOX) {
+            runtime->periodic_check_pending = 0;
+            if (event.result == AMG_OK) {
+                unsigned long max_uid = 0UL;
+                unsigned long uid_validity =
+                    inbox_event_uid_validity(&event);
+                unsigned long old_uid = runtime->inbox_latest_uid;
+                int had_baseline = runtime->inbox_baseline_ready;
+                int generation_changed = had_baseline &&
+                    runtime->inbox_uid_validity != 0UL &&
+                    uid_validity != 0UL &&
+                    runtime->inbox_uid_validity != uid_validity;
+                int parse_error = 0;
+                int unseen_error = 0;
+                int was_unread = runtime->inbox_unseen_known &&
+                    runtime->inbox_unseen_count > 0UL;
+                size_t unseen_count = message_unseen_count_from_payload(
+                    event.payload, event.payload_length, &unseen_error);
+                size_t new_count = message_uid_stats(
+                    event.payload, event.payload_length,
+                    had_baseline ? old_uid : 0UL,
+                    &max_uid, &parse_error);
+                if (parse_error >= 0) {
+                    size_t notify_count = new_count;
+                    if (generation_changed)
+                        notify_count = 0U;
+                    else if (!had_baseline)
+                        notify_count = unseen_error >= 0
+                            ? unseen_count : 0U;
+                    if (!had_baseline || generation_changed)
+                        runtime->inbox_latest_uid = max_uid;
+                    else if (max_uid > runtime->inbox_latest_uid)
+                        runtime->inbox_latest_uid = max_uid;
+                    if (uid_validity)
+                        runtime->inbox_uid_validity = uid_validity;
+                    runtime->inbox_baseline_ready = 1;
+                    if (unseen_error >= 0) {
+                        int is_unread;
+                        runtime->inbox_unseen_count =
+                            (unsigned long)unseen_count;
+                        runtime->inbox_unseen_known = 1;
+                        is_unread = runtime->inbox_unseen_count > 0UL;
+                        gui_state_sync_mail_status(gui);
+                        if (was_unread != is_unread &&
+                            gui->account_tabs_gadget && gui->window)
+                            gui_rebuild_account_tabs(gui);
+                    }
+                    gui_state_save_account_notification(gui, account_index);
+                    if (notify_count > 0U)
+                        gui_notify_new_mail_for_account(gui, account);
+                }
+            }
+        }
+        amg_network_event_clear(&event);
+    }
+}
+
 void periodic_fetch_mail(AmgGui *gui, AmgError *error)
 {
-    int result = AMG_OK;
-    if (!gui || !gui->account || !gui->account->periodic_fetch ||
-        account_is_locked(gui->account) || gui->periodic_check_pending)
-        return;
-    if (!amg_network_is_running(gui->network))
-        result = amg_network_start(gui->network, gui->account, error);
-    if (result != AMG_OK) {
-        if (error && error->message[0]) status_utf8(gui, error->message);
-        return;
-    }
-    if (!amg_network_is_connected(gui->network)) {
-        status_local(gui, T(MSG_PERIODIC_FETCH_CONNECTING_TO_THE_MAIL_SERVER, "Periodic fetch: connecting to the mail server..."));
-        result = amg_network_request(gui->network, AMG_NET_CONNECT, 0,
-                                     NULL, "periodic", error);
-    } else {
+    size_t index;
+    if (!gui || !gui->account_set) return;
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
+        AmgAccount *account = &gui->account_set->accounts[index];
+        AmgNetwork *network = gui->networks[index];
+        GuiAccountRuntime *runtime = &gui->account_runtime[index];
+        int result = AMG_OK;
         char uid_validity[32];
-        snprintf(uid_validity, sizeof(uid_validity), "%lu",
-                 gui->inbox_baseline_ready
-                    ? gui->inbox_uid_validity : 0UL);
-        result = amg_network_request(
-            gui->network, AMG_NET_CHECK_INBOX,
-            gui->inbox_baseline_ready ? gui->inbox_latest_uid : 0UL,
-            uid_validity, "periodic", error);
-        if (result == AMG_OK) gui->periodic_check_pending = 1;
+        if (!account->enabled || !account->periodic_fetch ||
+            account_is_locked(account) ||
+            (index == gui->active_account
+                ? gui->periodic_check_pending
+                : runtime->periodic_check_pending))
+            continue;
+        if (!amg_network_is_running(network))
+            result = amg_network_start(network, account, error);
+        if (result == AMG_OK && !amg_network_is_connected(network)) {
+            if (index == gui->active_account)
+                status_local(gui,
+                    T(MSG_PERIODIC_FETCH_CONNECTING_TO_THE_MAIL_SERVER,
+                      "Periodic fetch: connecting to the mail server..."));
+            result = amg_network_request(network, AMG_NET_CONNECT, 0,
+                                         NULL,
+                                         index == gui->active_account
+                                            ? "periodic" : "background",
+                                         error);
+        } else if (result == AMG_OK) {
+            snprintf(uid_validity, sizeof(uid_validity), "%lu",
+                     index == gui->active_account
+                        ? (gui->inbox_baseline_ready
+                            ? gui->inbox_uid_validity : 0UL)
+                        : (runtime->inbox_baseline_ready
+                            ? runtime->inbox_uid_validity : 0UL));
+            result = amg_network_request(
+                network, AMG_NET_CHECK_INBOX,
+                index == gui->active_account
+                    ? (gui->inbox_baseline_ready
+                        ? gui->inbox_latest_uid : 0UL)
+                    : (runtime->inbox_baseline_ready
+                        ? runtime->inbox_latest_uid : 0UL),
+                uid_validity,
+                index == gui->active_account ? "periodic" : "background",
+                error);
+            if (result == AMG_OK) {
+                runtime->periodic_check_pending = 1;
+                if (index == gui->active_account)
+                    gui->periodic_check_pending = 1;
+            }
+        }
+        if (result != AMG_OK && index == gui->active_account &&
+            error && error->message[0])
+            status_utf8(gui, error->message);
     }
-    if (result != AMG_OK && error && error->message[0])
-        status_utf8(gui, error->message);
 }
 
 void fetch_mail(AmgGui *gui, AmgError *error)
@@ -1637,6 +1978,16 @@ void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
         case GID_SAVE_ATTACHMENTS:
             save_current_attachments(gui);
             break;
+        case GID_ACCOUNT_TABS:
+        {
+            ULONG visible = 0UL;
+            GetAttr(CLICKTAB_Current,
+                    (Object *)gui->account_tabs_gadget, &visible);
+            if (visible < gui->account_tab_count)
+                (void)gui_switch_account(
+                    gui, gui->account_tab_map[visible], 1, error);
+            break;
+        }
         case GID_REPLY:
             if (focus_open_compose_window(gui)) break;
             request_message(gui, current_mailbox_is_drafts(gui)

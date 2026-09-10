@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_DE.guide
-@$VER: AmiMAIL_DE.guide 1.5 (29.08.2026)
+@$VER: AmiMAIL_DE.guide 2.0 (03.09.2026)
 
-@NODE MAIN "AmiMAIL 1.5 - Anleitung"
-AmiMAIL 1.5
+@NODE MAIN "AmiMAIL 2.0 - Anleitung"
+AmiMAIL 2.0
 Nativer IMAP/SMTP-Mailclient für AmigaOS 3.2+
 ReAction, IMAP, SMTP und AmiSSL
 
@@ -11,7 +11,7 @@ Inhalt:
 @{"Über AmiMAIL" LINK OVERVIEW}
 @{"Voraussetzungen" LINK REQUIREMENTS}
 @{"Installation" LINK INSTALL}
-@{"Erster Start und Konto" LINK ACCOUNT}
+@{"Erster Start und Konten" LINK ACCOUNT}
 @{"IMAP/SMTP und TLS" LINK SERVERS}
 @{"Systemordner zuordnen" LINK FOLDERS}
 @{"Das Hauptfenster" LINK MAINWINDOW}
@@ -35,8 +35,9 @@ AmiMAIL ist ein nativer, allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
 Im Gegensatz zu AmiGmail ist AmiMAIL nicht auf Gmail beschränkt und kann mit
 normalen IMAP-/SMTP-Anbietern verwendet werden.
 
-AmiMAIL ist bewusst als Single-Account-Client ausgelegt. Die Oberfläche
-basiert auf ReAction, die verschlüsselten Netzwerkverbindungen auf AmiSSL.
+AmiMAIL unterstützt bis zu fünf getrennt konfigurierte Mailkonten. Die
+Oberfläche basiert auf ReAction, die verschlüsselten Netzwerkverbindungen
+auf AmiSSL.
 
 Der Schwerpunkt liegt auf klassischer Amiga-Bedienung, geringem
 Ressourcenbedarf und einem robusten Klartext-orientierten Mail-Workflow.
@@ -76,23 +77,50 @@ ersetzt oder aktualisiert AmiSSL nicht.
 @{"Zurück zum Inhalt" LINK MAIN}
 @ENDNODE
 
-@NODE ACCOUNT "Erster Start und Konto"
+@NODE ACCOUNT "Erster Start und Konten"
 Öffne beim ersten Start die Kontoeinstellungen und trage die Daten deines
 Mailanbieters ein.
 
-- Name: sichtbarer Absendername; er wird beim Senden als Name <adresse> im
-  From:-Header verwendet.
+AmiMAIL kann bis zu fünf Konten verwalten. In den Kontoeinstellungen werden
+nur tatsächlich eingerichtete Konten als native ReAction-Reiter angezeigt.
+
+- "+" legt ein weiteres Konto an, bis maximal fünf Konten vorhanden sind.
+- "-" entfernt das ausgewählte Konto. Die Dateien werden erst mit "Speichern"
+  wirklich gelöscht; "Abbrechen" verwirft die Änderung.
+- "<" und ">" ändern die Reihenfolge der Konten. Diese Reihenfolge wird auch
+  für die Konto-Reiter im Hauptfenster und im Signaturfenster verwendet.
+- Mindestens ein eingerichtetes Konto bleibt erhalten.
+- Mindestens ein Konto muss als "Account aktivieren" eingeschaltet sein.
+
+Ein inaktives Konto bleibt vollständig konfiguriert, ruft aber keine Mails ab
+und erscheint nicht als auswählbarer Konto-Reiter im Hauptfenster.
+
+Wichtige Felder:
+
+- Accountname: frei wählbarer kurzer Name des Kontos. Er wird auf den
+  Konto-Reitern angezeigt. Ist kein Accountname vorhanden, dient die
+  E-Mail-Adresse als Ersatz.
+- Absendername: sichtbarer Name im From:-Header, zum Beispiel
+  "Max Mustermann <adresse@example.com>".
 - E-Mail-Adresse: die Adresse, die als Absender verwendet wird.
 - IMAP-Server, Port, Benutzername und Passwort.
 - SMTP-Server, Port und gegebenenfalls eigene SMTP-Zugangsdaten.
 
+Serverdaten, Zugangsdaten, Systemordner, Abrufeinstellungen und
+Benachrichtigungston werden für jedes Konto getrennt gespeichert.
+
 AmiMAIL kann SMTP mit denselben Zugangsdaten wie IMAP betreiben. Alternativ
 können getrennte SMTP-Zugangsdaten gespeichert werden.
 
-Die Zugangsdaten werden lokal geschützt gespeichert. Das Master-Passwort
-kann beim Start abgefragt werden. Optional kann AmiMAIL einen abgeleiteten
-Schlüssel persistent speichern, damit die Passwortabfrage beim Start
-entfällt.
+Die Zugangsdaten werden lokal geschützt gespeichert. AmiMAIL erzeugt und
+verwendet dafür automatisch einen lokalen Kontoschlüssel. Ein Master-Passwort
+ist weder beim Programmstart noch zum Ändern oder Speichern eines Kontos
+erforderlich.
+
+Kann ein sehr altes verschlüsseltes Konto ohne passenden lokalen Schlüssel
+nicht automatisch geöffnet werden, bleiben seine öffentlichen Einstellungen
+erhalten. In diesem Fall müssen lediglich die IMAP-/SMTP-Passwörter erneut
+eingetragen und das Konto gespeichert werden.
 
 
 @{"Zurück zum Inhalt" LINK MAIN}
@@ -126,11 +154,24 @@ verwenden.
 Die Zuordnung beeinflusst unter anderem Speichern von Entwürfen, gesendete
 Kopien, Löschen und die passenden Hauptfenster-Aktionen.
 
+Bei Gmail-/Google-Mail-Konten wird der nicht auswählbare Container "[Gmail]"
+bzw. "[Google Mail]" ausgeblendet, wenn nach der Zuordnung der Systemordner
+keine eigenen sichtbaren Unterordner darin verbleiben.
+
 
 @{"Zurück zum Inhalt" LINK MAIN}
 @ENDNODE
 
 @NODE MAINWINDOW "Das Hauptfenster"
+Direkt unter dem grafischen Header befindet sich die Konto-Reiterleiste.
+Darunter folgen die Hauptaktionen wie Neue Mail, Abrufen, Antworten und
+Löschen.
+
+Die Reiter zeigen nur aktive Konten und verwenden den eingetragenen
+Accountnamen. Ist kein Accountname vorhanden, wird die E-Mail-Adresse als
+Ersatz verwendet. Die Reihenfolge entspricht der in den Kontoeinstellungen
+festgelegten Kontoreihenfolge.
+
 Links befindet sich die Ordneransicht. Rechts oben steht die Mailliste und
 rechts unten die Vorschau.
 
@@ -142,7 +183,9 @@ Das Hauptfenster bleibt vollständig bedienbar, während das Fenster "Neue
 Mail" offen ist. Auswahl, Vorschau, manueller Abruf und Netzwerkereignisse
 werden weiter verarbeitet.
 
-Fensterposition und -größe werden beim normalen Beenden gespeichert.
+Fensterposition und -größe des Hauptfensters werden beim normalen Beenden
+gespeichert. ReAction bleibt für den Fensterhintergrund verantwortlich, so
+dass konfigurierte Hintergrundmuster verwendet werden können.
 
 
 @{"Zurück zum Inhalt" LINK MAIN}
@@ -168,13 +211,17 @@ Antwort-Schaltfläche und ihren Auswahlbereich zur Verfügung.
 "Neue Mail" öffnet das Verfassen-Fenster mit An, CC, BCC, Betreff,
 Nachrichtentext und Anhängen.
 
-Der unter Kontoeinstellungen eingetragene Name wird als sichtbarer
-Absendername in den RFC-konformen From:-Header geschrieben. Der
-SMTP-Envelope verwendet weiterhin nur die reine E-Mail-Adresse.
+Der unter Kontoeinstellungen eingetragene Absendername wird als sichtbarer
+Name in den RFC-konformen From:-Header geschrieben. Der SMTP-Envelope
+verwendet weiterhin nur die reine E-Mail-Adresse.
 
 Reply All filtert die eigene Adresse und doppelte Empfänger. Weiterleiten
 erzeugt einen neuen Empfänger-losen Entwurf mit passendem Betreff und kann
 vorhandene Anhänge übernehmen.
+
+Position und Größe des Verfassen-Fensters werden gespeichert. Diese gemeinsame
+Fenstergeometrie gilt auch für Antworten, Allen Antworten, Weiterleiten und
+das Bearbeiten von Entwürfen.
 
 Das Hauptfenster bleibt während des Verfassens aktiv.
 
@@ -213,17 +260,27 @@ Inline-Bilder aus HTML-Mails werden nicht automatisch geladen.
 
 @NODE HTMLMAIL "HTML-Mails"
 AmiMAIL enthält keinen vollständigen HTML-Browser. Ein sauberer
-text/plain-Part wird bevorzugt.
+text/plain-Part wird bevorzugt und seine vorhandenen Absätze und Leerzeilen
+bleiben erhalten.
 
 HTML-only-Mails werden lokal in Klartext umgewandelt. Absätze,
 Zeilenumbrüche, Listen und Links bleiben soweit sinnvoll erhalten.
 
 CSS, style/script/head-Inhalte, Tracking-Pixel und andere externe Inhalte
-werden nicht geladen. HTML-Entities und numerische Entities werden
-dekodiert.
+werden nicht geladen. Sehr lange reine Tracking-URLs werden nicht in die
+Vorschau übernommen.
 
-Bei fehlerhaften multipart/alternative-Mails, deren angeblicher Plaintext
-aus CSS-/HTML-Resten besteht, kann AmiMAIL automatisch die HTML-Alternative
+HTML-Entities und numerische Entities werden dekodiert. UTF-8-Zeichen werden
+für die Amiga-Ausgabe soweit sinnvoll umgesetzt, darunter Euro-Symbol,
+typografische Anführungszeichen, Apostrophe und Gedankenstriche. Nicht direkt
+darstellbare Emojis oder Piktogramme erscheinen als "[Grafik]".
+
+Bei HTML-Bildern wird vorhandener Alt-Text als Klartext verwendet. Bilder ohne
+brauchbaren Alt-Text erscheinen als "[Grafik]"; versteckte Bilder und
+Tracking-Pixel werden ausgelassen.
+
+Bei fehlerhaften multipart/alternative-Mails, deren angeblicher Plaintext aus
+CSS-/HTML-Resten besteht, kann AmiMAIL automatisch die HTML-Alternative
 verwenden und daraus sauberen Klartext erzeugen.
 
 
@@ -238,20 +295,23 @@ importiert werden.
 Im Verfassen-Fenster können Kontakte für An, CC und BCC per Mehrfachauswahl
 übernommen werden.
 
-Unter Bearbeiten -> Signatur... wird die lokale Signatur verwaltet. Sie wird
-automatisch in neue Mails, Antworten, Reply All, Weiterleitungen und
-mailto:-Entwürfe eingefügt.
+Unter Bearbeiten -> Signatur... wird für jedes aktive Mailkonto eine eigene
+Signatur verwaltet. Das Signaturfenster verwendet dieselben Accountnamen und
+dieselbe Reihenfolge wie die Konto-Reiter.
+
+Die Signatur des jeweils verwendeten Kontos wird automatisch in neue Mails,
+Antworten, Allen Antworten, Weiterleitungen und mailto:-Entwürfe eingefügt.
 
 
 @{"Zurück zum Inhalt" LINK MAIN}
 @ENDNODE
 
 @NODE NOTIFY "Benachrichtigungen und Iconify"
-AmiMAIL kann beim Eintreffen neuer Mails einen konfigurierten
-Benachrichtigungston über AmigaOS DataTypes abspielen.
+AmiMAIL kann beim Eintreffen neuer Mails für jedes aktive Konto einen
+konfigurierten Benachrichtigungston über AmigaOS DataTypes abspielen.
 
-Das Hauptfenster kann iconifiziert werden. Netzwerk-Worker, periodischer
-Abruf und Statusverwaltung laufen im Hintergrund weiter.
+Das Hauptfenster kann iconifiziert werden. Die Netzwerk-Worker der aktiven
+Konten, periodischer Abruf und Statusverwaltung laufen im Hintergrund weiter.
 
 Der aktuelle Inbox-Zustand wird während der Laufzeit über AmiMAILStatus im
 Environment bereitgestellt.
@@ -310,12 +370,12 @@ Serverkonfiguration erleichtern einen Fehlerbericht erheblich.
 @ENDNODE
 
 @NODE ABOUT "Über / Copyright"
-AmiMAIL 1.5 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
+AmiMAIL 2.0 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 
-AmiMAIL verwendet ReAction, IMAP, SMTP und AmiSSL und ist bewusst als
-Single-Account-Client ausgelegt.
+AmiMAIL verwendet ReAction, IMAP, SMTP und AmiSSL und unterstützt bis zu fünf
+getrennt konfigurierte Mailkonten.
 
 
 @{"Zurück zum Inhalt" LINK MAIN}

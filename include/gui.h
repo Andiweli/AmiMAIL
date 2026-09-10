@@ -6,7 +6,7 @@
 
 typedef struct AmgGui AmgGui;
 
-AmgGui *amg_gui_create(AmgAccount *account, AmgError *error);
+AmgGui *amg_gui_create(AmgAccountSet *accounts, AmgError *error);
 int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
                 const char *startup_mailto, AmgError *error);
 void amg_gui_destroy(AmgGui *gui);

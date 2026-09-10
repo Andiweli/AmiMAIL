@@ -1,5 +1,57 @@
 # Changelog
 
+## AmiMail 2.0 - 2026-09-02
+
+### Multi-account support
+
+- add support for up to three mail accounts with independent settings,
+  credentials, notification sounds and persistent unlock keys
+- add native ReAction account tabs to Account settings and the lower edge of
+  the main window; show only enabled accounts and label them with their email
+  addresses
+- update account tabs immediately after saving or adding an account, without
+  requiring a restart
+- keep message and folder display state tied to the selected account and reload
+  it safely when switching tabs
+- run one network worker per enabled account for independent background Inbox
+  checks and notifications
+- give each network worker its own `bsdsocket.library` base and task-local
+  AmiSSL initialization and cleanup, fixing the second-account `errno 13`
+  socket failure
+- preserve the existing `account.cfg` as account 1 and use `account-2.cfg` and
+  `account-3.cfg` for the additional accounts without changing the encrypted
+  ACCOUNT-2 format
+- provide one signature tab per active mail account while keeping contacts shared
+
+### Account access and startup
+
+- start without a master-password requester; older accounts without a stored
+  startup key remain locked until unlocked from Account settings
+- replace **Do not ask for master password at startup** with **Allow changes
+  without master password** on each account page
+- store a derived per-account startup key independently of the edit-permission
+  option; when the option is enabled, allow configuration changes to be
+  re-encrypted with the cached key without entering the master password
+- enable **Unlock** only for an existing, locked account and disable it again
+  after a successful unlock
+- fix the German account-change error so the umlaut in **Ändern** is converted
+  exactly once on the UTF-8 error path
+
+### Interface and fixes
+
+- raise the application version to 2.0
+- fix star-indicator flickering and the associated application freeze
+- restore the Reply button's native ReAction activation key `W`
+- move the first-column exclamation mark down by one pixel for better alignment
+- show the copyright in the About header, add a native ReAction separator and
+  refine its spacing
+- update the embedded header and About artwork to the supplied `#999999`
+  variant and match the banner fill and splash background to its palette
+- use the screen's standard ReAction background pen for the main content area
+  and disable account-tab backfill so native tab bevels and corners blend with
+  the surrounding layout
+- retain native lower-edge ReAction account tabs for AmigaOS 3.2 compatibility
+
 ## AmiMail 1.5 - 2026-08-29
 
 - update the program, package and release-asset version to 1.5
@@ -11,12 +63,6 @@
 - prefer `text/plain` in `multipart/alternative`, but automatically fall back to the HTML alternative when the supplied plain-text part is clearly polluted with generated CSS/HTML content
 - improve HTML cleanup for malformed or mislabeled mail parts, including removal of style/script/head content, HTML tags and escaped tag fragments
 - expand HTML-entity decoding, including common ISO-8859-1 entities and numeric entities, so characters such as umlauts and `ß` are displayed correctly
-- show recipients instead of senders in the Sent folder, including the localized Recipient/Empfänger column title
-- fix main-window keyboard handling: Right Amiga+A fetches mail, Right Amiga+W replies, Delete deletes the selected message(s), and Help opens the About requester; Reply All and Forward no longer have conflicting shortcuts
-- fix message-list selection so a normal left click always selects only the clicked message; multi-selection is retained only with Shift or Ctrl
-- fix hierarchical folder scrolling when IMAP folder branches are collapsed, including correct scrollbar geometry at small window heights
-- add a native ReAction layout WeightBar between the message list and mail preview, constrained to the middle third (1/3 to 2/3) and persisted with the normal window state
-- fix stale ListBrowser pixels on the WeightBar by giving the split sublayout an opaque backfill matching AmiMAIL's normal main-window background
 
 ## AmiMail 1.4 - 2026-08-29
 

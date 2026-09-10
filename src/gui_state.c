@@ -14,8 +14,6 @@
 #define WINDOW_STATE_PATH "ENVARC:AmiMail/window.state"
 #define WINDOW_STATE_TEMP "ENVARC:AmiMail/window.state.new"
 #define WINDOW_STATE_HEADER "AMIMAIL-WINDOW-2"
-#define INBOX_NOTIFY_STATE_PATH "ENVARC:AmiMail/inbox-notify.state"
-#define INBOX_NOTIFY_STATE_TEMP "ENVARC:AmiMail/inbox-notify.state.new"
 #define INBOX_NOTIFY_STATE_HEADER "AMIMAIL-INBOX-NOTIFY-1"
 #define MAIL_STATUS_VAR "AmiMAILStatus"
 #define MAIL_STATUS_ENVARC_PATH "ENVARC:" MAIL_STATUS_VAR
@@ -23,6 +21,21 @@
 
 static int mail_status_inactive_exists = 0;
 static int mail_status_shutdown_saved = 0;
+
+static const char *inbox_notify_paths[AMG_MAX_ACCOUNTS] = {
+    "ENVARC:AmiMail/inbox-notify.state",
+    "ENVARC:AmiMail/inbox-notify-2.state",
+    "ENVARC:AmiMail/inbox-notify-3.state",
+    "ENVARC:AmiMail/inbox-notify-4.state",
+    "ENVARC:AmiMail/inbox-notify-5.state"
+};
+static const char *inbox_notify_temp_paths[AMG_MAX_ACCOUNTS] = {
+    "ENVARC:AmiMail/inbox-notify.state.new",
+    "ENVARC:AmiMail/inbox-notify-2.state.new",
+    "ENVARC:AmiMail/inbox-notify-3.state.new",
+    "ENVARC:AmiMail/inbox-notify-4.state.new",
+    "ENVARC:AmiMail/inbox-notify-5.state.new"
+};
 
 static unsigned long notification_account_fingerprint(const AmgAccount *account)
 {
@@ -93,17 +106,12 @@ void gui_state_prepare_window(AmgGui *gui)
         fclose(file);
         return;
     }
-
-    /* The split is an optional extension of WINDOW-2, so old state files
-     * stay compatible.  Accept split_ratio from the abandoned experiments
-     * as input only, then clamp it back into the safe native range. */
+    /* The split position is an optional extension.  Older state files remain
+     * valid and simply use the centred default. */
     while (fgets(line, sizeof(line), file)) {
         long value;
-        if (sscanf(line, "split_percent=%ld", &value) == 1) {
+        if (sscanf(line, "split_percent=%ld", &value) == 1)
             split_percent = value;
-        } else if (sscanf(line, "split_ratio=%ld", &value) == 1) {
-            split_percent = (value + 50L) / 100L;
-        }
     }
     fclose(file);
     if (split_percent < 34L) split_percent = 34L;
@@ -189,7 +197,8 @@ void gui_state_load_inbox_notification(AmgGui *gui)
     expected = notification_account_fingerprint(gui->account);
     if (!expected) return;
 
-    file = fopen(INBOX_NOTIFY_STATE_PATH, "rb");
+    if (gui->active_account >= AMG_MAX_ACCOUNTS) return;
+    file = fopen(inbox_notify_paths[gui->active_account], "rb");
     if (!file) return;
     if (!fgets(header, sizeof(header), file) ||
         strncmp(header, INBOX_NOTIFY_STATE_HEADER,
@@ -212,11 +221,12 @@ void gui_state_save_inbox_notification(const AmgGui *gui)
     FILE *file;
     int write_failed = 0;
     unsigned long fingerprint;
-    if (!gui || !gui->account || !gui->inbox_baseline_ready) return;
+    if (!gui || !gui->account || !gui->inbox_baseline_ready ||
+        gui->active_account >= AMG_MAX_ACCOUNTS) return;
     fingerprint = notification_account_fingerprint(gui->account);
     if (!fingerprint) return;
     ensure_state_drawer();
-    file = fopen(INBOX_NOTIFY_STATE_TEMP, "wb");
+    file = fopen(inbox_notify_temp_paths[gui->active_account], "wb");
     if (!file) return;
     if (fprintf(file,
                 "%s\naccount=%lu\nready=1\nuid_validity=%lu\nlatest_uid=%lu\n",
@@ -227,13 +237,48 @@ void gui_state_save_inbox_notification(const AmgGui *gui)
         write_failed = 1;
     if (fclose(file) != 0) write_failed = 1;
     if (write_failed) {
-        DeleteFile((STRPTR)INBOX_NOTIFY_STATE_TEMP);
+        DeleteFile((STRPTR)inbox_notify_temp_paths[gui->active_account]);
         return;
     }
-    DeleteFile((STRPTR)INBOX_NOTIFY_STATE_PATH);
-    if (!Rename((STRPTR)INBOX_NOTIFY_STATE_TEMP,
-                (STRPTR)INBOX_NOTIFY_STATE_PATH))
-        DeleteFile((STRPTR)INBOX_NOTIFY_STATE_TEMP);
+    DeleteFile((STRPTR)inbox_notify_paths[gui->active_account]);
+    if (!Rename((STRPTR)inbox_notify_temp_paths[gui->active_account],
+                (STRPTR)inbox_notify_paths[gui->active_account]))
+        DeleteFile((STRPTR)inbox_notify_temp_paths[gui->active_account]);
+}
+
+void gui_state_save_account_notification(const AmgGui *gui,
+                                         size_t account_index)
+{
+    FILE *file;
+    int write_failed = 0;
+    unsigned long fingerprint;
+    const GuiAccountRuntime *runtime;
+    const AmgAccount *account;
+    if (!gui || !gui->account_set || account_index >= AMG_MAX_ACCOUNTS)
+        return;
+    runtime = &gui->account_runtime[account_index];
+    account = &gui->account_set->accounts[account_index];
+    if (!runtime->inbox_baseline_ready) return;
+    fingerprint = notification_account_fingerprint(account);
+    if (!fingerprint) return;
+    ensure_state_drawer();
+    file = fopen(inbox_notify_temp_paths[account_index], "wb");
+    if (!file) return;
+    if (fprintf(file,
+                "%s\naccount=%lu\nready=1\nuid_validity=%lu\nlatest_uid=%lu\n",
+                INBOX_NOTIFY_STATE_HEADER, fingerprint,
+                runtime->inbox_uid_validity,
+                runtime->inbox_latest_uid) < 0)
+        write_failed = 1;
+    if (fclose(file) != 0) write_failed = 1;
+    if (write_failed) {
+        DeleteFile((STRPTR)inbox_notify_temp_paths[account_index]);
+        return;
+    }
+    DeleteFile((STRPTR)inbox_notify_paths[account_index]);
+    if (!Rename((STRPTR)inbox_notify_temp_paths[account_index],
+                (STRPTR)inbox_notify_paths[account_index]))
+        DeleteFile((STRPTR)inbox_notify_temp_paths[account_index]);
 }
 
 static void set_mail_status_value(const char *value)
@@ -284,32 +329,65 @@ void gui_state_set_mail_status_inactive(void)
     mail_status_shutdown_saved = 1;
 }
 
-static void sync_mail_status(AmgGui *gui)
+void gui_state_sync_mail_status(AmgGui *gui)
 {
     const char *value;
-    if (!gui || !gui->inbox_unseen_known) {
+    size_t index;
+    int any_unseen = 0;
+
+    if (!gui || !gui->account_set) {
         gui_state_set_mail_status_active();
         return;
     }
-    if (gui->inbox_unseen_count > 0UL)
-        value = T(MSG_NEW_MAIL_S_IN_INBOX, "New mail(s) in Inbox");
-    else
-        value = T(MSG_NO_NEW_MAIL, "No new Mail");
+
+    /* AmiMAILStatus is a process-wide status indicator, so it must reflect
+     * all enabled accounts rather than only the account currently shown in
+     * the main window.  The active account lives in the legacy gui fields;
+     * background accounts keep their counters in account_runtime[]. */
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
+        const AmgAccount *account = &gui->account_set->accounts[index];
+        if (!account->enabled) continue;
+
+        if (index == gui->active_account) {
+            if (gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL) {
+                any_unseen = 1;
+                break;
+            }
+        } else {
+            const GuiAccountRuntime *runtime = &gui->account_runtime[index];
+            if (runtime->inbox_unseen_known &&
+                runtime->inbox_unseen_count > 0UL) {
+                any_unseen = 1;
+                break;
+            }
+        }
+    }
+
+    value = any_unseen
+        ? T(MSG_NEW_MAIL_S_IN_INBOX, "New mail(s) in Inbox")
+        : T(MSG_NO_NEW_MAIL, "No new Mail");
     set_mail_status_value(value);
 }
 
 void gui_state_set_inbox_unseen(AmgGui *gui, unsigned long count)
 {
+    int was_unread, is_unread;
     if (!gui) return;
+    was_unread = gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL;
     gui->inbox_unseen_count = count;
     gui->inbox_unseen_known = 1;
-    sync_mail_status(gui);
+    is_unread = gui->inbox_unseen_count > 0UL;
+    gui_state_sync_mail_status(gui);
+    if (was_unread != is_unread && gui->account_tabs_gadget && gui->window)
+        gui_rebuild_account_tabs(gui);
 }
 
 void gui_state_adjust_inbox_unseen(AmgGui *gui, long delta)
 {
     unsigned long amount;
+    int was_unread, is_unread;
     if (!gui || delta == 0L) return;
+    was_unread = gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL;
     if (!gui->inbox_unseen_known) {
         if (delta < 0L) return;
         gui->inbox_unseen_known = 1;
@@ -328,7 +406,10 @@ void gui_state_adjust_inbox_unseen(AmgGui *gui, long delta)
         else
             gui->inbox_unseen_count -= amount;
     }
-    sync_mail_status(gui);
+    is_unread = gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL;
+    gui_state_sync_mail_status(gui);
+    if (was_unread != is_unread && gui->account_tabs_gadget && gui->window)
+        gui_rebuild_account_tabs(gui);
 }
 
 #endif /* AMIGMAIL_AMIGA */

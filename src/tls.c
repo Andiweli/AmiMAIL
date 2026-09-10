@@ -10,7 +10,16 @@
 #if AMIGMAIL_AMIGA
 #include <errno.h>
 #include <exec/libraries.h>
+#include <exec/semaphores.h>
+#include <exec/tasks.h>
 #include <proto/exec.h>
+
+/* bsdsocket.library keeps opener state per task.  The generated inline
+ * stubs normally use one global SocketBase, which is not sufficient for the
+ * three independent AmiMail network processes.  Resolve the base belonging
+ * to the calling task for every direct socket call. */
+static struct Library *amg_tls_current_socket_base(void);
+#define BSDSOCKET_BASE_NAME amg_tls_current_socket_base()
 #include <proto/bsdsocket.h>
 #include <proto/amissl.h>
 #include <proto/amisslmaster.h>
@@ -20,7 +29,6 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509_vfy.h>
@@ -29,11 +37,25 @@ struct Library *SocketBase = NULL;
 struct Library *AmiSSLMasterBase = NULL;
 struct Library *AmiSSLBase = NULL;
 struct Library *AmiSSLExtBase = NULL;
-static int tls_users = 0;
+
+#define AMG_TLS_MAX_TASKS 8U
+
+typedef struct AmgTlsTaskState {
+    struct Task *task;
+    struct Library *socket_base;
+    unsigned int references;
+    volatile int *cancel_flag;
+} AmgTlsTaskState;
+
+static AmgTlsTaskState tls_tasks[AMG_TLS_MAX_TASKS];
+static struct SignalSemaphore tls_state_lock;
+static int tls_state_lock_ready = 0;
+static unsigned int tls_users = 0U;
 
 struct AmgTlsConnection {
     int socket_fd;
     unsigned long timeout_seconds;
+    volatile int *cancel_flag;
     SSL_CTX *context;
     SSL *ssl;
 };
@@ -142,46 +164,191 @@ static void ssl_operation_error(AmgError *error, int code,
     amg_error_set(error, code, combined);
 }
 
+static void tls_ensure_state_lock(void)
+{
+    if (tls_state_lock_ready) return;
+    Forbid();
+    if (!tls_state_lock_ready) {
+        InitSemaphore(&tls_state_lock);
+        tls_state_lock_ready = 1;
+    }
+    Permit();
+}
+
+static AmgTlsTaskState *tls_find_task_state(struct Task *task)
+{
+    size_t index;
+    for (index = 0U; index < AMG_TLS_MAX_TASKS; ++index)
+        if (tls_tasks[index].task == task)
+            return &tls_tasks[index];
+    return NULL;
+}
+
+static AmgTlsTaskState *tls_find_free_task_state(void)
+{
+    size_t index;
+    for (index = 0U; index < AMG_TLS_MAX_TASKS; ++index)
+        if (!tls_tasks[index].task)
+            return &tls_tasks[index];
+    return NULL;
+}
+
+static struct Library *amg_tls_current_socket_base(void)
+{
+    AmgTlsTaskState *state = tls_find_task_state(FindTask(NULL));
+    return state && state->socket_base ? state->socket_base : SocketBase;
+}
+
+static void tls_close_shared_instance(void)
+{
+    if (AmiSSLBase) {
+        CloseAmiSSL();
+        AmiSSLBase = NULL;
+        AmiSSLExtBase = NULL;
+    }
+    if (AmiSSLMasterBase) {
+        CloseLibrary(AmiSSLMasterBase);
+        AmiSSLMasterBase = NULL;
+    }
+}
+
 int amg_tls_global_init(AmgError *error)
 {
-    if (tls_users++ > 0) return AMG_OK;
-    if (!(SocketBase = OpenLibrary((CONST_STRPTR)"bsdsocket.library", 4))) {
-        --tls_users; amg_error_set(error, AMG_ERR_TLS, T(MSG_BSDSOCKET_LIBRARY_V4_IS_MISSING, "bsdsocket.library V4 is missing.")); return AMG_ERR_TLS;
+    struct Task *task = FindTask(NULL);
+    AmgTlsTaskState *state;
+    struct Library *task_socket_base = NULL;
+    int shared_opened_here = 0;
+    struct TagItem task_tags[4];
+
+    tls_ensure_state_lock();
+    ObtainSemaphore(&tls_state_lock);
+    state = tls_find_task_state(task);
+    if (state) {
+        ++state->references;
+        ReleaseSemaphore(&tls_state_lock);
+        return AMG_OK;
     }
-    if (!(AmiSSLMasterBase = OpenLibrary((CONST_STRPTR)"amisslmaster.library", AMISSLMASTER_MIN_VERSION))) {
-        CloseLibrary(SocketBase); SocketBase = NULL; --tls_users;
-        amg_error_set(error, AMG_ERR_TLS, T(MSG_AMISSL_V5_OR_AMISSLMASTER_LIBRARY_IS_MISSING, "AmiSSL v5 or amisslmaster.library is missing.")); return AMG_ERR_TLS;
+
+    state = tls_find_free_task_state();
+    if (!state) {
+        ReleaseSemaphore(&tls_state_lock);
+        amg_error_set(error, AMG_ERR_MEMORY,
+                      T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+        return AMG_ERR_MEMORY;
     }
-    {
-        struct TagItem ami_ssl_tags[] = {
+
+    task_socket_base = OpenLibrary(
+        (CONST_STRPTR)"bsdsocket.library", 4);
+    if (!task_socket_base) {
+        ReleaseSemaphore(&tls_state_lock);
+        amg_error_set(error, AMG_ERR_TLS,
+                      T(MSG_BSDSOCKET_LIBRARY_V4_IS_MISSING,
+                        "bsdsocket.library V4 is missing."));
+        return AMG_ERR_TLS;
+    }
+
+    if (!AmiSSLBase) {
+        struct TagItem open_tags[] = {
             { AmiSSL_UsesOpenSSLStructs, FALSE },
-            { AmiSSL_GetAmiSSLBase, (ULONG)(uintptr_t)&AmiSSLBase },
-            { AmiSSL_GetAmiSSLExtBase, (ULONG)(uintptr_t)&AmiSSLExtBase },
-            { AmiSSL_SocketBase, (ULONG)(uintptr_t)SocketBase },
-            { AmiSSL_ErrNoPtr, (ULONG)(uintptr_t)&errno },
+            { AmiSSL_InitAmiSSL, FALSE },
+            { AmiSSL_GetAmiSSLBase,
+                (ULONG)(uintptr_t)&AmiSSLBase },
+            { AmiSSL_GetAmiSSLExtBase,
+                (ULONG)(uintptr_t)&AmiSSLExtBase },
             { TAG_DONE, 0 }
         };
-        if (OpenAmiSSLTagList(AMISSL_CURRENT_VERSION, ami_ssl_tags) != 0) {
-            CloseLibrary(AmiSSLMasterBase); AmiSSLMasterBase = NULL;
-            CloseLibrary(SocketBase); SocketBase = NULL; --tls_users;
-            amg_error_set(error, AMG_ERR_TLS, T(MSG_AMISSL_COULD_NOT_BE_INITIALIZED, "AmiSSL could not be initialized.")); return AMG_ERR_TLS;
+        AmiSSLMasterBase = OpenLibrary(
+            (CONST_STRPTR)"amisslmaster.library",
+            AMISSLMASTER_MIN_VERSION);
+        if (!AmiSSLMasterBase ||
+            OpenAmiSSLTagList(AMISSL_CURRENT_VERSION, open_tags) != 0) {
+            if (AmiSSLMasterBase) {
+                CloseLibrary(AmiSSLMasterBase);
+                AmiSSLMasterBase = NULL;
+            }
+            AmiSSLBase = NULL;
+            AmiSSLExtBase = NULL;
+            CloseLibrary(task_socket_base);
+            ReleaseSemaphore(&tls_state_lock);
+            amg_error_set(
+                error, AMG_ERR_TLS,
+                T(MSG_AMISSL_V5_OR_AMISSLMASTER_LIBRARY_IS_MISSING,
+                  "AmiSSL v5 or amisslmaster.library is missing."));
+            return AMG_ERR_TLS;
         }
+        shared_opened_here = 1;
     }
-    if (!OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL)) {
-        CloseAmiSSL(); AmiSSLBase = NULL; AmiSSLExtBase = NULL;
-        CloseLibrary(AmiSSLMasterBase); AmiSSLMasterBase = NULL;
-        CloseLibrary(SocketBase); SocketBase = NULL; --tls_users;
-        amg_error_set(error, AMG_ERR_TLS, T(MSG_OPENSSL_INITIALIZATION_FAILED, "OpenSSL initialization failed.")); return AMG_ERR_TLS;
+
+    /* Register the context before InitAmiSSLA(): the task-local socket-base
+     * resolver is then already valid if initialization reaches the network
+     * library.  AmiSSL's own documentation requires this Init/Cleanup pair
+     * in every subprocess sharing one AmiSSLBase. */
+    memset(state, 0, sizeof(*state));
+    state->task = task;
+    state->socket_base = task_socket_base;
+    state->references = 1U;
+    SocketBase = task_socket_base;
+    task_tags[0].ti_Tag = AmiSSL_SocketBase;
+    task_tags[0].ti_Data = (ULONG)(uintptr_t)task_socket_base;
+    task_tags[1].ti_Tag = AmiSSL_ErrNoPtr;
+    task_tags[1].ti_Data = (ULONG)(uintptr_t)&errno;
+    task_tags[2].ti_Tag = AmiSSL_GetAmiSSLExtBase;
+    task_tags[2].ti_Data = (ULONG)(uintptr_t)&AmiSSLExtBase;
+    task_tags[3].ti_Tag = TAG_DONE;
+    task_tags[3].ti_Data = 0;
+
+    if (InitAmiSSLA(task_tags) != 0 ||
+        !OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS |
+                          OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL)) {
+        memset(state, 0, sizeof(*state));
+        CloseLibrary(task_socket_base);
+        if (shared_opened_here) tls_close_shared_instance();
+        ReleaseSemaphore(&tls_state_lock);
+        amg_error_set(error, AMG_ERR_TLS,
+                      T(MSG_AMISSL_COULD_NOT_BE_INITIALIZED,
+                        "AmiSSL could not be initialized."));
+        return AMG_ERR_TLS;
     }
+    ++tls_users;
+    ReleaseSemaphore(&tls_state_lock);
     return AMG_OK;
+}
+
+void amg_tls_set_cancel_flag(volatile int *cancel_flag)
+{
+    AmgTlsTaskState *state;
+    if (!tls_state_lock_ready) return;
+    ObtainSemaphore(&tls_state_lock);
+    state = tls_find_task_state(FindTask(NULL));
+    if (state) state->cancel_flag = cancel_flag;
+    ReleaseSemaphore(&tls_state_lock);
 }
 
 void amg_tls_global_cleanup(void)
 {
-    if (tls_users <= 0 || --tls_users > 0) return;
-    if (AmiSSLBase) { CloseAmiSSL(); AmiSSLBase = NULL; AmiSSLExtBase = NULL; }
-    if (AmiSSLMasterBase) { CloseLibrary(AmiSSLMasterBase); AmiSSLMasterBase = NULL; }
-    if (SocketBase) { CloseLibrary(SocketBase); SocketBase = NULL; }
+    AmgTlsTaskState *state;
+    struct Library *task_socket_base;
+    if (!tls_state_lock_ready) return;
+    ObtainSemaphore(&tls_state_lock);
+    state = tls_find_task_state(FindTask(NULL));
+    if (!state) {
+        ReleaseSemaphore(&tls_state_lock);
+        return;
+    }
+    if (--state->references > 0U) {
+        ReleaseSemaphore(&tls_state_lock);
+        return;
+    }
+    task_socket_base = state->socket_base;
+    (void)CleanupAmiSSLA(NULL);
+    memset(state, 0, sizeof(*state));
+    CloseLibrary(task_socket_base);
+    if (tls_users > 0U) --tls_users;
+    if (!tls_users) {
+        SocketBase = NULL;
+        tls_close_shared_instance();
+    }
+    ReleaseSemaphore(&tls_state_lock);
 }
 
 static int open_socket(const char *host, unsigned short port,
@@ -267,6 +434,10 @@ AmgTlsConnection *amg_tls_connect_plain(const char *host, unsigned short port,
     }
     connection->socket_fd = -1;
     connection->timeout_seconds = timeout_seconds ? timeout_seconds : 30U;
+    {
+        AmgTlsTaskState *state = tls_find_task_state(FindTask(NULL));
+        connection->cancel_flag = state ? state->cancel_flag : NULL;
+    }
     connection->socket_fd = open_socket(host, port,
                                         connection->timeout_seconds, error);
     if (connection->socket_fd < 0) {
@@ -396,28 +567,49 @@ static int wait_for_tls_socket(AmgTlsConnection *connection, int write_ready,
 {
     fd_set read_set, write_set;
     struct timeval timeout;
+    unsigned long remaining_seconds;
+    unsigned long wait_seconds;
     LONG ready;
-    FD_ZERO(&read_set);
-    FD_ZERO(&write_set);
-    if (write_ready)
-        FD_SET(connection->socket_fd, &write_set);
-    else
-        FD_SET(connection->socket_fd, &read_set);
-    timeout.tv_sec = (long)(connection->timeout_seconds
-                                ? connection->timeout_seconds : 30U);
-    timeout.tv_usec = 0L;
-    ready = WaitSelect(
-        connection->socket_fd + 1,
-        write_ready ? NULL : &read_set,
-        write_ready ? &write_set : NULL,
-        NULL, &timeout, NULL);
-    if (ready > 0) return 1;
+    remaining_seconds = connection->timeout_seconds
+        ? connection->timeout_seconds : 30U;
+    for (;;) {
+        if (connection->cancel_flag && *connection->cancel_flag) {
+            amg_error_set(error, AMG_ERR_IO,
+                          T(MSG_NETWORK_ERROR, "Network operation cancelled."));
+            return 0;
+        }
+        FD_ZERO(&read_set);
+        FD_ZERO(&write_set);
+        if (write_ready)
+            FD_SET(connection->socket_fd, &write_set);
+        else
+            FD_SET(connection->socket_fd, &read_set);
+        wait_seconds = remaining_seconds > 1U ? 1U : remaining_seconds;
+        timeout.tv_sec = (long)wait_seconds;
+        timeout.tv_usec = 0L;
+        ready = WaitSelect(
+            connection->socket_fd + 1,
+            write_ready ? NULL : &read_set,
+            write_ready ? &write_set : NULL,
+            NULL, &timeout, NULL);
+        if (ready > 0) return 1;
+        if (ready < 0) {
+            amg_error_set(error, AMG_ERR_IO,
+                          T(MSG_SOCKET_WAIT_ERROR_WHILE_ACCESSING_THE_NETWORK, "Socket wait error while accessing the network."));
+            return 0;
+        }
+        if (connection->cancel_flag && *connection->cancel_flag) {
+            amg_error_set(error, AMG_ERR_IO,
+                          T(MSG_NETWORK_ERROR, "Network operation cancelled."));
+            return 0;
+        }
+        if (remaining_seconds <= wait_seconds)
+            break;
+        remaining_seconds -= wait_seconds;
+    }
     if (ready == 0)
         amg_error_set(error, AMG_ERR_IO,
                       T(MSG_TIMED_OUT_WAITING_FOR_NETWORK_DATA, "Timed out waiting for network data."));
-    else
-        amg_error_set(error, AMG_ERR_IO,
-                      T(MSG_SOCKET_WAIT_ERROR_WHILE_ACCESSING_THE_NETWORK, "Socket wait error while accessing the network."));
     return 0;
 }
 
@@ -551,7 +743,14 @@ long amg_tls_write(AmgTlsConnection *connection, const void *data,
 void amg_tls_close(AmgTlsConnection *connection)
 {
     if (!connection) return;
-    if (connection->ssl) { SSL_shutdown(connection->ssl); SSL_free(connection->ssl); }
+    if (connection->ssl) {
+        /* During application shutdown the peer may be unreachable.  A
+         * graceful TLS close would then wait on the socket again, defeating
+         * the worker cancellation path. */
+        if (!connection->cancel_flag || !*connection->cancel_flag)
+            SSL_shutdown(connection->ssl);
+        SSL_free(connection->ssl);
+    }
     if (connection->context) SSL_CTX_free(connection->context);
     if (connection->socket_fd >= 0) CloseSocket(connection->socket_fd);
     free(connection);
@@ -562,6 +761,7 @@ void amg_tls_close(AmgTlsConnection *connection)
 struct AmgTlsConnection { int unavailable; };
 int amg_tls_global_init(AmgError *error) { amg_error_set(error, AMG_ERR_UNSUPPORTED, T(MSG_AMISSL_IS_ONLY_AVAILABLE_IN_THE_AMIGAOS_BUILD, "AmiSSL is only available in the AmigaOS build.")); return AMG_ERR_UNSUPPORTED; }
 void amg_tls_global_cleanup(void) {}
+void amg_tls_set_cancel_flag(volatile int *cancel_flag) { (void)cancel_flag; }
 AmgTlsConnection *amg_tls_connect_plain(const char *host, unsigned short port, unsigned long timeout, AmgError *error)
 { (void)host; (void)port; (void)timeout; amg_error_set(error, AMG_ERR_UNSUPPORTED, T(MSG_HOST_BUILD_WITHOUT_AMISSL_NETWORKING, "Host build without AmiSSL networking.")); return NULL; }
 int amg_tls_starttls(AmgTlsConnection *connection, const char *host, AmgError *error)

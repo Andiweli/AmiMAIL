@@ -521,6 +521,62 @@ static int label_sort_compare(const GuiLabel *left, const GuiLabel *right)
     return 0;
 }
 
+static int google_namespace_container_name(const char *mailbox_utf8)
+{
+    return mailbox_utf8 &&
+        (!strcmp(mailbox_utf8, "[Gmail]") ||
+         !strcmp(mailbox_utf8, "[Google Mail]"));
+}
+
+static void prune_empty_google_namespace_container(AmgGui *gui)
+{
+    size_t i;
+    int google_account;
+
+    if (!gui || !gui->account) return;
+    google_account = amg_account_is_google_host(gui->account->imap_host) ||
+        amg_account_is_google_host(gui->account->smtp_host);
+    if (!google_account) return;
+
+    i = GUI_SYSTEM_LABEL_COUNT;
+    while (i < gui->label_count) {
+        GuiLabel *label = &gui->labels[i];
+        size_t j, prefix_length;
+        int has_custom_child = 0;
+
+        if (label->selectable ||
+            !google_namespace_container_name(label->mailbox_utf8)) {
+            ++i;
+            continue;
+        }
+
+        prefix_length = strlen(label->mailbox_utf8);
+        if (label->delimiter) {
+            for (j = GUI_SYSTEM_LABEL_COUNT; j < gui->label_count; ++j) {
+                const GuiLabel *candidate;
+                if (j == i) continue;
+                candidate = &gui->labels[j];
+                if (!strncmp(candidate->mailbox_utf8, label->mailbox_utf8,
+                             prefix_length) &&
+                    candidate->mailbox_utf8[prefix_length] == label->delimiter) {
+                    has_custom_child = 1;
+                    break;
+                }
+            }
+        }
+
+        if (has_custom_child) {
+            ++i;
+            continue;
+        }
+
+        if (i + 1U < gui->label_count)
+            memmove(&gui->labels[i], &gui->labels[i + 1U],
+                    (gui->label_count - i - 1U) * sizeof(gui->labels[0]));
+        --gui->label_count;
+    }
+}
+
 static void prepare_custom_label_tree(AmgGui *gui)
 {
     size_t i, j;
@@ -694,6 +750,7 @@ static void prepare_custom_label_tree(AmgGui *gui)
                (payload[position] == '\r' || payload[position] == '\n'))
             ++position;
     }
+    prune_empty_google_namespace_container(gui);
     prepare_custom_label_tree(gui);
     load_label_expansion_state(gui);
     rebuild_label_lists(gui);
@@ -764,7 +821,6 @@ static void apply_label_expansion_state(AmgGui *gui)
 int handle_label_tree_event(AmgGui *gui)
 {
     ULONG release_event = LBRE_NORMAL;
-    ULONG top = 0;
     struct Node *node = NULL;
     if (!gui || !gui->labels_gadget) return 0;
     GetAttr(LISTBROWSER_RelEvent, (Object *)gui->labels_gadget,
@@ -772,13 +828,18 @@ int handle_label_tree_event(AmgGui *gui)
     if (release_event != LBRE_SHOWCHILDREN &&
         release_event != LBRE_HIDECHILDREN)
         return 0;
+
+    /* hierarchical listbrowser.gadget already applies SHOW/HIDE before it
+     * reports LBRE_SHOWCHILDREN/LBRE_HIDECHILDREN. Repeating that operation
+     * after detaching and reattaching the live list can leave classic
+     * ReAction's internal node state inconsistent. Only mirror the final
+     * state into our persistence model here. */
     GetAttr(LISTBROWSER_CursorNode, (Object *)gui->labels_gadget,
             (ULONG *)&node);
     if (!node)
         GetAttr(LISTBROWSER_SelectedNode, (Object *)gui->labels_gadget,
                 (ULONG *)&node);
-    if (!node) return 1;
-    {
+    if (node) {
         ULONG label_index = (ULONG)~0UL;
         GetListBrowserNodeAttrs(
             node, LBNA_UserData, (ULONG)(uintptr_t)&label_index, TAG_DONE);
@@ -787,19 +848,8 @@ int handle_label_tree_event(AmgGui *gui)
             gui->labels[label_index].expanded =
                 release_event == LBRE_SHOWCHILDREN ? 1 : 0;
     }
-    GetAttr(LISTBROWSER_Top, (Object *)gui->labels_gadget, &top);
-    detach_listbrowser(gui->labels_gadget, gui->window);
-    if (release_event == LBRE_SHOWCHILDREN)
-        ShowListBrowserNodeChildren(node, 1);
-    else
-        HideListBrowserNodeChildren(node);
+
     save_label_expansion_state(gui);
-    SetGadgetAttrs(gui->labels_gadget, gui->window, NULL,
-                   LISTBROWSER_Labels,
-                       (ULONG)(uintptr_t)&gui->labels_list,
-                   LISTBROWSER_SelectedNode, (ULONG)(uintptr_t)node,
-                   LISTBROWSER_Top, top,
-                   TAG_DONE);
     sync_labels_scroller(gui);
     return 1;
 }

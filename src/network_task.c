@@ -62,6 +62,7 @@ struct AmgNetwork {
     AmgAccount account;
     volatile int worker_ready;
     volatile int connected;
+    volatile int stop_requested;
     int running;
 };
 
@@ -430,6 +431,8 @@ static void network_worker(void)
     memset(&tokens, 0, sizeof(tokens));
     memset(&error, 0, sizeof(error));
     tls_ready = amg_tls_global_init(&error) == AMG_OK;
+    if (tls_ready)
+        amg_tls_set_cancel_flag(&network->stop_requested);
 
     for (;;) {
         AmgNetMessage *message;
@@ -662,12 +665,14 @@ static void network_worker(void)
     }
 
 done:
+    amg_tls_set_cancel_flag(NULL);
     amg_imap_disconnect(&imap);
     amg_oauth_tokens_clear(&tokens);
     if (tls_ready) amg_tls_global_cleanup();
     network->running = 0;
     network->worker_ready = 0;
     network->connected = 0;
+    network->stop_requested = 0;
     if (stop_message) finish_message(stop_message, AMG_OK, &error);
 }
 
@@ -1003,6 +1008,7 @@ void amg_network_stop(AmgNetwork *network)
 {
     AmgNetMessage *stop;
     if (!network || !network->running) return;
+    network->stop_requested = 1;
     stop = new_message(network, AMG_NET_STOP);
     if (stop) {
         PutMsg(network->commands, (struct Message *)stop);
@@ -1017,6 +1023,7 @@ void amg_network_stop(AmgNetwork *network)
     }
     network->process = NULL;
     network->connected = 0;
+    network->stop_requested = 0;
 }
 
 #else

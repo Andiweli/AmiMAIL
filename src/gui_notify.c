@@ -82,9 +82,17 @@ static int notification_sound_play_path(AmgGui *gui, const char *path)
     if (gui->notification_sound_signal_bit < 0 && !gui_notify_init(gui))
         return 0;
 
-    /* A new playback replaces a still playing one. Clear the old completion
-     * signal before starting the new object. */
-    notification_sound_dispose(gui, 1);
+    /*
+     * Do not stop/dispose a sound DataType object merely to replace it with
+     * another notification. Playback is asynchronous and an immediate
+     * STM_STOP + DisposeDTObject() sequence can race with completion/device
+     * activity on classic AmigaOS. One active notification is sufficient;
+     * duplicate requests are ignored until the current object completes.
+     */
+    if (gui->notification_sound_object)
+        return 1;
+
+    /* Clear a stale completion signal before creating the next object. */
     SetSignal(0UL, gui->notification_sound_signal_mask);
 
     /* Be explicit about a file source and a sound-class object. This makes
@@ -127,11 +135,17 @@ int gui_notify_preview_sound(AmgGui *gui, const char *path)
 
 void gui_notify_new_mail(AmgGui *gui)
 {
-    if (!gui || !gui->account || !gui->account->notification_sound ||
-        !gui->account->notification_sound_path[0])
+    gui_notify_new_mail_for_account(gui, gui ? gui->account : NULL);
+}
+
+void gui_notify_new_mail_for_account(AmgGui *gui,
+                                     const AmgAccount *account)
+{
+    if (!gui || !account || !account->notification_sound ||
+        !account->notification_sound_path[0])
         return;
     (void)notification_sound_play_path(
-        gui, gui->account->notification_sound_path);
+        gui, account->notification_sound_path);
 }
 
 #endif /* AMIGMAIL_AMIGA */

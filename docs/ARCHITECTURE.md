@@ -2,7 +2,7 @@
 
 ## Goal
 
-AmiMail is a native single-account IMAP/SMTP mail client for AmigaOS 3.2+.
+AmiMail is a native multi-account IMAP/SMTP mail client for AmigaOS 3.2+.
 It retains the proven AmiGmail separation between the ReAction GUI and a
 blocking network worker while keeping provider-specific behaviour isolated from
 the generic mail protocol path.
@@ -33,8 +33,19 @@ payloads are read live from IMAP and held in RAM only as needed.
 and login names. An empty protocol-specific login falls back to the configured
 email address. SMTP can use its own password or fall back to the IMAP password.
 
-The client is intentionally single-account. Multi-account support is not part
-of the design target.
+`AmgAccountSet` owns three fixed account slots. One, two or three slots can be
+enabled. Every enabled account owns a separate `AmgNetwork` worker and therefore
+an independent IMAP/SMTP connection, command queue and notification baseline.
+The GUI aliases `gui->account` and `gui->network` to the selected slot so the
+existing compose, folder and message code always operates on one explicit
+sender account. Background workers only perform Inbox checks while their tab is
+not selected.
+
+On AmigaOS every worker opens its own `bsdsocket.library` base because socket
+opener state belongs to the calling task. Workers share one AmiSSL library
+instance, as recommended by AmiSSL, but each worker establishes and cleans up
+its own process context with `InitAmiSSLA()`/`CleanupAmiSSLA()` and supplies its
+task-local socket base and `errno` pointer.
 
 ## Transport security
 
@@ -126,16 +137,33 @@ AmiMail uses separate paths from AmiGmail:
 
 ```text
 ENVARC:AmiMail/account.cfg
+ENVARC:AmiMail/account-2.cfg
+ENVARC:AmiMail/account-3.cfg
+ENVARC:AmiMail/account.key
+ENVARC:AmiMail/account-2.key
+ENVARC:AmiMail/account-3.key
 ENVARC:AmiMail/folders.state
 ENV:AmiMail.session-key
+ENV:AmiMail.session-key-2
+ENV:AmiMail.session-key-3
 ```
 
 New account files use `AMIMAIL-ACCOUNT-2`. Secrets are encrypted with
 AES-256-GCM using a PBKDF2-HMAC-SHA256-derived key. The master password itself
-is never persisted. A derived 256-bit unlock key may be cached only in volatile
-`ENV:` for the current AmigaOS session.
+is never persisted. A derived 256-bit key is kept in the matching `ENVARC:` key
+file so account loading never needs a startup password requester. Volatile
+`ENV:` copies are retained for compatibility and the current-session unlock
+path.
 
-Legacy `AMIMAIL-ACCOUNT-1` files are migrated once: the old stored master is
+The account's `allow_passwordless_changes` metadata flag controls whether the
+persistent derived key may also re-encrypt configuration changes. It does not
+control automatic startup. Enabling the flag on an existing account requires a
+verified master password once. Cached re-encryption preserves the account's
+PBKDF2 salt and iteration count, so the same master password remains valid.
+
+The original `account.cfg` remains account 1, so an AmiMAIL 1.5 configuration
+is adopted without conversion or data loss. Legacy `AMIMAIL-ACCOUNT-1` files
+are migrated once: the old stored master is
 used only to decrypt and immediately rewrite the account as ACCOUNT-2.
 
 ## Provider-specific compatibility

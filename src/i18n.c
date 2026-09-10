@@ -14,13 +14,17 @@ static struct Catalog *catalog = NULL;
 #endif
 void amg_i18n_init(void) {
 #if AMIGMAIL_AMIGA
-    struct TagItem tags[3];
+    struct TagItem tags[4];
     if (LocaleBase) return;
     LocaleBase=(struct LocaleBase *)OpenLibrary((CONST_STRPTR)"locale.library",38UL);
     if (!LocaleBase) return;
     tags[0].ti_Tag=OC_BuiltInLanguage; tags[0].ti_Data=(ULONG)(uintptr_t)"english";
     tags[1].ti_Tag=OC_BuiltInCodeSet; tags[1].ti_Data=0UL;
-    tags[2].ti_Tag=TAG_DONE; tags[2].ti_Data=0UL;
+    /* Require the current catalog generation. locale.library caches catalogs
+     * across application restarts, so without OC_Version an older cached
+     * AmiMAIL.catalog can keep serving English fallbacks for newly added IDs. */
+    tags[2].ti_Tag=OC_Version; tags[2].ti_Data=5UL;
+    tags[3].ti_Tag=TAG_DONE; tags[3].ti_Data=0UL;
     catalog=OpenCatalogA(NULL,(STRPTR)"AmiMAIL.catalog",tags);
 #endif
 }

@@ -24,7 +24,7 @@ https://mail.google.com/
 A complete interactive OAuth sign-in workflow (browser launch, loopback
 callback and account-settings integration) is not currently exposed by the
 AmiMail account dialog. This is intentional: OAuth is not required for the
-single-account generic IMAP/SMTP release target.
+generic IMAP/SMTP account configuration.
 
 If OAuth is expanded later, provider endpoints/scopes should remain outside the
 generic IMAP/SMTP account layer.

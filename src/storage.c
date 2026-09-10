@@ -10,6 +10,45 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const char *account_paths[AMG_MAX_ACCOUNTS] = {
+    "ENVARC:AmiMail/account.cfg",
+    "ENVARC:AmiMail/account-2.cfg",
+    "ENVARC:AmiMail/account-3.cfg",
+    "ENVARC:AmiMail/account-4.cfg",
+    "ENVARC:AmiMail/account-5.cfg"
+};
+static const char *session_key_paths[AMG_MAX_ACCOUNTS] = {
+    "ENV:AmiMail.session-key",
+    "ENV:AmiMail.session-key-2",
+    "ENV:AmiMail.session-key-3",
+    "ENV:AmiMail.session-key-4",
+    "ENV:AmiMail.session-key-5"
+};
+static const char *persistent_key_paths[AMG_MAX_ACCOUNTS] = {
+    "ENVARC:AmiMail/account.key",
+    "ENVARC:AmiMail/account-2.key",
+    "ENVARC:AmiMail/account-3.key",
+    "ENVARC:AmiMail/account-4.key",
+    "ENVARC:AmiMail/account-5.key"
+};
+static const char *account_order_path =
+    "ENVARC:AmiMail/account-order.cfg";
+
+const char *amg_storage_account_path(size_t index)
+{
+    return index < AMG_MAX_ACCOUNTS ? account_paths[index] : NULL;
+}
+
+const char *amg_storage_session_key_path(size_t index)
+{
+    return index < AMG_MAX_ACCOUNTS ? session_key_paths[index] : NULL;
+}
+
+const char *amg_storage_persistent_key_path(size_t index)
+{
+    return index < AMG_MAX_ACCOUNTS ? persistent_key_paths[index] : NULL;
+}
+
 #if AMIGMAIL_AMIGA
 #include <proto/dos.h>
 #include <proto/amissl.h>
@@ -80,6 +119,137 @@ static void discard_file(const char *path)
 #endif
 }
 
+void amg_storage_delete_account_files(size_t index)
+{
+    if (index >= AMG_MAX_ACCOUNTS) return;
+    discard_file(account_paths[index]);
+    discard_file(session_key_paths[index]);
+    discard_file(persistent_key_paths[index]);
+}
+
+static void account_order_identity(size_t order[AMG_MAX_ACCOUNTS])
+{
+    size_t index;
+    if (!order) return;
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index)
+        order[index] = index;
+}
+
+static int account_order_is_valid(
+    const size_t order[AMG_MAX_ACCOUNTS])
+{
+    unsigned seen = 0U;
+    size_t position;
+    if (!order) return 0;
+    for (position = 0U; position < AMG_MAX_ACCOUNTS; ++position) {
+        size_t index = order[position];
+        unsigned bit;
+        if (index >= AMG_MAX_ACCOUNTS) return 0;
+        bit = 1U << (unsigned)index;
+        if (seen & bit) return 0;
+        seen |= bit;
+    }
+    return 1;
+}
+
+int amg_storage_load_account_order(size_t order[AMG_MAX_ACCOUNTS])
+{
+    FILE *file;
+    char header[64], line[160];
+    unsigned long values[AMG_MAX_ACCOUNTS];
+    size_t parsed[AMG_MAX_ACCOUNTS];
+    size_t position;
+    int count;
+
+    if (!order) return AMG_ERR_ARGUMENT;
+    account_order_identity(order);
+    file = fopen(account_order_path, "rb");
+    if (!file) return AMG_ERR_IO;
+    if (!fgets(header, sizeof(header), file) ||
+        !fgets(line, sizeof(line), file)) {
+        fclose(file);
+        return AMG_ERR_PARSE;
+    }
+    fclose(file);
+
+    memset(values, 0, sizeof(values));
+    if (!strcmp(header, "AMIMAIL-ACCOUNT-ORDER-2\n")) {
+        count = sscanf(line, "order=%lu,%lu,%lu,%lu,%lu",
+                       &values[0], &values[1], &values[2],
+                       &values[3], &values[4]);
+        if (count != (int)AMG_MAX_ACCOUNTS) return AMG_ERR_PARSE;
+        for (position = 0U; position < AMG_MAX_ACCOUNTS; ++position)
+            parsed[position] = (size_t)values[position];
+    } else if (!strcmp(header, "AMIMAIL-ACCOUNT-ORDER-1\n")) {
+        /* AmiMAIL 2.0 initially stored exactly three slots.  Preserve that
+         * user-defined order and append the two new empty slots so upgrading
+         * to five accounts never resets an existing tab order. */
+        count = sscanf(line, "order=%lu,%lu,%lu",
+                       &values[0], &values[1], &values[2]);
+        if (count != 3) return AMG_ERR_PARSE;
+        for (position = 0U; position < 3U; ++position) {
+            if (values[position] >= 3UL) return AMG_ERR_PARSE;
+            parsed[position] = (size_t)values[position];
+        }
+        if (parsed[0] == parsed[1] || parsed[0] == parsed[2] ||
+            parsed[1] == parsed[2])
+            return AMG_ERR_PARSE;
+        parsed[3] = 3U;
+        parsed[4] = 4U;
+    } else {
+        return AMG_ERR_PARSE;
+    }
+
+    if (!account_order_is_valid(parsed)) return AMG_ERR_PARSE;
+    memcpy(order, parsed, sizeof(parsed));
+    return AMG_OK;
+}
+
+int amg_storage_save_account_order(
+    const size_t order[AMG_MAX_ACCOUNTS], AmgError *error)
+{
+    char temporary[512];
+    FILE *file;
+    int result;
+    amg_error_set(error, AMG_OK, "");
+    if (!account_order_is_valid(order)) return AMG_ERR_ARGUMENT;
+    if (strlen(account_order_path) + 5U >= sizeof(temporary))
+        return AMG_ERR_LIMIT;
+    snprintf(temporary, sizeof(temporary), "%s.new", account_order_path);
+    file = fopen(temporary, "wb");
+    if (!file) {
+        amg_error_set(error, AMG_ERR_IO,
+                      T(MSG_ACCOUNT_FILE_COULD_NOT_BE_WRITTEN,
+                        "Account file could not be written."));
+        return AMG_ERR_IO;
+    }
+    {
+        int write_failed =
+            fprintf(file,
+                    "AMIMAIL-ACCOUNT-ORDER-2\n"
+                    "order=%lu,%lu,%lu,%lu,%lu\n",
+                    (unsigned long)order[0], (unsigned long)order[1],
+                    (unsigned long)order[2], (unsigned long)order[3],
+                    (unsigned long)order[4]) < 0;
+        if (fclose(file) != 0) write_failed = 1;
+        if (write_failed) {
+            discard_file(temporary);
+            amg_error_set(error, AMG_ERR_IO,
+                          T(MSG_ACCOUNT_FILE_COULD_NOT_BE_WRITTEN,
+                            "Account file could not be written."));
+            return AMG_ERR_IO;
+        }
+    }
+    result = replace_file(temporary, account_order_path);
+    if (result != AMG_OK) {
+        discard_file(temporary);
+        amg_error_set(error, AMG_ERR_IO,
+                      T(MSG_ACCOUNT_FILE_COULD_NOT_BE_WRITTEN,
+                        "Account file could not be written."));
+    }
+    return result;
+}
+
 #if AMIGMAIL_AMIGA
 static int encrypt_secrets(const char *master, const unsigned char *plain,
                            size_t plain_length, unsigned char salt[16],
@@ -136,6 +306,59 @@ done:
     else if (result != AMG_OK)
         amg_error_set(error, result,
                       T(MSG_AMISSL_COULD_NOT_ENCRYPT_THE_ACCOUNT_DATA, "AmiSSL could not encrypt the account data."));
+    return result;
+}
+
+static int encrypt_secrets_with_key(
+    const unsigned char key[SESSION_KEY_SIZE],
+    const unsigned char *plain, size_t plain_length,
+    unsigned char iv[12], unsigned char tag[16],
+    AmgBuffer *cipher, AmgError *error)
+{
+    EVP_CIPHER_CTX *ctx = NULL;
+    int out = 0, total = 0, result;
+    if (!key || !plain || !iv || !tag || !cipher)
+        return AMG_ERR_ARGUMENT;
+    amg_error_set(error, AMG_OK, "");
+    result = amg_tls_global_init(error);
+    if (result != AMG_OK) return result;
+    result = AMG_ERR_TLS;
+    if (amg_random_bytes(iv, 12U) != AMG_OK) goto done;
+    ctx = EVP_CIPHER_CTX_new();
+    if (!ctx ||
+        EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1)
+        goto done;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, 12, NULL) != 1 ||
+        EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1)
+        goto done;
+    if (amg_buffer_reserve(cipher, plain_length + 32U) != AMG_OK) {
+        result = AMG_ERR_MEMORY;
+        goto done;
+    }
+    if (EVP_EncryptUpdate(ctx, cipher->data, &out, plain,
+                          (int)plain_length) != 1)
+        goto done;
+    total = out;
+    if (EVP_EncryptFinal_ex(ctx, cipher->data + total, &out) != 1)
+        goto done;
+    total += out;
+    cipher->length = (size_t)total;
+    cipher->data[cipher->length] = 0;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag) != 1)
+        goto done;
+    result = AMG_OK;
+
+done:
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    amg_tls_global_cleanup();
+    if (result == AMG_ERR_MEMORY)
+        amg_error_set(error, result,
+                      T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+    else if (result != AMG_OK)
+        amg_error_set(
+            error, result,
+            T(MSG_AMISSL_COULD_NOT_ENCRYPT_THE_ACCOUNT_DATA,
+              "AmiSSL could not encrypt the account data."));
     return result;
 }
 
@@ -229,58 +452,249 @@ static int decrypt_secrets(const char *master, const unsigned char *cipher,
 }
 #endif
 
-int amg_storage_save_account(const char *path,const AmgAccount *account,const char *master_password,AmgError *error)
-{
-    char temporary[512];FILE *file;int result=AMG_OK;AmgBuffer plain,cipher;
 #if AMIGMAIL_AMIGA
-    unsigned char salt[16],iv[12],tag[16];
+static int load_cached_storage_key(
+    const char *account_path, const char *key_path,
+    unsigned char salt[16], unsigned char key[SESSION_KEY_SIZE],
+    unsigned long *iterations,
+    AmgError *error);
 #endif
-    amg_error_set(error,AMG_OK,"");
+
+static int save_account_internal(
+    const char *path, const AmgAccount *account,
+    const char *master_password,
+    const unsigned char *cached_key,
+    const unsigned char *cached_salt,
+    unsigned long cached_iterations,
+    AmgError *error)
+{
+    char temporary[512];
+    FILE *file;
+    int result = AMG_OK;
+    AmgBuffer plain, cipher;
+#if AMIGMAIL_AMIGA
+    unsigned char salt[16], iv[12], tag[16];
+#else
+    (void)cached_salt;
+    (void)cached_iterations;
+#endif
+    amg_error_set(error, AMG_OK, "");
     if (!path || !account) return AMG_ERR_ARGUMENT;
     if (strlen(path) + 5U >= sizeof(temporary)) return AMG_ERR_LIMIT;
-    snprintf(temporary,sizeof(temporary),"%s.new",path);
-    file=fopen(temporary,"wb");if(!file){amg_error_set(error,AMG_ERR_IO,T(MSG_ACCOUNT_FILE_COULD_NOT_BE_WRITTEN, "Account file could not be written."));return AMG_ERR_IO;}
-    amg_buffer_init(&plain);amg_buffer_init(&cipher);fprintf(file,"%s",STORAGE_HEADER_V2);
-    if(write_hex_line(file,"display_name",(const unsigned char*)account->display_name,strlen(account->display_name))!=AMG_OK||
-       write_hex_line(file,"email",(const unsigned char*)account->email,strlen(account->email))!=AMG_OK||
-       write_hex_line(file,"imap_username",(const unsigned char*)account->imap_username,strlen(account->imap_username))!=AMG_OK||
-       write_hex_line(file,"smtp_username",(const unsigned char*)account->smtp_username,strlen(account->smtp_username))!=AMG_OK||
-       write_hex_line(file,"folder_sent",(const unsigned char*)account->sent_mailbox,strlen(account->sent_mailbox))!=AMG_OK||
-       write_hex_line(file,"folder_drafts",(const unsigned char*)account->drafts_mailbox,strlen(account->drafts_mailbox))!=AMG_OK||
-       write_hex_line(file,"folder_all",(const unsigned char*)account->all_mailbox,strlen(account->all_mailbox))!=AMG_OK||
-       write_hex_line(file,"folder_spam",(const unsigned char*)account->spam_mailbox,strlen(account->spam_mailbox))!=AMG_OK||
-       write_hex_line(file,"folder_trash",(const unsigned char*)account->trash_mailbox,strlen(account->trash_mailbox))!=AMG_OK||
-       fprintf(file,"auth_mode=%d\nimap_host=%s\nimap_port=%u\nimap_starttls=%d\nsmtp_host=%s\nsmtp_port=%u\nsmtp_starttls=%d\nsmtp_same_credentials=%d\nsave_sent_copy=%d\nfetch_on_start=%d\nperiodic_fetch=%d\nfetch_days=%u\nnotification_sound=%d\n",
-       (int)account->auth_mode,account->imap_host,(unsigned)account->imap_port,account->imap_starttls,account->smtp_host,(unsigned)account->smtp_port,account->smtp_starttls,account->smtp_same_credentials?1:0,account->save_sent_copy?1:0,account->fetch_on_start?1:0,account->periodic_fetch?1:0,account->fetch_days?account->fetch_days:180U,account->notification_sound?1:0)<0 ||
-       write_hex_line(file,"notification_sound_path",(const unsigned char*)account->notification_sound_path,strlen(account->notification_sound_path))!=AMG_OK)result=AMG_ERR_IO;
-    if(result==AMG_OK&&master_password&&*master_password){
-        amg_buffer_append_cstr(&plain,"imap_password=");if(account->imap_password)hex_encode((unsigned char*)account->imap_password,strlen(account->imap_password),&plain);
-        amg_buffer_append_cstr(&plain,"\nsmtp_password=");if(account->smtp_password)hex_encode((unsigned char*)account->smtp_password,strlen(account->smtp_password),&plain);
-        amg_buffer_append_cstr(&plain,"\nrefresh_token=");if(account->refresh_token)hex_encode((unsigned char*)account->refresh_token,strlen(account->refresh_token),&plain);amg_buffer_append_char(&plain,'\n');
+    snprintf(temporary, sizeof(temporary), "%s.new", path);
+    file = fopen(temporary, "wb");
+    if (!file) {
+        amg_error_set(
+            error, AMG_ERR_IO,
+            T(MSG_ACCOUNT_FILE_COULD_NOT_BE_WRITTEN,
+              "Account file could not be written."));
+        return AMG_ERR_IO;
+    }
+    amg_buffer_init(&plain);
+    amg_buffer_init(&cipher);
+    if (fprintf(file, "%s", STORAGE_HEADER_V2) < 0 ||
+        write_hex_line(file, "account_name",
+            (const unsigned char *)account->account_name,
+            strlen(account->account_name)) != AMG_OK ||
+        write_hex_line(file, "display_name",
+            (const unsigned char *)account->display_name,
+            strlen(account->display_name)) != AMG_OK ||
+        write_hex_line(file, "email",
+            (const unsigned char *)account->email,
+            strlen(account->email)) != AMG_OK ||
+        write_hex_line(file, "imap_username",
+            (const unsigned char *)account->imap_username,
+            strlen(account->imap_username)) != AMG_OK ||
+        write_hex_line(file, "smtp_username",
+            (const unsigned char *)account->smtp_username,
+            strlen(account->smtp_username)) != AMG_OK ||
+        write_hex_line(file, "folder_sent",
+            (const unsigned char *)account->sent_mailbox,
+            strlen(account->sent_mailbox)) != AMG_OK ||
+        write_hex_line(file, "folder_drafts",
+            (const unsigned char *)account->drafts_mailbox,
+            strlen(account->drafts_mailbox)) != AMG_OK ||
+        write_hex_line(file, "folder_all",
+            (const unsigned char *)account->all_mailbox,
+            strlen(account->all_mailbox)) != AMG_OK ||
+        write_hex_line(file, "folder_spam",
+            (const unsigned char *)account->spam_mailbox,
+            strlen(account->spam_mailbox)) != AMG_OK ||
+        write_hex_line(file, "folder_trash",
+            (const unsigned char *)account->trash_mailbox,
+            strlen(account->trash_mailbox)) != AMG_OK ||
+        fprintf(file,
+            "enabled=%d\n"
+            "auth_mode=%d\nimap_host=%s\nimap_port=%u\n"
+            "imap_starttls=%d\nsmtp_host=%s\nsmtp_port=%u\n"
+            "smtp_starttls=%d\nsmtp_same_credentials=%d\n"
+            "save_sent_copy=%d\nfetch_on_start=%d\n"
+            "periodic_fetch=%d\nfetch_days=%u\n"
+            "notification_sound=%d\n",
+            account->enabled ? 1 : 0,
+            (int)account->auth_mode, account->imap_host,
+            (unsigned)account->imap_port, account->imap_starttls,
+            account->smtp_host, (unsigned)account->smtp_port,
+            account->smtp_starttls,
+            account->smtp_same_credentials ? 1 : 0,
+            account->save_sent_copy ? 1 : 0,
+            account->fetch_on_start ? 1 : 0,
+            account->periodic_fetch ? 1 : 0,
+            account->fetch_days ? account->fetch_days : 180U,
+            account->notification_sound ? 1 : 0) < 0 ||
+        write_hex_line(file, "notification_sound_path",
+            (const unsigned char *)account->notification_sound_path,
+            strlen(account->notification_sound_path)) != AMG_OK)
+        result = AMG_ERR_IO;
+
+    if (result == AMG_OK &&
+        ((master_password && *master_password) || cached_key)) {
+        amg_buffer_append_cstr(&plain, "imap_password=");
+        if (account->imap_password)
+            hex_encode((const unsigned char *)account->imap_password,
+                       strlen(account->imap_password), &plain);
+        amg_buffer_append_cstr(&plain, "\nsmtp_password=");
+        if (account->smtp_password)
+            hex_encode((const unsigned char *)account->smtp_password,
+                       strlen(account->smtp_password), &plain);
+        amg_buffer_append_cstr(&plain, "\nrefresh_token=");
+        if (account->refresh_token)
+            hex_encode((const unsigned char *)account->refresh_token,
+                       strlen(account->refresh_token), &plain);
+        amg_buffer_append_char(&plain, '\n');
 #if AMIGMAIL_AMIGA
-        if(result==AMG_OK)result=encrypt_secrets(master_password,plain.data,plain.length,salt,iv,tag,&cipher,error);
-        if(result==AMG_OK){fprintf(file,"secrets=aes-256-gcm\niterations=%lu\n",STORAGE_ITERATIONS_CURRENT);result=write_hex_line(file,"salt",salt,16U);}
-        if(result==AMG_OK)result=write_hex_line(file,"iv",iv,12U);
-        if(result==AMG_OK)result=write_hex_line(file,"tag",tag,16U);
-        if(result==AMG_OK)result=write_hex_line(file,"ciphertext",cipher.data,cipher.length);
+        if (master_password && *master_password)
+            result = encrypt_secrets(master_password, plain.data,
+                plain.length, salt, iv, tag, &cipher, error);
+        else {
+            memcpy(salt, cached_salt, sizeof(salt));
+            result = encrypt_secrets_with_key(cached_key, plain.data,
+                plain.length, iv, tag, &cipher, error);
+        }
+        if (result == AMG_OK &&
+            fprintf(file, "secrets=aes-256-gcm\niterations=%lu\n",
+                    cached_key ? cached_iterations
+                               : STORAGE_ITERATIONS_CURRENT) < 0)
+            result = AMG_ERR_IO;
+        if (result == AMG_OK)
+            result = write_hex_line(file, "salt", salt, sizeof(salt));
+        if (result == AMG_OK)
+            result = write_hex_line(file, "iv", iv, sizeof(iv));
+        if (result == AMG_OK)
+            result = write_hex_line(file, "tag", tag, sizeof(tag));
+        if (result == AMG_OK)
+            result = write_hex_line(file, "ciphertext",
+                                    cipher.data, cipher.length);
 #else
-        result=AMG_ERR_UNSUPPORTED;
+        result = AMG_ERR_UNSUPPORTED;
 #endif
-    }else if(result==AMG_OK)fprintf(file,"secrets=session-only\n");
-    amg_secure_clear(plain.data,plain.capacity);amg_secure_clear(cipher.data,cipher.capacity);amg_buffer_free(&plain);amg_buffer_free(&cipher);
+    } else if (result == AMG_OK &&
+               fprintf(file, "secrets=session-only\n") < 0) {
+        result = AMG_ERR_IO;
+    }
+    amg_secure_clear(plain.data, plain.capacity);
+    amg_secure_clear(cipher.data, cipher.capacity);
+    amg_buffer_free(&plain);
+    amg_buffer_free(&cipher);
     if (fclose(file) != 0 && result == AMG_OK) result = AMG_ERR_IO;
-    if(result==AMG_OK)result=replace_file(temporary,path);
-    if(result!=AMG_OK)discard_file(temporary);
-    if(result==AMG_OK)amg_error_set(error,AMG_OK,"");
-    else if(!error||error->code==AMG_OK)
-        amg_error_set(error,result,T(MSG_ACCOUNT_FILE_COULD_NOT_BE_SAVED_SECURELY, "Account file could not be saved securely."));
+    if (result == AMG_OK) result = replace_file(temporary, path);
+    if (result != AMG_OK) discard_file(temporary);
+    if (result == AMG_OK) amg_error_set(error, AMG_OK, "");
+    else if (!error || error->code == AMG_OK)
+        amg_error_set(
+            error, result,
+            T(MSG_ACCOUNT_FILE_COULD_NOT_BE_SAVED_SECURELY,
+              "Account file could not be saved securely."));
     return result;
+}
+
+int amg_storage_save_account(const char *path, const AmgAccount *account,
+                             const char *master_password, AmgError *error)
+{
+    return save_account_internal(path, account, master_password,
+                                 NULL, NULL, 0UL, error);
+}
+
+int amg_storage_save_account_cached(const char *account_path,
+                                    const char *key_path,
+                                    const AmgAccount *account,
+                                    AmgError *error)
+{
+#if AMIGMAIL_AMIGA
+    unsigned char salt[16];
+    unsigned char key[SESSION_KEY_SIZE];
+    unsigned long iterations = 0UL;
+    int result;
+    memset(salt, 0, sizeof(salt));
+    memset(key, 0, sizeof(key));
+    result = load_cached_storage_key(account_path, key_path,
+                                     salt, key, &iterations, error);
+    if (result == AMG_OK)
+        result = save_account_internal(account_path, account, NULL,
+                                       key, salt, iterations, error);
+    amg_secure_clear(key, sizeof(key));
+    amg_secure_clear(salt, sizeof(salt));
+    return result;
+#else
+    (void)account_path;
+    (void)key_path;
+    (void)account;
+    amg_error_set(error, AMG_ERR_UNSUPPORTED,
+                  T(MSG_SESSION_KEYS_ARE_ONLY_USED_ON_AMIGAOS,
+                    "Session keys are only used on AmigaOS."));
+    return AMG_ERR_UNSUPPORTED;
+#endif
 }
 
 static char *read_all(const char *path,size_t *length)
 {
     FILE *file=fopen(path,"rb");long size;char *data;if(!file)return NULL;if(fseek(file,0,SEEK_END)||((size=ftell(file))<0)||fseek(file,0,SEEK_SET)){fclose(file);return NULL;}
     data=(char*)malloc((size_t)size+1U);if(!data){fclose(file);return NULL;}if(fread(data,1U,(size_t)size,file)!=(size_t)size){free(data);fclose(file);return NULL;}fclose(file);data[size]=0;*length=(size_t)size;return data;
+}
+
+int amg_storage_copy_session_key(const char *source_path,
+                                 const char *destination_path,
+                                 AmgError *error)
+{
+#if AMIGMAIL_AMIGA
+    size_t length = 0U;
+    char temporary[512];
+    char *data;
+    FILE *file = NULL;
+    int result = AMG_OK;
+    if (!source_path || !destination_path ||
+        strlen(destination_path) + 5U >= sizeof(temporary))
+        return AMG_ERR_ARGUMENT;
+    data = read_all(source_path, &length);
+    if (!data) return AMG_ERR_IO;
+    snprintf(temporary, sizeof(temporary), "%s.new", destination_path);
+    file = fopen(temporary, "wb");
+    if (!file || fwrite(data, 1U, length, file) != length)
+        result = AMG_ERR_IO;
+    if (file && fclose(file) != 0 && result == AMG_OK)
+        result = AMG_ERR_IO;
+    if (result == AMG_OK)
+        result = replace_file(temporary, destination_path);
+    else
+        discard_file(temporary);
+    amg_secure_clear(data, length);
+    free(data);
+    if (result == AMG_OK)
+        amg_error_set(error, AMG_OK, "");
+    else
+        amg_error_set(
+            error, result,
+            T(MSG_SESSION_KEY_COULD_NOT_BE_STORED_IN_ENV,
+              "Session key could not be stored in ENV:."));
+    return result;
+#else
+    (void)source_path;
+    (void)destination_path;
+    amg_error_set(error, AMG_ERR_UNSUPPORTED,
+                  T(MSG_SESSION_KEYS_ARE_ONLY_USED_ON_AMIGAOS,
+                    "Session keys are only used on AmigaOS."));
+    return AMG_ERR_UNSUPPORTED;
+#endif
 }
 
 static const char *field(const char *data,const char *name,char *value,size_t size)
@@ -508,6 +922,9 @@ static int load_account_internal(const char *path, const char *master_password,
         return AMG_ERR_PARSE;
     }
     amg_account_init(account);
+    /* ACCOUNT-1/2 files from AmiMAIL 1.5 and earlier represented the only
+     * account and therefore were implicitly enabled. */
+    account->enabled = 1;
     /* Existing ACCOUNT-1/2 files predate this option. Keep their previous
      * separate-SMTP behaviour unless the new field is explicitly present. */
     account->smtp_same_credentials = 0;
@@ -520,8 +937,11 @@ static int load_account_internal(const char *path, const char *master_password,
         snprintf((destination), sizeof(destination), "%s", (char *)decoded.data); \
     } \
 } while (0)
+    LOAD_HEX_STRING("account_name", account->account_name);
     LOAD_HEX_STRING("display_name", account->display_name);
     LOAD_HEX_STRING("email", account->email);
+    if (field(data, "enabled", value, sizeof(value)))
+        account->enabled = atoi(value) ? 1 : 0;
     if (field(data, "auth_mode", value, sizeof(value)))
         account->auth_mode = (AmgAuthMode)atoi(value);
     LOAD_HEX_STRING("imap_username", account->imap_username);
@@ -675,6 +1095,196 @@ int amg_storage_load_account(const char *path, const char *master_password,
     return load_account_internal(path, master_password, NULL, account, error);
 }
 
+#if AMIGMAIL_AMIGA
+static int load_cached_storage_key(
+    const char *account_path, const char *key_path,
+    unsigned char salt[16], unsigned char key[SESSION_KEY_SIZE],
+    unsigned long *iterations,
+    AmgError *error)
+{
+    size_t length;
+    char *data;
+    char value[256];
+    AmgBuffer decoded;
+    unsigned char account_salt[16];
+    int result = AMG_ERR_AUTH;
+    if (!account_path || !key_path || !salt || !key || !iterations)
+        return AMG_ERR_ARGUMENT;
+    memset(salt, 0, 16U);
+    memset(key, 0, SESSION_KEY_SIZE);
+    *iterations = 0UL;
+    memset(account_salt, 0, sizeof(account_salt));
+    data = read_all(key_path, &length);
+    (void)length;
+    if (!data) {
+        amg_error_set(
+            error, AMG_ERR_AUTH,
+            T(MSG_THE_ACCOUNT_IS_NOT_YET_UNLOCKED_FOR_THIS,
+              "The account is not yet unlocked for this Amiga session."));
+        return AMG_ERR_AUTH;
+    }
+    amg_buffer_init(&decoded);
+    if (strncmp(data, SESSION_HEADER, sizeof(SESSION_HEADER) - 1U) != 0)
+        goto done;
+    if (!field(data, "salt", value, sizeof(value)) ||
+        hex_decode(value, &decoded) != AMG_OK || decoded.length != 16U)
+        goto done;
+    memcpy(salt, decoded.data, 16U);
+    decoded.length = 0;
+    if (!field(data, "key", value, sizeof(value)) ||
+        hex_decode(value, &decoded) != AMG_OK ||
+        decoded.length != SESSION_KEY_SIZE)
+        goto done;
+    memcpy(key, decoded.data, SESSION_KEY_SIZE);
+    result = read_account_salt(account_path, account_salt, error);
+    if (result != AMG_OK || memcmp(salt, account_salt, 16U))
+        result = AMG_ERR_AUTH;
+    if (result == AMG_OK)
+        result = read_account_iterations(account_path, iterations, error);
+
+done:
+    amg_secure_clear(account_salt, sizeof(account_salt));
+    amg_secure_clear(decoded.data, decoded.capacity);
+    amg_buffer_free(&decoded);
+    amg_secure_clear(data, strlen(data));
+    free(data);
+    if (result == AMG_ERR_AUTH)
+        amg_error_set(
+            error, result,
+            T(MSG_SESSION_KEY_HAS_EXPIRED_OR_IS_INVALID,
+              "Session key has expired or is invalid."));
+    return result;
+}
+#endif
+
+#if AMIGMAIL_AMIGA
+static int write_automatic_storage_key(
+    const char *key_path, const unsigned char salt[16],
+    const unsigned char key[SESSION_KEY_SIZE], AmgError *error)
+{
+    char temporary[512];
+    FILE *file = NULL;
+    int result = AMG_OK;
+    if (!key_path || !salt || !key ||
+        strlen(key_path) + 5U >= sizeof(temporary))
+        return AMG_ERR_ARGUMENT;
+    snprintf(temporary, sizeof(temporary), "%s.new", key_path);
+    file = fopen(temporary, "wb");
+    if (!file) result = AMG_ERR_IO;
+    if (result == AMG_OK && fprintf(file, "%s", SESSION_HEADER) < 0)
+        result = AMG_ERR_IO;
+    if (result == AMG_OK)
+        result = write_hex_line(file, "salt", salt, 16U);
+    if (result == AMG_OK)
+        result = write_hex_line(file, "key", key, SESSION_KEY_SIZE);
+    if (file && fclose(file) != 0 && result == AMG_OK)
+        result = AMG_ERR_IO;
+    if (result == AMG_OK)
+        result = replace_file(temporary, key_path);
+    else
+        discard_file(temporary);
+    if (result == AMG_OK)
+        amg_error_set(error, AMG_OK, "");
+    else if (!error || error->code == AMG_OK)
+        amg_error_set(
+            error, result,
+            T(MSG_ACCOUNT_FILE_COULD_NOT_BE_SAVED_SECURELY,
+              "Automatic account key could not be stored securely."));
+    return result;
+}
+#endif
+
+int amg_storage_save_account_auto(const char *account_path,
+                                  const char *key_path,
+                                  const AmgAccount *account,
+                                  AmgError *error)
+{
+#if AMIGMAIL_AMIGA
+    unsigned char salt[16];
+    unsigned char key[SESSION_KEY_SIZE];
+    unsigned long iterations = STORAGE_ITERATIONS_CURRENT;
+    int result;
+    int generated = 0;
+    if (!account_path || !key_path || !account)
+        return AMG_ERR_ARGUMENT;
+    memset(salt, 0, sizeof(salt));
+    memset(key, 0, sizeof(key));
+
+    result = load_cached_storage_key(account_path, key_path,
+                                     salt, key, &iterations, error);
+    if (result != AMG_OK) {
+        amg_error_set(error, AMG_OK, "");
+        result = amg_tls_global_init(error);
+        if (result == AMG_OK) {
+            if (amg_random_bytes(salt, sizeof(salt)) != AMG_OK ||
+                amg_random_bytes(key, sizeof(key)) != AMG_OK)
+                result = AMG_ERR_TLS;
+            amg_tls_global_cleanup();
+        }
+        if (result == AMG_OK) {
+            iterations = STORAGE_ITERATIONS_CURRENT;
+            result = write_automatic_storage_key(
+                key_path, salt, key, error);
+            generated = result == AMG_OK;
+        }
+    }
+    if (result == AMG_OK)
+        result = save_account_internal(account_path, account, NULL,
+                                       key, salt, iterations, error);
+    if (result != AMG_OK && generated)
+        discard_file(key_path);
+    amg_secure_clear(key, sizeof(key));
+    amg_secure_clear(salt, sizeof(salt));
+    return result;
+#else
+    (void)key_path;
+    return save_account_internal(account_path, account, NULL,
+                                 NULL, NULL, 0UL, error);
+#endif
+}
+
+int amg_storage_load_account_auto(const char *account_path,
+                                  const char *key_path,
+                                  AmgAccount *account, AmgError *error)
+{
+#if AMIGMAIL_AMIGA
+    unsigned char salt[16];
+    unsigned char key[SESSION_KEY_SIZE];
+    unsigned long iterations = 0UL;
+    int result;
+    if (!account_path || !key_path || !account)
+        return AMG_ERR_ARGUMENT;
+    memset(salt, 0, sizeof(salt));
+    memset(key, 0, sizeof(key));
+    result = load_cached_storage_key(account_path, key_path,
+                                     salt, key, &iterations, error);
+    if (result == AMG_OK)
+        result = load_account_internal(account_path, NULL, key,
+                                       account, error);
+    if (result != AMG_OK) {
+        /* Keep all non-secret account settings available even when an old
+         * account has no usable automatic key. The user then only has to
+         * re-enter the IMAP/SMTP password; no master password is involved. */
+        amg_account_clear(account);
+        amg_account_init(account);
+        result = load_account_internal(account_path, NULL, NULL,
+                                       account, error);
+        if (result == AMG_ERR_AUTH)
+            amg_error_set(
+                error, result,
+                T(MSG_THE_IMAP_PASSWORD_IS_MISSING,
+                  "Stored mail password is unavailable; please enter it again in Account settings."));
+    }
+    amg_secure_clear(key, sizeof(key));
+    amg_secure_clear(salt, sizeof(salt));
+    return result;
+#else
+    (void)key_path;
+    return load_account_internal(account_path, NULL, NULL,
+                                 account, error);
+#endif
+}
+
 int amg_storage_load_account_session(const char *account_path,
                                      const char *session_path,
                                      AmgAccount *account, AmgError *error)
@@ -739,4 +1349,3 @@ done:
     return AMG_ERR_UNSUPPORTED;
 #endif
 }
-

@@ -3,7 +3,11 @@
 
 #include "amigmail.h"
 
+#define AMG_MAX_ACCOUNTS 5U
+
 typedef struct AmgAccount {
+    int enabled;
+    char account_name[96];
     char display_name[96];
     char email[256];
     AmgAuthMode auth_mode;
@@ -32,9 +36,16 @@ typedef struct AmgAccount {
     char *refresh_token;
 } AmgAccount;
 
+typedef struct AmgAccountSet {
+    AmgAccount accounts[AMG_MAX_ACCOUNTS];
+    size_t order[AMG_MAX_ACCOUNTS];
+    size_t current;
+} AmgAccountSet;
+
 void amg_account_init(AmgAccount *account);
 void amg_account_clear(AmgAccount *account);
 int amg_account_set_secret(char **destination, const char *value);
+int amg_account_copy(AmgAccount *destination, const AmgAccount *source);
 void amg_account_normalize(AmgAccount *account);
 int amg_account_is_google_host(const char *host);
 int amg_account_should_append_sent(const AmgAccount *account);
@@ -42,5 +53,10 @@ int amg_account_validate(const AmgAccount *account, AmgError *error);
 const char *amg_account_imap_user(const AmgAccount *account);
 const char *amg_account_smtp_user(const AmgAccount *account);
 const char *amg_account_smtp_password(const AmgAccount *account);
+
+void amg_account_set_init(AmgAccountSet *set);
+void amg_account_set_clear(AmgAccountSet *set);
+size_t amg_account_set_first_enabled(const AmgAccountSet *set);
+size_t amg_account_set_enabled_count(const AmgAccountSet *set);
 
 #endif

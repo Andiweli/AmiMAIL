@@ -38,6 +38,33 @@ static void test_quoted_printable(void)
     CHECK(!strcmp(text(&output),"Grüße!"));amg_buffer_free(&output);
 }
 
+static void test_utf8_to_local(void)
+{
+    AmgBuffer output;
+
+    amg_buffer_init(&output);
+    CHECK(amg_utf8_to_local("10 \xE2\x82\xAC", &output) == AMG_OK);
+    CHECK(output.length == 4U);
+    CHECK(output.data[0] == '1' && output.data[1] == '0' &&
+          output.data[2] == ' ' && output.data[3] == 0xA4U);
+    amg_buffer_free(&output);
+
+    amg_buffer_init(&output);
+    CHECK(amg_utf8_to_local(
+        "Bestellt: \xE2\x80\x9E" "Test" "\xE2\x80\x9C"
+        " \xE2\x80\x93 Andreas", &output) == AMG_OK);
+    CHECK(!strcmp(text(&output), "Bestellt: \"Test\" - Andreas"));
+    amg_buffer_free(&output);
+
+    amg_buffer_init(&output);
+    CHECK(amg_utf8_to_local(
+        "\xF0\x9F\xA7\x91\xE2\x80\x8D\xE2\x9A\x95\xEF\xB8\x8F"
+        " L\xC3\xA4use \xE2\x82\x82 \xE2\x81\x89 \xE2\x9A\xA1",
+        &output) == AMG_OK);
+    CHECK(!strcmp(text(&output), "[Grafik] L\xE4use 2 !? [Grafik]"));
+    amg_buffer_free(&output);
+}
+
 static void test_utf7(void)
 {
     static const char *samples[]={"INBOX","Reisen & Urlaub","Österreich/Grüße","日本語"};size_t i;
@@ -183,6 +210,7 @@ static void test_account_normalize(void)
 {
     AmgAccount account;
     amg_account_init(&account);
+    strcpy(account.account_name, "  Private  ");
     strcpy(account.display_name, "  Andreas  ");
     strcpy(account.email, " andreas@gmail.com ");
     strcpy(account.imap_host, " imap.gmail.com ");
@@ -199,6 +227,7 @@ static void test_account_normalize(void)
     CHECK(amg_account_set_secret(&account.smtp_password,
                                  "qrst uvwx yzab cdef") == AMG_OK);
     amg_account_normalize(&account);
+    CHECK(!strcmp(account.account_name, "Private"));
     CHECK(!strcmp(account.display_name, "Andreas"));
     CHECK(!strcmp(account.email, "andreas@gmail.com"));
     CHECK(!strcmp(account.imap_host, "imap.gmail.com"));
@@ -217,18 +246,39 @@ static void test_account_normalize(void)
     amg_account_clear(&account);
 }
 
+static void test_account_capacity(void)
+{
+    AmgAccountSet set;
+    CHECK(AMG_MAX_ACCOUNTS == 5U);
+    amg_account_set_init(&set);
+    CHECK(set.order[0] == 0U && set.order[1] == 1U &&
+          set.order[2] == 2U && set.order[3] == 3U &&
+          set.order[4] == 4U);
+    CHECK(!strcmp(amg_storage_account_path(3U),
+                  "ENVARC:AmiMail/account-4.cfg"));
+    CHECK(!strcmp(amg_storage_account_path(4U),
+                  "ENVARC:AmiMail/account-5.cfg"));
+    CHECK(!strcmp(amg_storage_session_key_path(4U),
+                  "ENV:AmiMail.session-key-5"));
+    CHECK(!strcmp(amg_storage_persistent_key_path(4U),
+                  "ENVARC:AmiMail/account-5.key"));
+    CHECK(amg_storage_account_path(AMG_MAX_ACCOUNTS) == NULL);
+    amg_account_set_clear(&set);
+}
+
 static void test_storage_metadata(void)
 {
     const char *path = "build/test-account.cfg";
-    const char *master_path = "build/test-master.cfg";
+    const char *key_path = "build/test-account.key";
     AmgAccount saved, loaded;
     AmgError error;
-    char master[128];
     char raw[4096] = {0};
     FILE *file;
     size_t raw_length;
     amg_account_init(&saved);
     amg_account_init(&loaded);
+    saved.enabled = 1;
+    strcpy(saved.account_name, "Private mail");
     strcpy(saved.display_name, "Andreas");
     strcpy(saved.email, "andreas@example.com");
     strcpy(saved.imap_host, "imap.example.com");
@@ -248,7 +298,7 @@ static void test_storage_metadata(void)
     saved.save_sent_copy = 0;
     saved.notification_sound = 1;
     strcpy(saved.notification_sound_path, "PROGDIR:notify.8svx");
-    CHECK(amg_storage_save_account(path, &saved, NULL, &error) == AMG_OK);
+    CHECK(amg_storage_save_account_auto(path, key_path, &saved, &error) == AMG_OK);
     file=fopen(path,"rb");
     CHECK(file!=NULL);
     raw_length=0U;
@@ -256,8 +306,11 @@ static void test_storage_metadata(void)
     CHECK(raw_length>0U);
     CHECK(!strncmp(raw,"AMIMAIL-ACCOUNT-2\n",18U));
     CHECK(strstr(raw,"remembered_master=")==NULL);
-    CHECK(amg_storage_load_account(path, NULL, &loaded, &error) == AMG_OK);
+    CHECK(strstr(raw,"allow_passwordless_changes=")==NULL);
+    CHECK(amg_storage_load_account_auto(path, key_path, &loaded, &error) == AMG_OK);
+    CHECK(!strcmp(loaded.account_name, saved.account_name));
     CHECK(!strcmp(loaded.display_name, saved.display_name));
+    CHECK(loaded.enabled == 1);
     CHECK(!strcmp(loaded.email, saved.email));
     CHECK(loaded.fetch_on_start == 1);
     CHECK(loaded.periodic_fetch == 1);
@@ -278,21 +331,6 @@ static void test_storage_metadata(void)
     CHECK(!strcmp(loaded.all_mailbox, "Archive"));
     CHECK(!strcmp(loaded.spam_mailbox, "Junk Mail"));
     CHECK(!strcmp(loaded.trash_mailbox, "Deleted Messages"));
-    file=fopen(master_path,"wb");
-    CHECK(file!=NULL);
-    if(file){fputs("AMIMAIL-ACCOUNT-1\nremembered_master=546573742d4d6173746572\n",file);fclose(file);}
-    CHECK(amg_storage_load_legacy_master(
-        master_path,master,sizeof(master))==AMG_OK);
-    CHECK(!strcmp(master,"Test-Master"));
-    amg_secure_clear(master,sizeof(master));
-    file=fopen(master_path,"wb");
-    CHECK(file!=NULL);
-    if(file){fputs("AMIMAIL-ACCOUNT-2\nremembered_master=546573742d4d6173746572\n",file);fclose(file);}
-    CHECK(amg_storage_load_legacy_master(
-        master_path,master,sizeof(master))!=AMG_OK);
-    CHECK(master[0]==0);
-    remove(path);
-    remove(master_path);
     amg_account_clear(&saved);
     amg_account_clear(&loaded);
 }
@@ -315,6 +353,36 @@ static void test_mime(void)
     AmgBuffer output,name,data;AmgError error;size_t attachment_count=0;amg_buffer_init(&output);CHECK(amg_mime_extract_text(message,strlen(message),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Hallo Welt")!=NULL);amg_buffer_free(&output);
     amg_buffer_init(&output);CHECK(amg_mime_extract_text(html_first,strlen(html_first),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Plain version")!=NULL);CHECK(strstr((char*)output.data,"HTML version")==NULL);amg_buffer_free(&output);
     amg_buffer_init(&output);CHECK(amg_mime_extract_text(html_only,strlen(html_only),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Hello")!=NULL);CHECK(strstr((char*)output.data,"our site <https://example.com/?a=1&b=2>")!=NULL);CHECK(strstr((char*)output.data,"- One")!=NULL);CHECK(strstr((char*)output.data,"- Two")!=NULL);CHECK(strstr((char*)output.data,"evil")==NULL);CHECK(strstr((char*)output.data,"tracker.invalid")==NULL);amg_buffer_free(&output);
+    {
+        const char *images =
+            "<p>Logo <img src=\"logo.png\" alt=\"Firmenlogo\"></p>"
+            "<p>Bild <img src=\"photo.jpg\"></p>"
+            "<img src=\"pixel.gif\" width=\"1\" height=\"1\">";
+        amg_buffer_init(&output);
+        CHECK(amg_html_to_text(images, strlen(images), &output) == AMG_OK);
+        CHECK(strstr(text(&output), "Logo Firmenlogo") != NULL);
+        CHECK(strstr((char *)output.data, "Bild [Grafik]") != NULL);
+        CHECK(strstr((char *)output.data, "pixel.gif") == NULL);
+        amg_buffer_free(&output);
+    }
+    {
+        char long_url[700], html[1000];
+        size_t i;
+        strcpy(long_url, "https://example.com/");
+        for (i = strlen(long_url); i + 1U < sizeof(long_url); ++i)
+            long_url[i] = 'x';
+        long_url[sizeof(long_url) - 1U] = 0;
+        snprintf(html, sizeof(html),
+                 "<p>Payment <a href=\"%s\">details</a></p>"
+                 "<a href=\"https://social.example/tracking\"><img src=\"x\"></a>",
+                 long_url);
+        amg_buffer_init(&output);
+        CHECK(amg_html_to_text(html, strlen(html), &output) == AMG_OK);
+        CHECK(strstr(text(&output), "Payment details") != NULL);
+        CHECK(strstr((char *)output.data, "example.com") == NULL);
+        CHECK(strstr((char *)output.data, "social.example") == NULL);
+        amg_buffer_free(&output);
+    }
     amg_buffer_init(&output);CHECK(amg_mime_attachment_summary(with_attachment,strlen(with_attachment),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"rechnung.pdf")!=NULL);CHECK(strstr(text(&output),"application/pdf")!=NULL);amg_buffer_free(&output);
     CHECK(amg_mime_attachment_count(with_attachment,strlen(with_attachment),&attachment_count,&error)==AMG_OK);CHECK(attachment_count==1U);
     amg_buffer_init(&name);amg_buffer_init(&data);CHECK(amg_mime_extract_attachment(with_attachment,strlen(with_attachment),0U,&name,&data,&error)==AMG_OK);CHECK(!strcmp(text(&name),"rechnung.pdf"));CHECK(data.length==3U&&!memcmp(data.data,"ABC",3U));amg_buffer_free(&name);amg_buffer_free(&data);
@@ -323,6 +391,7 @@ static void test_mime(void)
     amg_buffer_init(&output);CHECK(amg_html_to_text("Hallo &lt;span class=&quot;x&quot;&gt;Welt&lt;/span&gt;!",strlen("Hallo &lt;span class=&quot;x&quot;&gt;Welt&lt;/span&gt;!"),&output)==AMG_OK);CHECK(strstr(text(&output),"<span")==NULL);CHECK(strstr(text(&output),"</span>")==NULL);CHECK(strstr(text(&output),"Hallo Welt!")!=NULL);amg_buffer_free(&output);
     { const char *broken_plain="Content-Type: text/plain; charset=UTF-8\r\n\r\n<div>Hallo <span>Welt</span></div><p>Mit freundlichen Gr&uuml;&szlig;en</p>"; amg_buffer_init(&output);CHECK(amg_mime_extract_text(broken_plain,strlen(broken_plain),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"<div>")==NULL);CHECK(strstr(text(&output),"<span>")==NULL);CHECK(strstr(text(&output),"&uuml;")==NULL);CHECK(strstr(text(&output),"Hallo Welt")!=NULL);CHECK(strstr(text(&output),"Gr\xC3\xBC\xC3\x9F" "en")!=NULL);amg_buffer_free(&output); }
     { const char *entity_plain="Content-Type: text/plain; charset=UTF-8\r\n\r\nMit freundlichen Gr&uuml;&szlig;en"; amg_buffer_init(&output);CHECK(amg_mime_extract_text(entity_plain,strlen(entity_plain),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"&uuml;")==NULL);CHECK(strstr(text(&output),"Gr\xC3\xBC\xC3\x9F" "en")!=NULL);amg_buffer_free(&output); }
+    { const char *entity_plain_paragraphs="Content-Type: text/plain; charset=UTF-8\r\n\r\n&nbsp;\r\n\r\nLiebe Leserinnen, liebe Leser,\r\n\r\nwetten, dass Sie sich dieses Mal den Kopf kratzen werden?\r\n\r\nAu&szlig;erdem in dieser Ausgabe:"; amg_buffer_init(&output);CHECK(amg_mime_extract_text(entity_plain_paragraphs,strlen(entity_plain_paragraphs),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"&nbsp;")==NULL);CHECK(strstr(text(&output),"\r\n\r\nLiebe Leserinnen, liebe Leser,\r\n\r\nwetten")!=NULL);CHECK(strstr(text(&output),"Au\xC3\x9F" "erdem")!=NULL);amg_buffer_free(&output); }
     {
         const char *css_polluted_alternative =
             "Content-Type: multipart/alternative; boundary=altcss\r\n\r\n"
@@ -604,8 +673,8 @@ static void test_sha256(void)
 
 static void test_account(void)
 {
-    AmgAccount account;AmgError error;amg_account_init(&account);strcpy(account.email,"user@example.com");strcpy(account.imap_host,"imap.example.com");strcpy(account.smtp_host,"smtp.example.com");strcpy(account.imap_username,"imap-user");strcpy(account.smtp_username,"smtp-user");amg_account_set_secret(&account.imap_password,"short");
-    CHECK(amg_account_validate(&account,&error)==AMG_OK);CHECK(!strcmp(amg_account_imap_user(&account),"imap-user"));CHECK(!strcmp(amg_account_smtp_user(&account),"imap-user"));CHECK(!strcmp(amg_account_smtp_password(&account),"short"));account.smtp_same_credentials=0;CHECK(!strcmp(amg_account_smtp_user(&account),"smtp-user"));CHECK(!strcmp(amg_account_smtp_password(&account),"short"));CHECK(amg_account_should_append_sent(&account)==1);account.save_sent_copy=0;CHECK(amg_account_should_append_sent(&account)==0);amg_account_set_secret(&account.imap_password,"");CHECK(amg_account_validate(&account,&error)==AMG_ERR_AUTH);amg_account_clear(&account);
+    AmgAccount account;AmgAccountSet set;AmgError error;amg_account_set_init(&set);CHECK(amg_account_set_enabled_count(&set)==1U);set.accounts[2].enabled=1;CHECK(amg_account_set_enabled_count(&set)==2U);CHECK(amg_account_set_first_enabled(&set)==0U);set.order[0]=2U;set.order[1]=0U;set.order[2]=1U;CHECK(amg_account_set_first_enabled(&set)==2U);set.accounts[2].enabled=0;CHECK(amg_account_set_first_enabled(&set)==0U);amg_account_set_clear(&set);amg_account_init(&account);account.smtp_same_credentials=0;strcpy(account.email,"user@example.com");strcpy(account.imap_host,"imap.example.com");strcpy(account.smtp_host,"smtp.example.com");strcpy(account.imap_username,"imap-user");strcpy(account.smtp_username,"smtp-user");amg_account_set_secret(&account.imap_password,"short");
+    CHECK(amg_account_validate(&account,&error)==AMG_OK);CHECK(!strcmp(amg_account_imap_user(&account),"imap-user"));CHECK(!strcmp(amg_account_smtp_user(&account),"smtp-user"));CHECK(!strcmp(amg_account_smtp_password(&account),"short"));CHECK(amg_account_should_append_sent(&account)==1);account.save_sent_copy=0;CHECK(amg_account_should_append_sent(&account)==0);amg_account_set_secret(&account.imap_password,"");CHECK(amg_account_validate(&account,&error)==AMG_ERR_AUTH);amg_account_clear(&account);
 
     amg_account_init(&account);strcpy(account.email,"user@gmail.com");strcpy(account.imap_host,"imap.gmail.com");strcpy(account.smtp_host,"smtp.gmail.com");amg_account_set_secret(&account.imap_password,"abcdefghijklmnop");
     account.imap_port=143;account.imap_starttls=1;account.smtp_port=587;account.smtp_starttls=1;
@@ -725,10 +794,10 @@ static void test_update(void)
     CHECK(amg_update_is_newer("v1.0-RC2", "1.0 RC1"));
     CHECK(!amg_update_is_newer("v1.0-RC1", "1.0 RC1"));
     CHECK(!amg_update_is_newer("v1.0-RC1", "1.0"));
-    CHECK(!amg_update_is_newer("v1.0-RC2", AMIMAIL_VERSION));
-    CHECK(!amg_update_is_newer("v1.0-RC3", AMIMAIL_VERSION));
-    CHECK(!amg_update_is_newer("v1.0", AMIMAIL_VERSION));
-    CHECK(!amg_update_is_newer("v1.0-RC1", AMIMAIL_VERSION));
+    CHECK(!amg_update_is_newer("v1.0-RC2", "1.0 RC2"));
+    CHECK(amg_update_is_newer("v1.0-RC3", "1.0 RC2"));
+    CHECK(amg_update_is_newer("v1.0", "1.0 RC2"));
+    CHECK(!amg_update_is_newer("v1.0-RC1", "1.0 RC2"));
 
     memset(&info, 0, sizeof(info));
     memset(&error, 0, sizeof(error));
@@ -761,6 +830,6 @@ static void test_i18n(void)
 
 int main(void)
 {
-    test_base64();test_quoted_printable();test_utf7();test_imap_parser();test_headers_and_rfc2047();test_mime();test_mailto();test_smtp();test_oauth();test_sha256();test_account();test_account_normalize();test_storage_metadata();test_contacts();test_i18n();test_update();
+    test_base64();test_quoted_printable();test_utf8_to_local();test_utf7();test_imap_parser();test_headers_and_rfc2047();test_mime();test_mailto();test_smtp();test_oauth();test_sha256();test_account();test_account_normalize();test_account_capacity();test_storage_metadata();test_contacts();test_i18n();test_update();
     printf("%u checks, %u failures\n",tests_run,tests_failed);return tests_failed?1:0;
 }

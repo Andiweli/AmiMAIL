@@ -24,6 +24,7 @@
 #include <exec/lists.h>
 #include <exec/memory.h>
 #include <gadgets/button.h>
+#include <gadgets/clicktab.h>
 #include <gadgets/layout.h>
 #include <gadgets/listbrowser.h>
 #include <gadgets/scroller.h>
@@ -39,6 +40,7 @@
 #include <libraries/gadtools.h>
 #include <proto/asl.h>
 #include <proto/button.h>
+#include <proto/clicktab.h>
 #include <proto/datatypes.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
@@ -65,6 +67,7 @@
 struct Library *WindowBase=NULL;
 struct Library *LayoutBase=NULL;
 struct Library *ButtonBase=NULL;
+struct Library *ClickTabBase=NULL;
 struct Library *ListBrowserBase=NULL;
 struct Library *ScrollerBase=NULL;
 struct Library *StringBase=NULL;
@@ -150,6 +153,7 @@ static int open_classes(void)
     WindowBase = OpenLibrary((CONST_STRPTR)"window.class", 44);
     LayoutBase = OpenLibrary((CONST_STRPTR)"gadgets/layout.gadget", 44);
     ButtonBase = OpenLibrary((CONST_STRPTR)"gadgets/button.gadget", 44);
+    ClickTabBase = OpenLibrary((CONST_STRPTR)"gadgets/clicktab.gadget", 47);
     ListBrowserBase =
         OpenLibrary((CONST_STRPTR)"gadgets/listbrowser.gadget", 44);
     ScrollerBase = OpenLibrary((CONST_STRPTR)"gadgets/scroller.gadget", 44);
@@ -164,7 +168,7 @@ static int open_classes(void)
     IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 39);
     GfxBase = (struct GfxBase *)
         OpenLibrary((CONST_STRPTR)"graphics.library", 39);
-    return WindowBase && LayoutBase && ButtonBase && ListBrowserBase &&
+    return WindowBase && LayoutBase && ButtonBase && ClickTabBase && ListBrowserBase &&
            ScrollerBase && StringBase && TextEditorBase && AslBase && GfxBase;
 }
 
@@ -179,6 +183,7 @@ static void close_classes(void)
     if (ScrollerBase) CloseLibrary(ScrollerBase);
     if (ListBrowserBase) CloseLibrary(ListBrowserBase);
     if (ButtonBase) CloseLibrary(ButtonBase);
+    if (ClickTabBase) CloseLibrary(ClickTabBase);
     if (LayoutBase) CloseLibrary(LayoutBase);
     if (WindowBase) CloseLibrary(WindowBase);
     if (GfxBase) CloseLibrary((struct Library *)GfxBase);
@@ -192,6 +197,7 @@ static void close_classes(void)
     ScrollerBase = NULL;
     ListBrowserBase = NULL;
     ButtonBase = NULL;
+    ClickTabBase = NULL;
     LayoutBase = NULL;
     WindowBase = NULL;
 }
@@ -616,10 +622,226 @@ static ULONG estimate_texteditor_visible_lines(struct Window *window,
                              fallback_entries, 0);
 }
 
-AmgGui *amg_gui_create(AmgAccount *account, AmgError *error)
+static void free_account_tab_nodes(struct List *list)
+{
+    struct Node *node;
+    if (!list) return;
+    while ((node = RemHead(list)) != NULL)
+        FreeClickTabNode(node);
+    NewList(list);
+}
+
+static void save_active_account_runtime(AmgGui *gui)
+{
+    GuiAccountRuntime *runtime;
+    if (!gui || gui->active_account >= AMG_MAX_ACCOUNTS) return;
+    runtime = &gui->account_runtime[gui->active_account];
+    runtime->inbox_latest_uid = gui->inbox_latest_uid;
+    runtime->inbox_uid_validity = gui->inbox_uid_validity;
+    runtime->inbox_baseline_ready = gui->inbox_baseline_ready;
+    runtime->inbox_unseen_count = gui->inbox_unseen_count;
+    runtime->inbox_unseen_known = gui->inbox_unseen_known;
+    runtime->periodic_check_pending = gui->periodic_check_pending;
+    runtime->network_reconfigure_pending = gui->network_reconfigure_pending;
+}
+
+static void load_active_account_runtime(AmgGui *gui)
+{
+    GuiAccountRuntime *runtime;
+    if (!gui || gui->active_account >= AMG_MAX_ACCOUNTS) return;
+    runtime = &gui->account_runtime[gui->active_account];
+    gui->inbox_latest_uid = runtime->inbox_latest_uid;
+    gui->inbox_uid_validity = runtime->inbox_uid_validity;
+    gui->inbox_baseline_ready = runtime->inbox_baseline_ready;
+    gui->inbox_unseen_count = runtime->inbox_unseen_count;
+    gui->inbox_unseen_known = runtime->inbox_unseen_known;
+    gui->periodic_check_pending = runtime->periodic_check_pending;
+    gui->network_reconfigure_pending = runtime->network_reconfigure_pending;
+}
+
+static int account_tab_has_unread(const AmgGui *gui, size_t account_index)
+{
+    const GuiAccountRuntime *runtime;
+    if (!gui || account_index >= AMG_MAX_ACCOUNTS) return 0;
+    if (account_index == gui->active_account)
+        return gui->inbox_unseen_known && gui->inbox_unseen_count > 0UL;
+    runtime = &gui->account_runtime[account_index];
+    return runtime->inbox_unseen_known && runtime->inbox_unseen_count > 0UL;
+}
+
+void gui_reload_account_states(AmgGui *gui)
+{
+    size_t index, selected;
+    if (!gui || !gui->account_set) return;
+    selected = gui->active_account;
+    memset(gui->account_runtime, 0, sizeof(gui->account_runtime));
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
+        if (!gui->account_set->accounts[index].enabled) continue;
+        gui->active_account = index;
+        gui->account = &gui->account_set->accounts[index];
+        gui->inbox_latest_uid = 0UL;
+        gui->inbox_uid_validity = 0UL;
+        gui->inbox_baseline_ready = 0;
+        gui->inbox_unseen_count = 0UL;
+        gui->inbox_unseen_known = 0;
+        gui->periodic_check_pending = 0;
+        gui->network_reconfigure_pending = 0;
+        gui_state_load_inbox_notification(gui);
+        save_active_account_runtime(gui);
+    }
+    gui->active_account = selected;
+    gui->account = &gui->account_set->accounts[selected];
+    gui->network = gui->networks[selected];
+    load_active_account_runtime(gui);
+}
+
+void gui_rebuild_account_tabs(AmgGui *gui)
+{
+    size_t position, visible = 0U, selected = 0U;
+    if (!gui || !gui->account_set) return;
+
+    if (gui->account_tabs_gadget)
+        SetAttrs((Object *)gui->account_tabs_gadget,
+                 CLICKTAB_Labels, (ULONG)~0UL, TAG_DONE);
+    free_account_tab_nodes(&gui->account_tabs_list);
+
+    for (position = 0U; position < AMG_MAX_ACCOUNTS; ++position) {
+        size_t index = gui->account_set->order[position];
+        AmgAccount *account;
+        struct Node *node;
+        const char *label;
+        if (index >= AMG_MAX_ACCOUNTS) continue;
+        account = &gui->account_set->accounts[index];
+        if (!account->enabled) continue;
+        gui->account_tab_map[visible] = index;
+        if (index == gui->active_account) selected = visible;
+        label = account->account_name[0] ? account->account_name :
+                (account->email[0] ? account->email :
+                 T(MSG_ACCOUNT, "Account"));
+        snprintf(gui->account_tab_labels[visible],
+                 sizeof(gui->account_tab_labels[visible]), "%s", label);
+        if (!gui->account_tab_labels[visible][0])
+            amg_tr_snprintf(gui->account_tab_labels[visible],
+                            sizeof(gui->account_tab_labels[visible]),
+                            MSG_ACCOUNT_VALUE, "Account %lu",
+                            (unsigned long)(index + 1U));
+        node = AllocClickTabNode(
+            TNA_Text,
+                (ULONG)(uintptr_t)gui->account_tab_labels[visible],
+            TNA_Number, (ULONG)visible,
+            account_tab_has_unread(gui, index) ? TNA_TextPen : TAG_IGNORE,
+                account_tab_has_unread(gui, index)
+                    ? (ULONG)gui->banner_pens[1] : 0UL,
+            TAG_DONE);
+        if (node) AddTail(&gui->account_tabs_list, node);
+        ++visible;
+    }
+    gui->account_tab_count = visible;
+    if (gui->account_tabs_gadget) {
+        SetAttrs((Object *)gui->account_tabs_gadget,
+                 CLICKTAB_Labels,
+                     (ULONG)(uintptr_t)&gui->account_tabs_list,
+                 CLICKTAB_Current, (ULONG)selected,
+                 TAG_DONE);
+        if (gui->window) {
+            /* Dynamic clicktab labels change the gadget's live domain.
+             * ReAction explicitly requires a window relayout after the list
+             * has been detached, rebuilt and reattached; RefreshGList alone
+             * can leave the gadget with a zero-height/empty domain until the
+             * next window open. */
+            (void)DoMethod(gui->window_object, WM_RETHINK);
+            RefreshGList(gui->account_tabs_gadget, gui->window, NULL, 1);
+        }
+    }
+}
+
+static void reset_account_view(AmgGui *gui)
+{
+    if (!gui) return;
+    clear_current_message_payload(gui);
+    detach_listbrowser(gui->system_labels_gadget, gui->window);
+    detach_listbrowser(gui->labels_gadget, gui->window);
+    detach_listbrowser(gui->messages_gadget, gui->window);
+    FreeListBrowserList(&gui->system_labels_list);
+    FreeListBrowserList(&gui->labels_list);
+    FreeListBrowserList(&gui->messages_list);
+    NewList(&gui->system_labels_list);
+    NewList(&gui->labels_list);
+    NewList(&gui->messages_list);
+    default_labels(gui);
+    default_messages(gui);
+    attach_listbrowser(gui->messages_gadget, gui->window,
+                       &gui->messages_list);
+    set_preview_local(gui,
+        T(MSG_SELECT_A_MESSAGE_AFTER_FETCHING,
+          "Select a message after fetching."));
+    gui->active_message_uid = 0UL;
+    gui->move_pending = 0;
+}
+
+int gui_switch_account(AmgGui *gui, size_t account_index, int fetch,
+                       AmgError *error)
+{
+    size_t visible;
+    if (!gui || !gui->account_set || account_index >= AMG_MAX_ACCOUNTS ||
+        !gui->account_set->accounts[account_index].enabled)
+        return AMG_ERR_ARGUMENT;
+    if (gui->compose_open && account_index != gui->active_account) {
+        for (visible = 0U; visible < gui->account_tab_count; ++visible) {
+            if (gui->account_tab_map[visible] == gui->active_account) {
+                if (gui->account_tabs_gadget)
+                    SetAttrs((Object *)gui->account_tabs_gadget,
+                             CLICKTAB_Current, (ULONG)visible, TAG_DONE);
+                break;
+            }
+        }
+        status_local(
+            gui,
+            T(MSG_CLOSE_THE_COMPOSE_WINDOW_BEFORE_SWITCHING_ACCOUNTS,
+              "Close the compose window before switching accounts."));
+        return AMG_ERR_CANCELLED;
+    }
+    if (account_index != gui->active_account) {
+        save_active_account_runtime(gui);
+        gui->active_account = account_index;
+        gui->account_set->current = account_index;
+        gui->account = &gui->account_set->accounts[account_index];
+        gui->network = gui->networks[account_index];
+        load_active_account_runtime(gui);
+        if (!gui->inbox_baseline_ready)
+            gui_state_load_inbox_notification(gui);
+        reset_account_view(gui);
+    }
+    for (visible = 0U; visible < gui->account_tab_count; ++visible) {
+        if (gui->account_tab_map[visible] == account_index) {
+            if (gui->account_tabs_gadget)
+                SetAttrs((Object *)gui->account_tabs_gadget,
+                         CLICKTAB_Current, (ULONG)visible, TAG_DONE);
+            break;
+        }
+    }
+    if (fetch && !account_is_locked(gui->account)) {
+        if (amg_network_is_connected(gui->network)) {
+            int result = amg_network_request(
+                gui->network, AMG_NET_FETCH_LABELS, 0, NULL, NULL, error);
+            if (result == AMG_OK)
+                status_local(gui,
+                    T(MSG_LOADING_MAIL_FOLDERS,
+                      "Loading mail folders..."));
+            else if (error && error->message[0])
+                status_utf8(gui, error->message);
+        } else {
+            fetch_mail(gui, error);
+        }
+    }
+    return AMG_OK;
+}
+
+AmgGui *amg_gui_create(AmgAccountSet *accounts, AmgError *error)
 {
     AmgGui *gui;
-    if (!account) return NULL;
+    size_t index;
+    if (!accounts) return NULL;
     if (!open_classes()) {
         close_classes();
         amg_error_set(
@@ -632,18 +854,32 @@ AmgGui *amg_gui_create(AmgAccount *account, AmgError *error)
         close_classes();
         return NULL;
     }
-    gui->account = account;
+    gui->account_set = accounts;
+    gui->active_account = accounts->current < AMG_MAX_ACCOUNTS
+        ? accounts->current : amg_account_set_first_enabled(accounts);
+    if (!accounts->accounts[gui->active_account].enabled)
+        gui->active_account = amg_account_set_first_enabled(accounts);
+    gui->account = &accounts->accounts[gui->active_account];
     gui->notification_sound_signal_bit = -1;
     gui->preview_url_signal_bit = -1;
     gui_state_set_mail_status_active();
-    gui_state_load_inbox_notification(gui);
+    gui_reload_account_states(gui);
     NewList(&gui->system_labels_list);
     NewList(&gui->labels_list);
     NewList(&gui->messages_list);
+    NewList(&gui->account_tabs_list);
     default_labels(gui);
     default_messages(gui);
-    gui->network = amg_network_create();
-    if (!gui->network || create_window(gui, error) != AMG_OK) {
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
+        gui->networks[index] = amg_network_create();
+        if (!gui->networks[index]) {
+            amg_gui_destroy(gui);
+            return NULL;
+        }
+    }
+    gui->network = gui->networks[gui->active_account];
+    gui_rebuild_account_tabs(gui);
+    if (create_window(gui, error) != AMG_OK) {
         amg_gui_destroy(gui);
         return NULL;
     }
@@ -656,6 +892,15 @@ void amg_gui_destroy(AmgGui *gui)
     if (!gui) return;
     periodic_timer_cleanup(gui);
     gui_notify_cleanup(gui);
+
+    /* Stop all worker processes before tearing down ReAction objects, lists
+     * and the public screen. A folder fetch or message request may still be
+     * in flight when the user closes AmiMail; waiting here makes shutdown
+     * deterministic and prevents late worker replies from overlapping GUI
+     * disposal. */
+    for (i = 0; i < AMG_MAX_ACCOUNTS; ++i)
+        amg_network_stop(gui->networks[i]);
+
     free(gui->current_message_payload);
     gui->current_message_payload = NULL;
     disconnect_texteditor_scroller(gui->preview_gadget,
@@ -683,6 +928,11 @@ void amg_gui_destroy(AmgGui *gui)
                 ReleasePen(gui->screen->ViewPort.ColorMap,
                            gui->banner_pens[i]);
         }
+        for (i = 0; i < APP_HEADER_COLOR_COUNT; ++i) {
+            if (gui->app_header_pen_owned[i] && gui->app_header_pens[i] >= 0)
+                ReleasePen(gui->screen->ViewPort.ColorMap,
+                           gui->app_header_pens[i]);
+        }
         UnlockPubScreen(NULL, gui->screen);
         gui->screen = NULL;
     }
@@ -690,7 +940,9 @@ void amg_gui_destroy(AmgGui *gui)
     FreeListBrowserList(&gui->system_labels_list);
     FreeListBrowserList(&gui->labels_list);
     FreeListBrowserList(&gui->messages_list);
-    amg_network_destroy(gui->network);
+    free_account_tab_nodes(&gui->account_tabs_list);
+    for (i = 0; i < AMG_MAX_ACCOUNTS; ++i)
+        amg_network_destroy(gui->networks[i]);
     gui_state_set_mail_status_inactive();
     free(gui);
     close_classes();
@@ -698,7 +950,7 @@ void amg_gui_destroy(AmgGui *gui)
 
 #else
 struct AmgGui { int unavailable; };
-AmgGui *amg_gui_create(AmgAccount *account, AmgError *error){(void)account;amg_error_set(error,AMG_ERR_UNSUPPORTED,T(MSG_REACTION_IS_AVAILABLE_ONLY_IN_THE_AMIGAOS_BUILD, "ReAction is available only in the AmigaOS build."));return NULL;}
+AmgGui *amg_gui_create(AmgAccountSet *accounts, AmgError *error){(void)accounts;amg_error_set(error,AMG_ERR_UNSUPPORTED,T(MSG_REACTION_IS_AVAILABLE_ONLY_IN_THE_AMIGAOS_BUILD, "ReAction is available only in the AmigaOS build."));return NULL;}
 int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
                 const char *startup_mailto, AmgError *error)
 {

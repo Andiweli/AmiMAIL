@@ -1,0 +1,335 @@
+; Installer script for AmiMAIL
+; Compatible with Commodore/Amiga Technologies Installer V43.3
+; Source layout expected:
+;
+;   Install/
+;     Install-AmiMAIL
+;     Setup/
+;       AmiMAIL
+;       AmiMAIL_Mason.info
+;       AmiMAIL_Classic.info
+;       Notifications/
+;         ... custom notification sound files ...
+;       Locale/
+;         Catalogs/
+;           AmiMAIL.cd
+;           deutsch/
+;             AmiMAIL.catalog
+;             AmiMAIL.ct
+;
+; The selected application drawer itself is used as the destination.
+; No AmiMAIL subdrawer is created.
+
+(set @app-name "AmiMAIL")
+(set @default-dest "SYS:")
+
+; ----------------------------------------------------------------------
+; Welcome
+; ----------------------------------------------------------------------
+
+(welcome
+    "AmiMAIL\nNative Mail Client for AmigaOS 3.2+\n(c) Andreas Stürmer"
+)
+
+; ----------------------------------------------------------------------
+; Language selection
+; 0 = English built into the executable
+; 1 = German catalog
+; ----------------------------------------------------------------------
+
+(set #language
+    (askchoice
+        (prompt "Select the language to install.")
+        (help
+            "English is built into AmiMAIL.\n"
+            "Selecting Deutsch/German additionally installs the German "
+            "AmigaOS locale catalog."
+        )
+        (choices
+            "English (Built-in)"
+            "Deutsch/German"
+        )
+        (default 0)
+    )
+)
+
+(complete 15)
+
+; ----------------------------------------------------------------------
+; Icon selection
+; 0 = AmiMAIL by Mason
+; 1 = AmiMAIL Classic
+; ----------------------------------------------------------------------
+
+(set #icon
+    (askchoice
+        (prompt "Select Icon to install.")
+        (help
+            "Select which Workbench icon should be installed for AmiMAIL."
+        )
+        (choices
+            "AmiMAIL by Mason"
+            "AmiMAIL Classic"
+        )
+        (default 0)
+    )
+)
+
+(complete 20)
+
+; ----------------------------------------------------------------------
+; Optional notification sounds
+; 0 = install Setup/Notifications to SYS:Prefs/Presets/Notifications
+; 1 = do not install notification sounds
+; ----------------------------------------------------------------------
+
+(set #notifications
+    (askchoice
+        (prompt
+            "Do you want custom notification sounds installed to "
+            "SYS:Prefs/Presets?"
+        )
+        (help
+            "If you select Yes, the complete Setup/Notifications drawer "
+            "and its contents will be installed as "
+            "SYS:Prefs/Presets/Notifications."
+        )
+        (choices
+            "Yes"
+            "No"
+        )
+        (default 0)
+    )
+)
+
+(complete 30)
+
+; ----------------------------------------------------------------------
+; Destination drawer
+; The selected drawer is used directly. No new application drawer is
+; automatically created.
+; ----------------------------------------------------------------------
+
+(set #destination
+    (askdir
+        (prompt
+            "Select the existing drawer where AmiMAIL should be installed.\n"
+            "No additional program drawer will be created."
+        )
+        (help
+            "Select the drawer that should directly contain AmiMAIL "
+            "and AmiMAIL.info."
+        )
+        (default @default-dest)
+    )
+)
+
+(set @default-dest #destination)
+
+(complete 45)
+
+; ----------------------------------------------------------------------
+; Verify required source files
+; ----------------------------------------------------------------------
+
+(if (= (exists "Setup/AmiMAIL") 0)
+    (abort "Required file Setup/AmiMAIL was not found.")
+)
+
+(if (= #icon 0)
+    (
+        (if (= (exists "Setup/AmiMAIL_Mason.info") 0)
+            (abort "Required file Setup/AmiMAIL_Mason.info was not found.")
+        )
+    )
+    (
+        (if (= (exists "Setup/AmiMAIL_Classic.info") 0)
+            (abort "Required file Setup/AmiMAIL_Classic.info was not found.")
+        )
+    )
+)
+
+(if (= (exists "Setup/Locale/Catalogs/AmiMAIL.cd") 0)
+    (abort "Required file Setup/Locale/Catalogs/AmiMAIL.cd was not found.")
+)
+
+(if (= #notifications 0)
+    (
+        (if (<> (exists "Setup/Notifications") 2)
+            (abort "Required drawer Setup/Notifications was not found.")
+        )
+    )
+)
+
+(if (= #language 1)
+    (
+        (if (= (exists "Setup/Locale/Catalogs/deutsch/AmiMAIL.catalog") 0)
+            (abort
+                "Required German catalog "
+                "Setup/Locale/Catalogs/deutsch/AmiMAIL.catalog was not found."
+            )
+        )
+        (if (= (exists "Setup/Locale/Catalogs/deutsch/AmiMAIL.ct") 0)
+            (abort
+                "Required German translation file "
+                "Setup/Locale/Catalogs/deutsch/AmiMAIL.ct was not found."
+            )
+        )
+    )
+)
+
+; ----------------------------------------------------------------------
+; Install program and Workbench icon
+; ----------------------------------------------------------------------
+
+(copyfiles
+    (prompt (cat "Installing " @app-name "..."))
+    (help @copyfiles-help)
+    (source "Setup/AmiMAIL")
+    (dest #destination)
+    (optional "force")
+)
+
+(if (= #icon 0)
+    (
+        (copyfiles
+            (prompt "Installing AmiMAIL by Mason icon...")
+            (help @copyfiles-help)
+            (source "Setup/AmiMAIL_Mason.info")
+            (dest #destination)
+            (newname "AmiMAIL.info")
+            (optional "force")
+        )
+    )
+    (
+        (copyfiles
+            (prompt "Installing AmiMAIL Classic icon...")
+            (help @copyfiles-help)
+            (source "Setup/AmiMAIL_Classic.info")
+            (dest #destination)
+            (newname "AmiMAIL.info")
+            (optional "force")
+        )
+    )
+)
+
+(complete 65)
+
+; ----------------------------------------------------------------------
+; Install optional custom notification sounds.
+; The complete Notifications drawer is preserved below SYS:Prefs/Presets.
+; ----------------------------------------------------------------------
+
+(if (= #notifications 0)
+    (
+        (if (<> (exists "SYS:Prefs/Presets") 2)
+            (
+                (makedir
+                    "SYS:Prefs/Presets"
+                    (prompt "Creating SYS:Prefs/Presets...")
+                    (help @makedir-help)
+                )
+            )
+        )
+
+        (if (<> (exists "SYS:Prefs/Presets/Notifications") 2)
+            (
+                (makedir
+                    "SYS:Prefs/Presets/Notifications"
+                    (prompt
+                        "Creating "
+                        "SYS:Prefs/Presets/Notifications..."
+                    )
+                    (help @makedir-help)
+                )
+            )
+        )
+
+        (copyfiles
+            (prompt "Installing custom notification sounds...")
+            (help @copyfiles-help)
+            (source "Setup/Notifications")
+            (dest "SYS:Prefs/Presets/Notifications")
+            (all)
+            (infos)
+            (optional "force")
+        )
+    )
+)
+
+(complete 80)
+
+; ----------------------------------------------------------------------
+; Install catalog description.
+; The .cd file is installed for both language choices so translators can
+; use the catalog description directly from SYS:Locale/Catalogs.
+; ----------------------------------------------------------------------
+
+(if (<> (exists "SYS:Locale/Catalogs") 2)
+    (
+        (makedir
+            "SYS:Locale/Catalogs"
+            (prompt "Creating SYS:Locale/Catalogs...")
+            (help @makedir-help)
+        )
+    )
+)
+
+(copyfiles
+    (prompt "Installing catalog description...")
+    (help @copyfiles-help)
+    (source "Setup/Locale/Catalogs/AmiMAIL.cd")
+    (dest "SYS:Locale/Catalogs")
+    (optional "force")
+)
+
+(complete 90)
+
+; ----------------------------------------------------------------------
+; German catalog and translation source
+; ----------------------------------------------------------------------
+
+(if (= #language 1)
+    (
+        (if (<> (exists "SYS:Locale/Catalogs/deutsch") 2)
+            (
+                (makedir
+                    "SYS:Locale/Catalogs/deutsch"
+                    (prompt
+                        "Creating "
+                        "SYS:Locale/Catalogs/deutsch..."
+                    )
+                    (help @makedir-help)
+                )
+            )
+        )
+
+        (copyfiles
+            (prompt "Installing German catalog...")
+            (help @copyfiles-help)
+            (source "Setup/Locale/Catalogs/deutsch/AmiMAIL.catalog")
+            (dest "SYS:Locale/Catalogs/deutsch")
+            (optional "force")
+        )
+
+        (copyfiles
+            (prompt "Installing German catalog translation source...")
+            (help @copyfiles-help)
+            (source "Setup/Locale/Catalogs/deutsch/AmiMAIL.ct")
+            (dest "SYS:Locale/Catalogs/deutsch")
+            (optional "force")
+        )
+    )
+)
+
+(complete 100)
+
+; ----------------------------------------------------------------------
+; Finish - no reboot is required or requested.
+; ----------------------------------------------------------------------
+
+(message
+    "AmiMAIL installation completed successfully."
+)
+
+(exit (quiet))

@@ -8,6 +8,7 @@
 #include <clib/alib_protos.h>
 #include <classes/window.h>
 #include <devices/timer.h>
+#include <dos/dos.h>
 #include <exec/io.h>
 #include <proto/exec.h>
 #include <proto/intuition.h>
@@ -17,6 +18,19 @@
 
 #define GUI_PERIODIC_FETCH_SECONDS 300UL
 #define T(id, en) amg_tr((id), (en))
+
+static int any_periodic_account_enabled(const AmgGui *gui)
+{
+    size_t index;
+    if (!gui || !gui->account_set) return 0;
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
+        const AmgAccount *account = &gui->account_set->accounts[index];
+        if (account->enabled && account->periodic_fetch &&
+            !account_is_locked(account))
+            return 1;
+    }
+    return 0;
+}
 
 static void periodic_timer_clear_signal(AmgGui *gui)
 {
@@ -39,7 +53,7 @@ static void periodic_timer_arm(AmgGui *gui)
 {
     if (!gui || !gui->periodic_timer_request ||
         !gui->periodic_timer_device_open || gui->periodic_timer_pending ||
-        !gui->account || !gui->account->periodic_fetch)
+        !any_periodic_account_enabled(gui))
         return;
     gui->periodic_timer_request->tr_node.io_Command = TR_ADDREQUEST;
     gui->periodic_timer_request->tr_time.tv_secs = GUI_PERIODIC_FETCH_SECONDS;
@@ -147,12 +161,16 @@ int gui_uniconify(AmgGui *gui)
 ULONG gui_runtime_signal_mask(AmgGui *gui)
 {
     ULONG window_signal = 0UL;
+    ULONG network_signals = 0UL;
+    size_t index;
     if (!gui) return 0UL;
     if (gui->window_object)
         GetAttr(WINDOW_SigMask, gui->window_object, &window_signal);
+    for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index)
+        network_signals |= amg_network_signal_mask(gui->networks[index]);
     return window_signal |
            app_port_signal_mask(gui) |
-           amg_network_signal_mask(gui->network) |
+           network_signals |
            periodic_timer_signal_mask(gui) |
            gui->preview_url_signal_mask |
            gui_notify_signal_mask(gui);
@@ -163,13 +181,17 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
 {
     ULONG window_signal = 0UL;
     ULONG app_signal;
-    ULONG network_signal;
+    ULONG network_signal = 0UL;
     ULONG timer_signal;
     ULONG notify_signal;
 
     if (!gui) return;
     app_signal = app_port_signal_mask(gui);
-    network_signal = amg_network_signal_mask(gui->network);
+    {
+        size_t index;
+        for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index)
+            network_signal |= amg_network_signal_mask(gui->networks[index]);
+    }
     timer_signal = periodic_timer_signal_mask(gui);
     notify_signal = gui_notify_signal_mask(gui);
     if (gui->window_object)
@@ -181,7 +203,15 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
         gui_notify_handle_signal(gui);
 
     if (network_signal && (signals & network_signal)) {
-        handle_network(gui);
+        size_t index;
+        for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
+            ULONG mask = amg_network_signal_mask(gui->networks[index]);
+            if (!mask || !(signals & mask)) continue;
+            if (index == gui->active_account)
+                handle_network(gui);
+            else
+                gui_process_background_network(gui, index);
+        }
         draw_window_overlays(gui);
     }
 
@@ -290,25 +320,22 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
         gui->preview_url_signal_mask = 0UL;
     (void)gui_notify_init(gui);
 
+    /* Never interrupt startup with master-password requesters.  Accounts
+     * saved by this version carry an automatic startup key.  A migrated
+     * older account without that key remains locked until the user unlocks
+     * it once from Account settings. */
     if (account_is_locked(gui->account)) {
-        if (gui->account->email[0]) {
-            int unlock_result = unlock_account_dialog(gui, error);
-            if (unlock_result == 1)
-                status_local(gui,
-                    T(MSG_ACCOUNT_IS_UNLOCKED_FOR_THIS_AMIGA_SESSION, "Account is unlocked for this Amiga session."));
-            else if (unlock_result == 2)
-                status_local(gui,
-                    T(MSG_ACCOUNT_IS_UNLOCKED_SESSION_KEY_COULD_NOT_BE, "Account is unlocked; session key could not be stored in ENV:."));
-            else
-                status_local(gui,
-                    T(MSG_ACCOUNT_IS_LOCKED_OPEN_ACCOUNT_SETTINGS_TO_UNLOCK, "Account is locked. Open Account settings to unlock."));
-        } else {
+        if (gui->account->email[0])
+            status_local(
+                gui,
+                T(MSG_ACCOUNT_IS_LOCKED_OPEN_ACCOUNT_SETTINGS_TO_UNLOCK,
+                  "Account is locked. Open Account settings to unlock."));
+        else
             account_dialog(gui, error);
-        }
-        draw_window_overlays(gui);
     }
+    draw_window_overlays(gui);
 
-    if (!periodic_timer_init(gui) && gui->account->periodic_fetch)
+    if (!periodic_timer_init(gui) && any_periodic_account_enabled(gui))
         status_local(gui,
             T(MSG_PERIODIC_FETCH_IS_UNAVAILABLE_TIMER_DEVICE, "Periodic fetch is unavailable (timer.device)."));
 
@@ -319,6 +346,18 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
         fetch_mail(gui, error);
     } else {
         gui_update_request_check(gui);
+    }
+    {
+        size_t index;
+        for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
+            AmgAccount *account = &gui->account_set->accounts[index];
+            if (index == gui->active_account || !account->enabled ||
+                account_is_locked(account) || !account->fetch_on_start)
+                continue;
+            (void)amg_network_start(gui->networks[index], account, error);
+            (void)amg_network_request(gui->networks[index], AMG_NET_CONNECT,
+                                      0, NULL, "background", NULL);
+        }
     }
 
     if (startup_mailto && !account_is_locked(gui->account))
@@ -354,7 +393,11 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
     periodic_timer_cleanup(gui);
     gui_state_save_window(gui);
     gui_state_set_mail_status_inactive();
-    amg_network_stop(gui->network);
+    {
+        size_t index;
+        for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index)
+            amg_network_stop(gui->networks[index]);
+    }
     gui->window = NULL;
     return AMG_OK;
 }

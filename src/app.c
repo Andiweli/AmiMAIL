@@ -30,7 +30,7 @@ static void print_local_error(const char *message)
 
 int amg_app_run(int argc, char **argv)
 {
-    AmgAccount account;
+    AmgAccountSet accounts;
     AmgGui *gui;
     AmgMailtoServer *mailto_server = NULL;
     AmgMailtoRequest mailto_request;
@@ -39,11 +39,8 @@ int amg_app_run(int argc, char **argv)
     int detached_mailto_child = 0;
     char *startup_mailto = NULL;
     const char *raw_arguments = NULL;
-    const char *config = "ENVARC:AmiMail/account.cfg";
 #if AMIGMAIL_AMIGA
-    char legacy_master[128];
-    const char *session_key = "ENV:AmiMail.session-key";
-    const char *persistent_key = "ENVARC:AmiMail/account.key";
+    size_t account_index;
 #endif
 
     memset(&error, 0, sizeof(error));
@@ -86,9 +83,8 @@ int amg_app_run(int argc, char **argv)
         }
     }
 
-    /* Publish the hand-off port before account dialogs are opened so later
-     * browser clicks can already be queued while the primary instance is
-     * waiting for its master password. */
+    /* Publish the hand-off port before account/config loading so later
+     * browser clicks can already be queued while the primary instance starts. */
     mailto_server = amg_mailto_server_create();
     if (!mailto_server && startup_mailto &&
         amg_mailto_forward_to_running(startup_mailto)) {
@@ -100,61 +96,43 @@ int amg_app_run(int argc, char **argv)
      * forwarding/detach helpers above have already returned at this point. */
     amg_splash_open();
 
-    amg_account_init(&account);
+    amg_account_set_init(&accounts);
 #if AMIGMAIL_AMIGA
-    legacy_master[0] = 0;
-    /* First try the volatile ENV: session key. It contains only the PBKDF2
-     * derived account key and disappears with the Amiga session. */
-    result = amg_storage_load_account_session(
-        config, session_key, &account, &error);
-    if (result != AMG_OK) {
-        amg_account_clear(&account);
-        amg_account_init(&account);
-        result = amg_storage_load_account_session(
-            config, persistent_key, &account, &error);
-    }
-    if (result != AMG_OK) {
-        amg_account_clear(&account);
-        amg_account_init(&account);
-        result = amg_storage_load_account(config, NULL, &account, &error);
-    }
-    /* AmiMail 0.1.10 and earlier stored the master password reversibly in
-     * ACCOUNT-1. Use it exactly once to migrate the encrypted secrets to
-     * ACCOUNT-2, which never persists the master password. The derived key
-     * is cached only in ENV: for the remainder of this Amiga session. */
-    if (result == AMG_ERR_AUTH &&
-        amg_storage_load_legacy_master(
-            config, legacy_master, sizeof(legacy_master)) == AMG_OK &&
-        legacy_master[0]) {
-        amg_account_clear(&account);
-        amg_account_init(&account);
-        result = amg_storage_load_account(
-            config, legacy_master, &account, &error);
-        if (result == AMG_OK) {
-            result = amg_storage_save_account(
-                config, &account, legacy_master, &error);
-            if (result == AMG_OK) {
-                AmgError session_error;
-                memset(&session_error, 0, sizeof(session_error));
-                (void)amg_storage_cache_session_key(
-                    config, session_key, legacy_master, &session_error);
-            }
+    for (account_index = 0U; account_index < AMG_MAX_ACCOUNTS;
+         ++account_index) {
+        AmgAccount *account = &accounts.accounts[account_index];
+        const char *config = amg_storage_account_path(account_index);
+        const char *key_path =
+            amg_storage_persistent_key_path(account_index);
+        int load_result;
+
+        amg_account_clear(account);
+        amg_account_init(account);
+        load_result = amg_storage_load_account_auto(
+            config, key_path, account, &error);
+
+        /* If an old encrypted account has no usable automatic key,
+         * amg_storage_load_account_auto() deliberately keeps its public
+         * settings and returns AMG_ERR_AUTH. The account then remains
+         * available in Account settings so only the mail password needs to
+         * be entered again. No master-password prompt is involved. */
+        if (load_result != AMG_OK && load_result != AMG_ERR_AUTH) {
+            amg_account_clear(account);
+            amg_account_init(account);
+            if (account_index == 0U) account->enabled = 1;
         }
     }
-    amg_secure_clear(legacy_master, sizeof(legacy_master));
-    if (result != AMG_OK && result != AMG_ERR_AUTH) {
-        amg_account_clear(&account);
-        amg_account_init(&account);
-    }
+    (void)amg_storage_load_account_order(accounts.order);
+    accounts.current = amg_account_set_first_enabled(&accounts);
 #else
-    (void)config;
+    accounts.current = 0U;
 #endif
-    gui = amg_gui_create(&account, &error);
+    gui = amg_gui_create(&accounts, &error);
     if (!gui) {
         amg_splash_close();
         print_local_error(error.message);
         amg_mailto_server_destroy(mailto_server);
-        amg_account_clear(&account);
+        amg_account_set_clear(&accounts);
         free(startup_mailto);
         return 20;
     }
@@ -168,7 +146,7 @@ int amg_app_run(int argc, char **argv)
     if (result != AMG_OK) print_local_error(error.message);
     amg_gui_destroy(gui);
     amg_mailto_server_destroy(mailto_server);
-    amg_account_clear(&account);
+    amg_account_set_clear(&accounts);
     free(startup_mailto);
     return result == AMG_OK ? 0 : 20;
 }

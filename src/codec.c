@@ -261,16 +261,114 @@ int amg_modified_utf7_decode(const char *input, AmgBuffer *output)
     return AMG_OK;
 }
 
+static int append_local_text(AmgBuffer *output, const char *text)
+{
+    return amg_buffer_append(output, text, strlen(text));
+}
+
+static int unicode_is_graphic_symbol(uint32_t cp)
+{
+    /* Emoji and pictographic symbols cannot be represented by the classic
+     * single-byte Amiga GUI charset.  Keep them visible as a textual marker
+     * instead of turning every UTF-8 byte sequence into a question mark. */
+    if (cp >= 0x1F000U && cp <= 0x1FAFFU) return 1;
+    if (cp >= 0x2600U && cp <= 0x27BFU) return 1;
+    if (cp >= 0x2B00U && cp <= 0x2BFFU) return 1;
+    return 0;
+}
+
+static int append_local_unicode_fallback(AmgBuffer *output, uint32_t cp)
+{
+    /* Amiga convention: the Euro sign occupies byte 0xA4.  Fonts that carry
+     * the Euro glyph therefore display it correctly without requiring a
+     * multi-byte GUI codeset. */
+    if (cp == 0x20ACU)
+        return amg_buffer_append_char(output, 0xA4U);
+
+    /* Normalize typographic punctuation to characters available in every
+     * classic Amiga system font.  This preserves the meaning instead of
+     * displaying '?'. */
+    if ((cp >= 0x2010U && cp <= 0x2015U) || cp == 0x2212U || cp == 0x2043U)
+        return amg_buffer_append_char(output, '-');
+    if ((cp >= 0x2018U && cp <= 0x201BU) || cp == 0x2032U || cp == 0x2035U)
+        return amg_buffer_append_char(output, '\'');
+    if ((cp >= 0x201CU && cp <= 0x201FU) || cp == 0x2033U || cp == 0x2036U)
+        return amg_buffer_append_char(output, '"');
+    if (cp == 0x2026U) return append_local_text(output, "...");
+    if (cp == 0x2022U) return amg_buffer_append_char(output, '*');
+    if (cp == 0x203CU) return append_local_text(output, "!!");
+    if (cp == 0x203DU || cp == 0x2048U) return append_local_text(output, "?!");
+    if (cp == 0x2049U) return append_local_text(output, "!?");
+    if (cp == 0x2190U) return append_local_text(output, "<-");
+    if (cp == 0x2192U) return append_local_text(output, "->");
+    if (cp == 0x2194U) return append_local_text(output, "<->");
+    if (cp == 0x2122U) return append_local_text(output, "(TM)");
+
+    /* Unicode spacing characters commonly used by HTML mail. */
+    if ((cp >= 0x2000U && cp <= 0x200AU) || cp == 0x202FU || cp == 0x205FU ||
+        cp == 0x3000U)
+        return amg_buffer_append_char(output, ' ');
+    if (cp == 0x2028U || cp == 0x2029U)
+        return amg_buffer_append_char(output, '\n');
+
+    /* Directional/zero-width formatting has no visible representation in
+     * the ReAction text gadgets and must not become stray '?'. */
+    if (cp == 0x200BU || cp == 0x200CU || cp == 0x200DU || cp == 0x2060U ||
+        cp == 0xFEFFU || (cp >= 0x202AU && cp <= 0x202EU) ||
+        (cp >= 0x2066U && cp <= 0x2069U) ||
+        (cp >= 0xFE00U && cp <= 0xFE0FU))
+        return AMG_OK;
+
+    /* Preserve useful mathematical typography in plain ASCII form. */
+    if (cp >= 0x2080U && cp <= 0x2089U)
+        return amg_buffer_append_char(output, (unsigned char)('0' + cp - 0x2080U));
+    if (cp == 0x2070U) return amg_buffer_append_char(output, '0');
+    if (cp >= 0x2074U && cp <= 0x2079U)
+        return amg_buffer_append_char(output, (unsigned char)('4' + cp - 0x2074U));
+
+    return amg_buffer_append_char(output, '?');
+}
+
 int amg_utf8_to_local(const char *utf8, AmgBuffer *output)
 {
     const unsigned char *p = (const unsigned char *)utf8;
     uint32_t cp;
+    int previous_was_graphic = 0;
+    int join_graphic = 0;
+
     if (!utf8 || !output) return AMG_ERR_ARGUMENT;
     while (*p) {
-        if (!utf8_next(&p, &cp)) { ++p; cp = '?'; }
-        if (cp <= 255U) {
-            if (amg_buffer_append_char(output, (unsigned char)cp) != AMG_OK) return AMG_ERR_MEMORY;
-        } else if (amg_buffer_append_char(output, '?') != AMG_OK) return AMG_ERR_MEMORY;
+        int result;
+        if (!utf8_next(&p, &cp)) {
+            ++p;
+            cp = '?';
+        }
+
+        /* Variation selectors and emoji modifiers belong to the preceding
+         * pictograph.  A zero-width joiner joins the next pictograph into the
+         * same visual emoji, so emit only one [Grafik] marker for that glyph. */
+        if (cp >= 0xFE00U && cp <= 0xFE0FU) continue;
+        if (cp >= 0x1F3FBU && cp <= 0x1F3FFU) continue;
+        if (cp == 0x200DU) {
+            if (previous_was_graphic) join_graphic = 1;
+            continue;
+        }
+
+        if (unicode_is_graphic_symbol(cp)) {
+            result = join_graphic ? AMG_OK : append_local_text(output, "[Grafik]");
+            if (result != AMG_OK) return result;
+            previous_was_graphic = 1;
+            join_graphic = 0;
+            continue;
+        }
+
+        previous_was_graphic = 0;
+        join_graphic = 0;
+        if (cp <= 255U)
+            result = amg_buffer_append_char(output, (unsigned char)cp);
+        else
+            result = append_local_unicode_fallback(output, cp);
+        if (result != AMG_OK) return result;
     }
     return AMG_OK;
 }
