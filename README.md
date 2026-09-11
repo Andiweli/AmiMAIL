@@ -89,7 +89,6 @@ Additional interface languages are not planned.
 
 ## ⚠️ Limitations
 
-- Single account only
 - No local/offline mail cache
 - No local full-text search database
 - Plain-text message composition rather than an HTML editor
