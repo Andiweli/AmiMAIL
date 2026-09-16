@@ -1,5 +1,41 @@
 # Changelog
 
+## AmiMail 2.0.5 - 2026-09-16
+- adjust the four shared Yes/No confirmation requesters by moving the full text-line spacer from below the message to above it, placing the message one line lower while keeping the Yes/No row tight and the deterministic pre-open centering unchanged
+- center the Account settings window deterministically before it becomes visible: measure the completed ReAction layout with `LayoutLimits()`, calculate the final geometry relative to the AmiMAIL main window and open directly at that position, removing the former visible right-to-center correction after `RA_OpenWindow()`
+- fix the Reply split-button state transition so the currently visible arrow remains unchanged for the complete mouse-down state; the arrow changes only after release (`GADGETUP`) when the popup has actually opened or closed
+- make the shared Yes/No confirmation windows deterministic on classic ReAction 3.2: measure the finished layout with `LayoutLimits()` before opening, calculate the final `WA_Left`/`WA_Top` from the AmiMAIL main-window geometry, and open directly at that position instead of relying on `WPOS_CENTERWINDOW` or moving the window afterwards
+- retain the 2.0.5 multi-message Move support, native message multi-selection, clickable mail addresses, custom Date sort icons and the stable WindowObject confirmation-requester design
+- update the program/package version to 2.0.5
+
+## AmiMail 2.0.3 - 2026-09-12
+
+- replace AmiMAIL-owned asynchronous `sound.datatype` playback with the AmigaOS 3.2 `C:SoundPlayer` command running in a detached process
+- remove the GUI-task sound completion signal and all direct `NewDTObjectA()` / `DTM_TRIGGER` / `DisposeDTObject()` lifetime handling from AmiMAIL
+- prevent overlapping notification/preview sounds by skipping a new request while the dedicated AmiMAIL SoundPlayer process is still active
+- make sound playback fully nonfatal: missing sound files or `C:SoundPlayer`, unsafe paths and launch failures simply suppress the optional sound
+- remove the now-unused `datatypes.library` GUI dependency
+
+### SMTP and message generation
+
+- encode outgoing UTF-8 `text/plain` bodies as quoted-printable instead of raw 8-bit text, with RFC-compliant soft line breaks that keep physical body lines within 76 characters
+- fold long whitespace-delimited headers such as `References:` so generated SMTP lines stay within the protocol limit instead of being rejected by strict servers
+- add regression coverage for the reported 1078-byte single-line body case and for oversized `References:` headers, including verification that decoded body/header content is preserved
+- write the RFC 5322 `Date:` header with the current AmigaOS locale GMT offset instead of the incorrect fixed `-0000`; convert Amiga's west-positive offset convention to standard mail zones such as `-0500` or `+0200`, and re-read the current locale at send time
+- make the `Date:` timezone daylight-saving aware on classic AmigaOS by preferring `ENV:TZONE` (then `ENV:TZ`) over the base locale offset; support traditional `CET-1CEST`, explicit POSIX `M` transition rules and manually summer-adjusted setups such as `CET-2` / `CET-2CEST`, preventing sent mail from appearing one hour ahead
+- use the same DST-aware `TZONE`/`TZ` resolver when converting message `Date:` headers for the message list and preview, fixing the one-hour-early display of correctly sent CEST mail
+
+### ReAction user-interface tests and selection
+
+- recognize bare email addresses in the read-only mail preview alongside normal URLs; double-clicking an address or `mailto:` link opens AmiMail's **New mail** composer with the recipient filled in instead of handing it to the external browser
+- restore native `listbrowser.gadget` multi-selection semantics for the message list, including click-and-drag range selection and Shift selection; keep the blue selection rendering visible with the AmigaOS 3.2 `MultiSelect + ShowSelected` combination and stop re-selecting the active node after mouse release
+- revert the experimental `requester.class` confirmation dialogs to the stable ReAction `WindowObject` requesters; shared Yes/No confirmations use native `WINDOW_RefWindow` + `WPOS_CENTERWINDOW` placement and are never repositioned after opening, eliminating visible right/top-left-to-centre jumps for Empty Trash, Empty Spam, Save draft and delete confirmations
+- make Date the only sortable main-list column, handle its ordering inside AmiMail instead of V47 AutoSort, disable the native active sort column entirely and render only the supplied transparent 5x4 sort-up/sort-down artwork at the right side of the Date title, positioned one pixel higher for optical alignment; this removes the stray Subject arrow and the old native Date triangles
+- render the supplied Reply split-button up/down arrow as a transparent pixel mask after the native button face; while the button is physically pressed the opposite arrow is drawn immediately (down -> up when opening, up -> down when closing), and the released state is redrawn after the queued close-click GADGETUP
+- make **Move** snapshot and queue every selected message UID, matching the already working multi-message Delete behavior instead of moving only the first selected message
+
+- update the program/package version to 2.0.3
+
 ## AmiMail 2.0.2 - 2026-09-10
 
 ### User interface

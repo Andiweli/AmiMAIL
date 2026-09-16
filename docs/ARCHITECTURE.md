@@ -193,7 +193,7 @@ gui_actions.c     controller/actions/network events
 gui_runtime.c     Wait()/timer/iconify/mailto event loop
 gui_state.c       window state and ENV mail status
 gui_update.c      update UI state
-gui_notify.c      DataTypes notification playback
+gui_notify.c      detached AmigaOS SoundPlayer notification playback
 gui_mailto.c      mailto-to-compose bridge
 ```
 

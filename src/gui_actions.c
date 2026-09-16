@@ -1,4 +1,5 @@
 #include "gui_internal.h"
+#include "gui_icons.h"
 #include "i18n.h"
 
 #include <stdio.h>
@@ -568,19 +569,10 @@ static int suppress_next_reply_menu_click = 0;
 
 static void set_reply_menu_arrow(AmgGui *gui, int expanded)
 {
-    (void)expanded;
     if (!gui || !gui->reply_menu_gadget) return;
-    /* Keep the same proven classic-font down-arrow in both states. */
-    if (gui->window) {
-        SetGadgetAttrs(gui->reply_menu_gadget, gui->window, NULL,
-                       GA_Text, (ULONG)(uintptr_t)"v",
-                       TAG_DONE);
+    gui_set_reply_arrow_expanded(expanded);
+    if (gui->window)
         RefreshGList(gui->reply_menu_gadget, gui->window, NULL, 1);
-    } else {
-        SetAttrs((Object *)gui->reply_menu_gadget,
-                 GA_Text, (ULONG)(uintptr_t)"v",
-                 TAG_DONE);
-    }
 }
 
 static int main_pointer_over_reply_menu(const AmgGui *gui)
@@ -813,7 +805,13 @@ static int reply_action_popup(AmgGui *gui)
         suppress_next_reply_menu_click = 1;
 
     DisposeObject(popup);
-    set_reply_menu_arrow(gui, 0);
+    /* If the popup was closed by pressing the arrow itself, keep the UP
+     * arrow through the complete pressed state.  The main-window GADGETUP
+     * is still queued and will switch it to DOWN only after the user releases
+     * the mouse button.  Other close paths (selection, Escape, click outside)
+     * can update the persistent state immediately. */
+    if (!suppress_next_reply_menu_click)
+        set_reply_menu_arrow(gui, 0);
 
     /* A temporary activated popup deactivates the main window. Restore the
      * main window after a menu selection/keyboard close. If the popup became
@@ -876,25 +874,49 @@ static int request_label_index(AmgGui *gui, size_t index, AmgError *error)
     return AMG_OK;
 }
 
+static void clear_pending_move(AmgGui *gui)
+{
+    if (!gui) return;
+    free(gui->move_uids);
+    gui->move_uids = NULL;
+    gui->move_uid_count = 0U;
+    gui->move_source_mailbox_utf8[0] = 0;
+    gui->move_pending = 0;
+}
+
 static void begin_move(AmgGui *gui, AmgError *error)
 {
-    ULONG uid = 0;
+    ULONG *uids;
+    size_t count = 0U;
     size_t source_index;
-    if (!cursor_node_user_data(gui->messages_gadget, &uid) || !uid) {
+
+    if (!gui) return;
+    uids = selected_message_uids_alloc(gui, &count);
+    if (!uids) {
+        status_local(gui, T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+        return;
+    }
+    if (!count) {
+        free(uids);
         status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
         return;
     }
     if (!amg_network_is_connected(gui->network)) {
+        free(uids);
         status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
     }
     if (!gui->current_mailbox_utf8[0]) {
+        free(uids);
         amg_error_set(error, AMG_ERR_ARGUMENT,
                       T(MSG_THE_SOURCE_FOLDER_IS_UNKNOWN, "The source folder is unknown."));
         status_utf8(gui, error->message);
         return;
     }
-    gui->move_uid = uid;
+
+    clear_pending_move(gui);
+    gui->move_uids = uids;
+    gui->move_uid_count = count;
     source_index = label_index_for_mailbox(
         gui, gui->current_mailbox_utf8);
     strncpy(gui->move_source_mailbox_utf8,
@@ -913,9 +935,7 @@ static void begin_move(AmgGui *gui, AmgError *error)
 void cancel_pending_move(AmgGui *gui)
 {
     if (!gui || !gui->move_pending) return;
-    gui->move_pending = 0;
-    gui->move_uid = 0;
-    gui->move_source_mailbox_utf8[0] = 0;
+    clear_pending_move(gui);
     status_local(gui, T(MSG_MOVE_CANCELLED, "Move cancelled."));
 }
 
@@ -924,8 +944,10 @@ static int queue_move_to_label(AmgGui *gui, size_t index, AmgError *error)
     char message[640];
     const char *target_name;
     size_t current_index;
-    int result;
-    if (!gui || index >= gui->label_count || !gui->move_pending)
+    size_t i;
+    int result = AMG_OK;
+    if (!gui || index >= gui->label_count || !gui->move_pending ||
+        !gui->move_uids || !gui->move_uid_count)
         return AMG_ERR_ARGUMENT;
     if (!gui->labels[index].available ||
         !gui->labels[index].mailbox_utf8[0]) {
@@ -943,16 +965,29 @@ static int queue_move_to_label(AmgGui *gui, size_t index, AmgError *error)
         status_local(gui, T(MSG_SOURCE_AND_DESTINATION_FOLDERS_ARE_IDENTICAL, "Source and destination folders are identical."));
         return AMG_ERR_ARGUMENT;
     }
-    result = amg_network_request(
-        gui->network, AMG_NET_MOVE, gui->move_uid,
-        gui->move_source_mailbox_utf8,
-        gui->labels[index].server_mailbox_utf8,
-        error);
+
+    /* Queue one IMAP MOVE request for every selected UID.  Deleting already
+     * used the same selected_message_uids_alloc() snapshot successfully; use
+     * that exact model here as well so the set cannot collapse when focus
+     * moves from the message list to the destination folder list. */
+    for (i = 0U; i < gui->move_uid_count; ++i) {
+        result = amg_network_request(
+            gui->network, AMG_NET_MOVE, gui->move_uids[i],
+            gui->move_source_mailbox_utf8,
+            gui->labels[index].server_mailbox_utf8,
+            error);
+        if (result != AMG_OK) break;
+    }
+
+    /* The requests already queued before an error cannot safely be queued a
+     * second time.  Always end the pending move after the destination click;
+     * each successful request will remove its own UID when its event arrives. */
+    clear_pending_move(gui);
     if (result != AMG_OK) {
         if (error && error->message[0]) status_utf8(gui, error->message);
         return result;
     }
-    gui->move_pending = 0;
+
     current_index = label_index_for_mailbox(gui, gui->current_mailbox_utf8);
     if (current_index < gui->label_count)
         select_label_index(gui, current_index);
@@ -989,8 +1024,7 @@ static void remove_message_uid(AmgGui *gui, ULONG uid)
             T(MSG_THIS_FOLDER_CONTAINS_NO_MESSAGES, "This folder contains no messages."));
         if (node) AddTail(&gui->messages_list, node);
     }
-    attach_listbrowser(gui->messages_gadget, gui->window,
-                       &gui->messages_list);
+    attach_messages_default_date_sort(gui);
     clear_current_message_payload(gui);
     set_preview_local(gui,
                       T(MSG_SELECT_A_MESSAGE_TO_DISPLAY, "Select a message to display."));
@@ -1089,7 +1123,25 @@ static void request_message(AmgGui *gui, int action, AmgError *error)
     if (!compose_action) {
         GetAttr(LISTBROWSER_RelEvent, (Object *)gui->messages_gadget,
                 &release_event);
-        if (release_event == LBRE_TITLECLICK) return;
+        if (release_event == LBRE_TITLECLICK) {
+            ULONG rel_column = (ULONG)~0UL;
+            GetAttr(LISTBROWSER_RelColumn,
+                    (Object *)gui->messages_gadget, &rel_column);
+            /* Only the Date column is intentionally sortable in the main
+             * mail list.  Sorting is performed by AmiMAIL itself so the
+             * V47 ListBrowser never paints one of its native sort arrows. */
+            if (rel_column == 3UL)
+                gui_toggle_message_date_sort(gui);
+            else
+                gui_draw_date_sort_icon(gui);
+            return;
+        }
+        if (release_event == LBRE_COLUMNADJUST) {
+            if (gui->window)
+                RefreshGList(gui->messages_gadget, gui->window, NULL, 1);
+            gui_draw_date_sort_icon(gui);
+            return;
+        }
         if (!cursor_node_user_data(gui->messages_gadget, &uid) || !uid) {
             status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
             return;
@@ -1125,7 +1177,10 @@ static void request_message(AmgGui *gui, int action, AmgError *error)
                      T(MSG_DRAFTS_CAN_ONLY_BE_EDITED_IN_THE_DRAFTS, "Drafts can only be edited in the Drafts folder."));
         return;
     }
-    set_message_selected_visual(gui, uid);
+    /* The ListBrowser already owns the selection. Re-selecting its node
+     * with LBM_EDITNODE here interferes with native MultiSelect on classic
+     * ReAction and can erase the visible blue selection on button release. */
+    gui->active_message_uid = uid;
     if (!compose_action && is_doubleclick) {
         toggle_message_flagged(gui, uid, error);
         return;
@@ -1568,7 +1623,7 @@ void handle_network(AmgGui *gui)
                             event.argument2, event.uid_validity,
                             &preview_error) == AMG_OK) {
                         retain_current_message_payload(gui, &event);
-                        set_message_selected_visual(gui, event.uid);
+                        gui->active_message_uid = event.uid;
                         if (unread_before) {
                             int in_inbox =
                                 !strcmp(gui->current_mailbox_utf8, "INBOX");
@@ -2009,8 +2064,10 @@ void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
             handle_labels_scroller(gui);
             break;
         case GID_MESSAGES:
-            if (!input_event_has_multiselect_qualifier(gui->window_object))
-                normalize_message_selection_for_click(gui);
+            /* listbrowser.gadget handles MultiSelect itself, including native
+             * drag-selection and Shift selection.  Do not rewrite LBNA_Selected
+             * here or a mouse drag is collapsed back to a single row on
+             * GADGETUP. */
             request_message(gui, MESSAGE_ACTION_PREVIEW, error);
             break;
         case GID_MESSAGES_SCROLL:
@@ -2043,6 +2100,12 @@ void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
             if (focus_open_compose_window(gui)) break;
             if (suppress_next_reply_menu_click) {
                 suppress_next_reply_menu_click = 0;
+                /* The queued GADGETUP that closes the already-open popup
+                 * lets button.gadget repaint its released state after the
+                 * popup has gone away.  Redraw our custom overlay once more
+                 * here, otherwise that final native repaint can erase the
+                 * down-arrow until the next refresh. */
+                set_reply_menu_arrow(gui, 0);
                 break;
             }
             if (!current_mailbox_is_drafts(gui)) {

@@ -24,6 +24,25 @@ static unsigned tests_failed;
 
 static const char *text(AmgBuffer *buffer){amg_buffer_terminate(buffer);return (const char*)buffer->data;}
 
+static size_t max_wire_line_length(const unsigned char *data, size_t length)
+{
+    size_t i, line = 0U, maximum = 0U;
+    for (i = 0U; i < length; ++i) {
+        if (data[i] == '\r' && i + 1U < length && data[i + 1U] == '\n') {
+            if (line > maximum) maximum = line;
+            line = 0U;
+            ++i;
+        } else if (data[i] == '\n') {
+            if (line > maximum) maximum = line;
+            line = 0U;
+        } else {
+            ++line;
+        }
+    }
+    if (line > maximum) maximum = line;
+    return maximum;
+}
+
 static void test_base64(void)
 {
     AmgBuffer encoded,decoded;amg_buffer_init(&encoded);amg_buffer_init(&decoded);
@@ -36,6 +55,30 @@ static void test_quoted_printable(void)
 {
     AmgBuffer output;amg_buffer_init(&output);CHECK(amg_quoted_printable_decode("Gr=C3=BC=C3=9Fe=\r\n!",strlen("Gr=C3=BC=C3=9Fe=\r\n!"),&output)==AMG_OK);
     CHECK(!strcmp(text(&output),"Grüße!"));amg_buffer_free(&output);
+    {
+        char source[1088];
+        AmgBuffer encoded,decoded;
+        memset(source,'A',1078U);
+        memcpy(source+1078U," Grüße",8U);
+        source[1086U]=0;
+        amg_buffer_init(&encoded);amg_buffer_init(&decoded);
+        CHECK(amg_quoted_printable_encode(source,strlen(source),&encoded)==AMG_OK);
+        CHECK(max_wire_line_length(encoded.data,encoded.length)<=76U);
+        CHECK(amg_quoted_printable_decode((const char*)encoded.data,encoded.length,&decoded)==AMG_OK);
+        CHECK(decoded.length==strlen(source)&&!memcmp(decoded.data,source,decoded.length));
+        amg_buffer_free(&encoded);amg_buffer_free(&decoded);
+    }
+    {
+        const char *source="Zeile mit Leerzeichen  \r\nTab am Ende\t\r\n";
+        AmgBuffer encoded,decoded;
+        amg_buffer_init(&encoded);amg_buffer_init(&decoded);
+        CHECK(amg_quoted_printable_encode(source,strlen(source),&encoded)==AMG_OK);
+        CHECK(strstr(text(&encoded),"=20\r\n")!=NULL);
+        CHECK(strstr((const char*)encoded.data,"=09\r\n")!=NULL);
+        CHECK(amg_quoted_printable_decode((const char*)encoded.data,encoded.length,&decoded)==AMG_OK);
+        CHECK(decoded.length==strlen(source)&&!memcmp(decoded.data,source,decoded.length));
+        amg_buffer_free(&encoded);amg_buffer_free(&decoded);
+    }
 }
 
 static void test_utf8_to_local(void)
@@ -543,6 +586,32 @@ static void test_mailto(void)
         CHECK(found != NULL && !strcmp(found, "mailto:wrapped@example.com"));
     }
     {
+        char url[256];
+        const char *line = "Contact: Max <max.mustermann+test@example.co.at>, please reply";
+        CHECK(amg_email_address_token_length(
+                  "max.mustermann+test@example.co.at") ==
+              strlen("max.mustermann+test@example.co.at"));
+        CHECK(amg_email_address_token_length("not-an-address") == 0U);
+        CHECK(amg_email_address_token_length("a..b@example.com") == 0U);
+        CHECK(amg_email_address_token_length("user@-example.com") == 0U);
+        CHECK(amg_mailto_url_from_email_at(
+                  line, (size_t)(strstr(line, "mustermann") - line),
+                  url, sizeof(url)) == 1);
+        CHECK(!strcmp(url, "mailto:max.mustermann+test@example.co.at"));
+        CHECK(amg_mailto_url_from_email_at(
+                  "From: user@example.com", strlen("From: user@example.com"),
+                  url, sizeof(url)) == 1);
+        CHECK(!strcmp(url, "mailto:user@example.com"));
+        CHECK(amg_mailto_url_from_email_at(
+                  "No address here", 3U, url, sizeof(url)) == 0);
+        {
+            const char styled[] = "\033umax@example.com\033n";
+            CHECK(amg_mailto_url_from_email_at(
+                      styled, 6U, url, sizeof(url)) == 1);
+            CHECK(!strcmp(url, "mailto:max@example.com"));
+        }
+    }
+    {
         const char *path = "build/AmiMailMailto.test";
         char option[256];
         char *file_argv[2];
@@ -637,6 +706,54 @@ static void test_smtp(void)
         CHECK(data.length==3U&&!memcmp(data.data,"ABC",3U));
         amg_buffer_free(&name);amg_buffer_free(&data);amg_buffer_free(&output);
         remove(path);
+    }
+    {
+        char long_body[1079];
+        AmgMailDraft mail;
+        AmgBuffer decoded;
+        memset(long_body,'A',1078U);long_body[1078U]=0;
+        memset(&mail,0,sizeof(mail));
+        mail.from="me@example.com";mail.to="to@example.com";mail.subject="Long body";
+        mail.body_utf8=long_body;mail.date_rfc2822="Wed, 12 Aug 2026 10:00:00 +0200";
+        mail.message_id="<long-body@example.com>";
+        amg_buffer_init(&output);
+        CHECK(amg_smtp_build_mail(&mail,0,&output,&error)==AMG_OK);
+        CHECK(max_wire_line_length(output.data,output.length)<=998U);
+        CHECK(strstr(text(&output),"Content-Transfer-Encoding: quoted-printable\r\n")!=NULL);
+        amg_buffer_init(&decoded);
+        CHECK(amg_mime_extract_text((const char*)output.data,output.length,&decoded,&error)==AMG_OK);
+        CHECK(decoded.length==1080U&&!memcmp(decoded.data,long_body,1078U));
+        CHECK(decoded.data[1078U]=='\r'&&decoded.data[1079U]=='\n');
+        amg_buffer_free(&decoded);amg_buffer_free(&output);
+    }
+    {
+        char references[1800];
+        size_t used=0U;
+        unsigned n;
+        AmgMailDraft mail;
+        AmgMailHeaders headers;
+        size_t body_offset=0U;
+        references[0]=0;
+        for(n=0U;n<70U;++n){
+            int written=snprintf(references+used,sizeof(references)-used,
+                                 "%s<ref%u@example.com>",used?" ":"",n);
+            CHECK(written>0&&(size_t)written<sizeof(references)-used);
+            if(written<=0||(size_t)written>=sizeof(references)-used)break;
+            used+=(size_t)written;
+        }
+        CHECK(used>998U);
+        memset(&mail,0,sizeof(mail));
+        mail.from="me@example.com";mail.to="to@example.com";mail.subject="Long references";
+        mail.body_utf8="Body";mail.date_rfc2822="Wed, 12 Aug 2026 10:00:00 +0200";
+        mail.message_id="<long-refs@example.com>";mail.references=references;
+        amg_buffer_init(&output);
+        CHECK(amg_smtp_build_mail(&mail,0,&output,&error)==AMG_OK);
+        CHECK(max_wire_line_length(output.data,output.length)<=998U);
+        CHECK(amg_buffer_terminate(&output)==AMG_OK);
+        amg_mail_headers_init(&headers);
+        CHECK(amg_mail_headers_parse((const char*)output.data,output.length,&headers,&body_offset)==AMG_OK);
+        CHECK(!strcmp(amg_mail_header_get(&headers,"References"),references));
+        amg_mail_headers_free(&headers);amg_buffer_free(&output);
     }
     {
         AmgBuffer ehlo;
@@ -835,8 +952,79 @@ static void test_i18n(void)
     amg_i18n_cleanup();
 }
 
+
+static void test_rfc5322_timezone(void)
+{
+    char zone[6];
+    long minutes_west = 0L;
+    CHECK(amg_rfc5322_timezone(300L, zone) && !strcmp(zone, "-0500"));
+    CHECK(amg_rfc5322_timezone(-120L, zone) && !strcmp(zone, "+0200"));
+    CHECK(amg_rfc5322_timezone(-330L, zone) && !strcmp(zone, "+0530"));
+    CHECK(amg_rfc5322_timezone(0L, zone) && !strcmp(zone, "+0000"));
+    CHECK(!amg_rfc5322_timezone(1440L, zone));
+    CHECK(!amg_rfc5322_timezone(-1440L, zone));
+
+    /* Fixed effective offset, as commonly used in classic-Amiga startup
+     * scripts to keep a manually adjusted summer clock at UTC+2. */
+    CHECK(amg_tzone_gmt_offset_minutes("CET-2", -60L, 1,
+                                       2026UL, 9U, 15U, 21U, 18U,
+                                       &minutes_west) &&
+          minutes_west == -120L);
+    /* Reported real-world setup: locale says CET (+0100), while TZONE keeps
+     * the already summer-adjusted wall clock at +0200.  Do not add another
+     * implicit DST hour and accidentally publish +0300. */
+    CHECK(amg_tzone_gmt_offset_minutes("CET-2CEST", -60L, 1,
+                                       2026UL, 9U, 15U, 21U, 18U,
+                                       &minutes_west) &&
+          minutes_west == -120L);
+    CHECK(amg_tzone_gmt_offset_minutes("CET-2CEST", -120L, 1,
+                                       2026UL, 9U, 15U, 21U, 18U,
+                                       &minutes_west) &&
+          minutes_west == -120L);
+    /* Traditional SetDST/SNTP form: derive CET/CEST from the date even though
+     * locale.library itself has no daylight-saving state. */
+    CHECK(amg_tzone_gmt_offset_minutes("CET-1CEST", -60L, 1,
+                                       2026UL, 1U, 15U, 12U, 0U,
+                                       &minutes_west) &&
+          minutes_west == -60L);
+    CHECK(amg_tzone_gmt_offset_minutes("CET-1CEST", -60L, 1,
+                                       2026UL, 9U, 15U, 12U, 0U,
+                                       &minutes_west) &&
+          minutes_west == -120L);
+    /* 2026 EU transitions: last Sunday in March (29th) at 02:00 and last
+     * Sunday in October (25th) at 03:00 local time. */
+    CHECK(amg_tzone_gmt_offset_minutes("CET-1CEST", -60L, 1,
+                                       2026UL, 3U, 29U, 1U, 59U,
+                                       &minutes_west) &&
+          minutes_west == -60L);
+    CHECK(amg_tzone_gmt_offset_minutes("CET-1CEST", -60L, 1,
+                                       2026UL, 3U, 29U, 2U, 0U,
+                                       &minutes_west) &&
+          minutes_west == -120L);
+    CHECK(amg_tzone_gmt_offset_minutes("CET-1CEST", -60L, 1,
+                                       2026UL, 10U, 25U, 2U, 59U,
+                                       &minutes_west) &&
+          minutes_west == -120L);
+    CHECK(amg_tzone_gmt_offset_minutes("CET-1CEST", -60L, 1,
+                                       2026UL, 10U, 25U, 3U, 0U,
+                                       &minutes_west) &&
+          minutes_west == -60L);
+    /* Explicit POSIX M-rules and daylight offset remain generic. */
+    CHECK(amg_tzone_gmt_offset_minutes(
+              "EST5EDT4,M3.2.0/2,M11.1.0/2", 300L, 1,
+              2026UL, 7U, 1U, 12U, 0U, &minutes_west) &&
+          minutes_west == 240L);
+    CHECK(amg_tzone_gmt_offset_minutes(
+              "EST5EDT4,M3.2.0/2,M11.1.0/2", 300L, 1,
+              2026UL, 1U, 1U, 12U, 0U, &minutes_west) &&
+          minutes_west == 300L);
+    CHECK(!amg_tzone_gmt_offset_minutes("broken", -60L, 1,
+                                        2026UL, 9U, 15U, 12U, 0U,
+                                        &minutes_west));
+}
+
 int main(void)
 {
-    test_base64();test_quoted_printable();test_utf8_to_local();test_utf7();test_imap_parser();test_headers_and_rfc2047();test_mime();test_mailto();test_smtp();test_oauth();test_sha256();test_account();test_account_normalize();test_account_capacity();test_storage_metadata();test_contacts();test_i18n();test_update();
+    test_base64();test_quoted_printable();test_utf8_to_local();test_utf7();test_imap_parser();test_headers_and_rfc2047();test_mime();test_mailto();test_smtp();test_oauth();test_sha256();test_account();test_account_normalize();test_account_capacity();test_storage_metadata();test_contacts();test_i18n();test_rfc5322_timezone();test_update();
     printf("%u checks, %u failures\n",tests_run,tests_failed);return tests_failed?1:0;
 }

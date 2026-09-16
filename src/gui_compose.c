@@ -1490,6 +1490,8 @@ static int make_date_and_message_id(char date[96], char message_id[256])
     struct DateStamp stamp;
     unsigned long remaining_days, year, month, day;
     unsigned long hour, minute, second, weekday;
+    long minutes_west;
+    char timezone[6] = "-0000";
     int length;
 
     DateStamp(&stamp);
@@ -1517,11 +1519,19 @@ static int make_date_and_message_id(char date[96], char message_id[256])
     second = (unsigned long)stamp.ds_Tick / 50UL;
     if (second > 59UL) second = 59UL;
 
-    /* DateStamp contains local time. -0000 denotes an unknown local offset. */
+    /* DateStamp contains local wall-clock time.  RFC 5322 requires the
+     * matching numeric UTC offset.  On classic AmigaOS locale.library often
+     * only knows the base timezone and not the currently active daylight
+     * saving offset, so prefer ENV:TZONE/TZ and fall back to locale.library.
+     * Keep -0000 only when no trustworthy offset is available. */
+    if (amg_current_gmt_offset_minutes(year, (unsigned int)month + 1U,
+                                       (unsigned int)day, (unsigned int)hour,
+                                       (unsigned int)minute, &minutes_west))
+        (void)amg_rfc5322_timezone(minutes_west, timezone);
     length = snprintf(date, 96U,
-                      "%s, %02lu %s %04lu %02lu:%02lu:%02lu -0000",
+                      "%s, %02lu %s %04lu %02lu:%02lu:%02lu %s",
                       weekdays[weekday], day, months[month], year,
-                      hour, minute, second);
+                      hour, minute, second, timezone);
     if (length < 0 || length >= 96) return AMG_ERR_IO;
     ++sequence;
     length = snprintf(message_id, 256U, "<%08lx.%04lx.%04lx.%04lx@amimail.local>",

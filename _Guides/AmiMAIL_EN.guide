@@ -293,8 +293,9 @@ in new messages, replies, Reply All, forwards and mailto: drafts.
 @ENDNODE
 
 @NODE NOTIFY "Notifications and iconify"
-AmiMAIL can play a configured notification sound through AmigaOS DataTypes
-for each active account when new mail arrives.
+AmiMAIL can play a configured notification sound through the AmigaOS 3.2
+SoundPlayer for each active account when new mail arrives. Playback runs in a
+separate process so an active sound never belongs to the AmiMAIL GUI task.
 
 The main window can be iconified. Network workers for active accounts,
 periodic fetch and status handling continue in the background.

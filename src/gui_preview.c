@@ -4,6 +4,7 @@
 #include "imap_parser.h"
 #include "mime.h"
 #include "i18n.h"
+#include "mailto.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -242,25 +243,29 @@ static size_t url_token_end(const char *text, size_t start)
 
 static int decorate_preview_links(const char *text, AmgBuffer *styled)
 {
-    size_t pos = 0, end;
+    size_t pos = 0, end, email_length;
     int result = AMG_OK;
     if (!styled) return AMG_ERR_ARGUMENT;
     if (!text) text = "";
     while (text[pos] && result == AMG_OK) {
-        if (url_boundary_before(text, pos) && url_prefix_length(text + pos)) {
+        end = pos;
+        if (url_boundary_before(text, pos) && url_prefix_length(text + pos))
             end = url_token_end(text, pos);
-            if (end > pos) {
-                const unsigned char underline[2] = {0x1bU, 'u'};
-                const unsigned char normal[2] = {0x1bU, 'n'};
-                result = amg_buffer_append(styled, underline, sizeof(underline));
-                if (result == AMG_OK)
-                    result = amg_buffer_append(
-                        styled, (const unsigned char *)text + pos, end - pos);
-                if (result == AMG_OK)
-                    result = amg_buffer_append(styled, normal, sizeof(normal));
-                pos = end;
-                continue;
-            }
+        else if ((email_length =
+                      amg_email_address_token_length(text + pos)) > 0U)
+            end = pos + email_length;
+
+        if (end > pos) {
+            const unsigned char underline[2] = {0x1bU, 'u'};
+            const unsigned char normal[2] = {0x1bU, 'n'};
+            result = amg_buffer_append(styled, underline, sizeof(underline));
+            if (result == AMG_OK)
+                result = amg_buffer_append(
+                    styled, (const unsigned char *)text + pos, end - pos);
+            if (result == AMG_OK)
+                result = amg_buffer_append(styled, normal, sizeof(normal));
+            pos = end;
+            continue;
         }
         result = amg_buffer_append_char(styled, (unsigned char)text[pos++]);
     }
@@ -289,9 +294,14 @@ static int extract_clicked_url(const struct ClickMessage *clickmsg,
     while (start < length &&
            (line[start] == '(' || line[start] == '[' || line[start] == '{'))
         ++start;
+    if (start > 0U && (unsigned char)line[start - 1U] == 0x1bU &&
+        (line[start] == 'u' || line[start] == 'b' ||
+         line[start] == 'i' || line[start] == 'n'))
+        ++start;
 
     end = url_token_end(line, start);
-    if (end <= start || !url_prefix_length(line + start)) return 0;
+    if (end <= start || !url_prefix_length(line + start))
+        return amg_mailto_url_from_email_at(line, pos, output, GUI_URL_MAX);
 
     used = end - start;
     if (ascii_prefix_ci(line + start, "www.")) {
@@ -325,7 +335,7 @@ static ULONG preview_url_doubleclick_subentry(struct Hook *hook,
      * synchron warten; innerhalb des Gadget-Hooks blockiert das die
      * ReAction-Eingabeverarbeitung. Deshalb nur die URL vormerken und
      * nach RA_HandleInput() im normalen GUI-Kontext oeffnen. */
-    if (!OpenURLBase)
+    if (!OpenURLBase && !ascii_prefix_ci(url, "mailto:"))
         return TRUE;
 
     strncpy(gui->pending_preview_url, url,
@@ -353,8 +363,19 @@ void open_pending_preview_url(AmgGui *gui)
     gui->pending_preview_url_ready = 0;
     gui->pending_preview_url[0] = 0;
 
-    if (!gui->running || !OpenURLBase || !url[0]) return;
+    if (!gui->running || !url[0]) return;
 
+    /* mailto: links and bare addresses belong to AmiMail itself.  The
+     * TextEditor hook only queues the action; opening the compose window here
+     * keeps ReAction input processing non-reentrant. */
+    if (ascii_prefix_ci(url, "mailto:")) {
+        AmgError error;
+        memset(&error, 0, sizeof(error));
+        (void)open_mailto_compose(gui, url, &error);
+        return;
+    }
+
+    if (!OpenURLBase) return;
     tags[0].ti_Tag = TAG_END;
     tags[0].ti_Data = 0;
     (void)AMG_URL_OpenA((STRPTR)url, tags);

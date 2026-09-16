@@ -1,4 +1,5 @@
 #include "gui_internal.h"
+#include "gui_icons.h"
 #include "banner_data.h"
 #include "iconified_data.h"
 #include "i18n.h"
@@ -670,11 +671,79 @@ static void draw_version_text(AmgGui *gui)
     if (old_font) SetFont(rp, old_font);
 }
 
+void gui_draw_date_sort_icon(AmgGui *gui)
+{
+    ULONG weight1 = 27UL, weight2 = 37UL, weight3 = 23UL, weight4 = 13UL;
+    ULONG fixed_width = GUI_MESSAGE_FLAG_COLUMN_WIDTH;
+    ULONG sort_direction = LBMSORT_REVERSE;
+    ULONG total_weight;
+    LONG view_width, weighted_width, date_left, date_width;
+    LONG date_right, icon_left, icon_top;
+    struct RastPort *rp;
+
+    if (!gui || !gui->window || !gui->messages_gadget || !gui->columns)
+        return;
+
+    /* ColumnInfo may be changed by draggable separators. Query the live
+     * values instead of assuming the initial 27/37/23/13 split. */
+    (void)GetLBColumnInfoAttrs(gui->columns,
+                              LBCIA_Column, 1,
+                              LBCIA_Weight, (ULONG)(uintptr_t)&weight1,
+                              TAG_DONE);
+    (void)GetLBColumnInfoAttrs(gui->columns,
+                              LBCIA_Column, 2,
+                              LBCIA_Weight, (ULONG)(uintptr_t)&weight2,
+                              TAG_DONE);
+    (void)GetLBColumnInfoAttrs(gui->columns,
+                              LBCIA_Column, 3,
+                              LBCIA_Weight, (ULONG)(uintptr_t)&weight3,
+                              LBCIA_SortDirection, (ULONG)(uintptr_t)&sort_direction,
+                              TAG_DONE);
+    (void)GetLBColumnInfoAttrs(gui->columns,
+                              LBCIA_Column, 4,
+                              LBCIA_Weight, (ULONG)(uintptr_t)&weight4,
+                              TAG_DONE);
+
+    total_weight = weight1 + weight2 + weight3 + weight4;
+    if (!total_weight) return;
+
+    /* layout.gadget expresses child geometry in window coordinates.  Leave
+     * room for ListBrowser's own vertical prop and frame, then reconstruct
+     * the weighted Date cell exactly like the other weighted columns. */
+    view_width = (LONG)gui->messages_gadget->Width -
+                 (LONG)GUI_SCROLLBAR_WIDTH - 4L;
+    if (view_width <= (LONG)fixed_width) return;
+    weighted_width = view_width - (LONG)fixed_width;
+    date_left = (LONG)gui->messages_gadget->LeftEdge + 2L +
+                (LONG)fixed_width +
+                (weighted_width * (LONG)(weight1 + weight2)) /
+                    (LONG)total_weight;
+    date_width = (weighted_width * (LONG)weight3) / (LONG)total_weight;
+    if (date_width < 10L) return;
+
+    /* Put the supplied 5x4 icon at the right side of the Date title cell.
+     * This keeps it unambiguously inside DATUM even with translated titles
+     * or user-resized column separators. */
+    date_right = date_left + date_width - 1L;
+    icon_left = date_right - 8L;
+    if (icon_left < date_left + 2L) icon_left = date_left + 2L;
+
+    rp = gui->window->RPort;
+    if (!rp) return;
+    icon_top = (LONG)gui->messages_gadget->TopEdge + 1L +
+               ((LONG)rp->TxHeight - 4L) / 2L;
+    gui_draw_sort_icon(rp, icon_left, icon_top,
+                       sort_direction == LBMSORT_REVERSE,
+                       gui->text_pen);
+}
+
+
 void draw_window_overlays(AmgGui *gui)
 {
     draw_banner(gui);
     gui_update_refresh_gadget(gui);
     draw_version_text(gui);
+    gui_draw_date_sort_icon(gui);
     sync_labels_scroller(gui);
     sync_messages_scroller(gui);
     sync_preview_scroller(gui, 0);
@@ -695,6 +764,7 @@ static ULONG window_post_refresh_subentry(struct Hook *hook,
 
     draw_banner(gui);
     draw_version_text(gui);
+    gui_draw_date_sort_icon(gui);
     return 0UL;
 }
 
@@ -866,27 +936,34 @@ int create_window(AmgGui *gui, AmgError *error)
         LBCIA_Column, 1,
         LBCIA_Title, (ULONG)(uintptr_t)T(MSG_SENDER_F4D4, "Sender"),
         LBCIA_Weight, 27,
-        LBCIA_AutoSort, TRUE,
-        LBCIA_SortArrow, TRUE,
+        LBCIA_AutoSort, FALSE,
+        LBCIA_SortArrow, FALSE,
         LBCIA_DraggableSeparator, TRUE,
         LBCIA_Column, 2,
         LBCIA_Title, (ULONG)(uintptr_t)T(MSG_SUBJECT_5C24, "Subject"),
         LBCIA_Weight, 37,
-        LBCIA_AutoSort, TRUE,
-        LBCIA_SortArrow, TRUE,
+        /* Subject is deliberately not sortable.  This also guarantees that
+         * no ListBrowser-native arrow can ever appear in the Subject title. */
+        LBCIA_AutoSort, FALSE,
+        LBCIA_SortArrow, FALSE,
         LBCIA_DraggableSeparator, TRUE,
         LBCIA_Column, 3,
         LBCIA_Title, (ULONG)(uintptr_t)T(MSG_DATE_B264, "Date"),
         LBCIA_Weight, 23,
-        LBCIA_AutoSort, TRUE,
-        LBCIA_SortArrow, TRUE,
+        /* Date sorting is handled by AmiMAIL.  Mark the Date title sortable
+         * so V47 reports LBRE_TITLECLICK, but keep AutoSort disabled: the
+         * built-in sorter/triangle is never used and only our supplied 5x4
+         * transparent icons are rendered. */
+        LBCIA_Sortable, TRUE,
+        LBCIA_AutoSort, FALSE,
+        LBCIA_SortArrow, FALSE,
         LBCIA_SortDirection, LBMSORT_REVERSE,
         LBCIA_DraggableSeparator, TRUE,
         LBCIA_Column, 4,
         LBCIA_Title, (ULONG)(uintptr_t)T(MSG_SIZE, "Size"),
         LBCIA_Weight, 13,
-        LBCIA_AutoSort, TRUE,
-        LBCIA_SortArrow, TRUE,
+        LBCIA_AutoSort, FALSE,
+        LBCIA_SortArrow, FALSE,
         LBCIA_DraggableSeparator, TRUE,
         TAG_DONE);
     if (!gui->columns) {
@@ -1043,14 +1120,13 @@ int create_window(AmgGui *gui, AmgError *error)
                     CHILD_MinWidth, 92,
                     CHILD_WeightedWidth, 100,
                     LAYOUT_AddChild,
-                        gui->reply_menu_gadget =
-                            (struct Gadget *)ButtonObject,
-                        GA_ID, GID_REPLY_MENU,
-                        GA_RelVerify, TRUE,
-                        GA_Disabled, window_current_mailbox_is_drafts(gui)
-                            ? TRUE : FALSE,
-                        GA_Text, "v",
-                    EndObject,
+                        gui->reply_menu_gadget = (struct Gadget *)NewObject(
+                            gui_reply_arrow_button_class(), NULL,
+                            GA_ID, GID_REPLY_MENU,
+                            GA_RelVerify, TRUE,
+                            GA_Disabled, window_current_mailbox_is_drafts(gui)
+                                ? TRUE : FALSE,
+                            TAG_DONE),
                     CHILD_MinWidth, 18,
                     CHILD_MaxWidth, 18,
                     CHILD_WeightedWidth, 0,
@@ -1184,8 +1260,16 @@ int create_window(AmgGui *gui, AmgError *error)
                                 LISTBROWSER_ColumnInfo, gui->columns,
                                 LISTBROWSER_ColumnTitles, TRUE,
                                 LISTBROWSER_TitleClickable, TRUE,
-                                LISTBROWSER_SortColumn, 3,
+                                /* No native active sort column: Date is
+                                 * sorted explicitly so only our own icon is
+                                 * ever visible in the title row. */
+                                LISTBROWSER_SortColumn, (ULONG)~0UL,
                                 LISTBROWSER_MultiSelect, TRUE,
+                                /* AmigaOS 3.2's own ReAction examples use
+                                 * ShowSelected together with MultiSelect.
+                                 * On the real 3.2 listbrowser this is also
+                                 * what keeps the blue selection rendering
+                                 * visible after the mouse button is released. */
                                 LISTBROWSER_ShowSelected, TRUE,
                                 LISTBROWSER_VerticalProp, TRUE,
                                 LISTBROWSER_AutoWheel, TRUE,

@@ -47,31 +47,6 @@ enum FolderMappingGadgetId { GID_FOLDER_SENT=140,GID_FOLDER_DRAFTS,GID_FOLDER_AL
 enum ConfirmGadgetId { GID_CONFIRM_YES=300,GID_CONFIRM_NO };
 enum AboutGadgetId { GID_ABOUT_OK=400 };
 
-static void center_window_over_window(struct Window *window,
-                                      const struct Window *reference)
-{
-    LONG left, top, max_left, max_top;
-    if (!window || !reference || !window->WScreen) return;
-
-    left = (LONG)reference->LeftEdge +
-           ((LONG)reference->Width - (LONG)window->Width) / 2L;
-    top = (LONG)reference->TopEdge +
-          ((LONG)reference->Height - (LONG)window->Height) / 2L;
-
-    max_left = (LONG)window->WScreen->Width - (LONG)window->Width;
-    max_top = (LONG)window->WScreen->Height - (LONG)window->Height;
-    if (max_left < 0) max_left = 0;
-    if (max_top < 0) max_top = 0;
-    if (left < 0) left = 0;
-    if (top < 0) top = 0;
-    if (left > max_left) left = max_left;
-    if (top > max_top) top = max_top;
-
-    if (left != (LONG)window->LeftEdge || top != (LONG)window->TopEdge)
-        MoveWindow(window, left - (LONG)window->LeftEdge,
-                   top - (LONG)window->TopEdge);
-}
-
 static int requester_rawkey_accept(ULONG key)
 {
     return key == GUI_RAWKEY_RETURN || key == GUI_RAWKEY_NP_ENTER;
@@ -943,6 +918,7 @@ static int account_order_move_configured_slot(
  int account_dialog(AmgGui *gui, AmgError *error)
 {
     Object *dialog;
+    Object *account_layout = NULL;
     struct Window *window;
     struct Gadget *tabs_gadget, *add_account_gadget, *delete_account_gadget;
     struct Gadget *move_left_gadget, *move_right_gadget, *enabled_gadget;
@@ -972,6 +948,9 @@ static int account_order_move_configured_slot(
     ULONG signal_mask;
     ULONG account_width = 470UL;
     ULONG hint_gap = 4UL;
+    LONG account_outer_width, account_outer_height;
+    LONG account_left, account_top, account_max_left, account_max_top;
+    struct LayoutLimits account_limits;
     char fetch_days_text[16];
     char imap_port_text[8];
     char smtp_port_text[8];
@@ -1086,9 +1065,8 @@ static int account_order_move_configured_slot(
         WA_MinWidth, 440,
         WA_MaxWidth, 8192,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
-        WINDOW_RefWindow, gui->window,
-        WINDOW_Position, WPOS_CENTERWINDOW,
-        WINDOW_ParentGroup, VGroupObject,
+        WINDOW_ParentGroup,
+            account_layout = VGroupObject,
             LAYOUT_SpaceOuter, TRUE,
             LAYOUT_SpaceInner, FALSE,
 
@@ -1668,6 +1646,56 @@ static int account_order_move_configured_slot(
     page.periodic_fetch = periodic_fetch_gadget;
     page.notification_sound = notification_sound_gadget;
     page.notification_path = notification_sound_path_gadget;
+
+    /* Measure the finished account layout before the window becomes visible.
+     * The old WPOS_CENTERWINDOW + post-open MoveWindow() sequence caused the
+     * account window to appear briefly offset to the right and then jump to
+     * the center.  Compute the final geometry up front, just like the stable
+     * confirm requesters, and let RA_OpenWindow() show it only once. */
+    memset(&account_limits, 0, sizeof(account_limits));
+    if (account_layout && gui->window && gui->screen) {
+        LayoutLimits((struct Gadget *)account_layout, &account_limits,
+                     gui->screen->RastPort.Font, gui->screen);
+
+        account_outer_width = (LONG)account_width;
+        {
+            LONG required_width = (LONG)account_limits.MinWidth +
+                (LONG)gui->window->BorderLeft +
+                (LONG)gui->window->BorderRight;
+            if (account_outer_width < required_width)
+                account_outer_width = required_width;
+        }
+        account_outer_height = (LONG)account_limits.MinHeight +
+            (LONG)gui->window->BorderTop +
+            (LONG)gui->window->BorderBottom;
+        if (account_outer_height < 1L) account_outer_height = 1L;
+
+        if (account_outer_width > (LONG)gui->screen->Width)
+            account_outer_width = (LONG)gui->screen->Width;
+        if (account_outer_height > (LONG)gui->screen->Height)
+            account_outer_height = (LONG)gui->screen->Height;
+
+        account_left = (LONG)gui->window->LeftEdge +
+            ((LONG)gui->window->Width - account_outer_width) / 2L;
+        account_top = (LONG)gui->window->TopEdge +
+            ((LONG)gui->window->Height - account_outer_height) / 2L;
+        account_max_left = (LONG)gui->screen->Width - account_outer_width;
+        account_max_top = (LONG)gui->screen->Height - account_outer_height;
+        if (account_max_left < 0L) account_max_left = 0L;
+        if (account_max_top < 0L) account_max_top = 0L;
+        if (account_left < 0L) account_left = 0L;
+        if (account_top < 0L) account_top = 0L;
+        if (account_left > account_max_left) account_left = account_max_left;
+        if (account_top > account_max_top) account_top = account_max_top;
+
+        SetAttrs(dialog,
+                 WA_Left, account_left,
+                 WA_Top, account_top,
+                 WA_Width, account_outer_width,
+                 WA_Height, account_outer_height,
+                 TAG_DONE);
+    }
+
     window = RA_OpenWindow(dialog);
     if (!window) {
         DisposeObject(dialog);
@@ -1679,7 +1707,6 @@ static int account_order_move_configured_slot(
                       T(MSG_ACCOUNT_DIALOG_COULD_NOT_BE_OPENED, "Account dialog could not be opened."));
         return 0;
     }
-    center_window_over_window(window, gui->window);
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
 
     while (!done) {
@@ -2453,7 +2480,11 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
                                               const char *note, LONG width)
 {
     LONG font_height = 8L;
-    LONG question_height, note_height, text_height, button_height;
+    LONG question_height, note_height, button_height;
+    LONG outer_width, outer_height, min_outer_width;
+    LONG left, top, max_left, max_top;
+    struct LayoutLimits limits;
+    Object *layout;
     Object *dialog;
     struct Window *window;
     ULONG signal_mask = 0;
@@ -2461,82 +2492,141 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
     int confirmed = 0;
 
     if (!gui || !ref_window || !gui->screen) return 0;
+
+    /* The compose requester is called from gui_compose.c with no secondary
+     * note.  Supply its explanatory line here so all four Yes/No requesters
+     * keep using the same measured/centered layout without changing the
+     * compose-window code or the centering calculation. */
+    if ((!note || !*note) && question &&
+        !strcmp(question,
+                T(MSG_DO_YOU_WANT_TO_SAVE_THE_DRAFT,
+                  "Do you want to save the draft?"))) {
+        note = T(MSG_THE_MAIL_CAN_BE_EDITED_LATER,
+                 "The mail can be edited later.");
+    }
+
     if (gui->screen->Font && gui->screen->Font->ta_YSize)
         font_height = (LONG)gui->screen->Font->ta_YSize;
-    question_height = font_height + 4L;
-    note_height = font_height + 2L;
-    text_height = question_height + (note && *note ? note_height : 0L);
+    /* Keep the message block to the actual text-line height.  The previous
+     * extra vertical padding looked like an additional blank line below the
+     * requester text and pushed the Yes/No row too far down. */
+    question_height = font_height;
+    note_height = font_height;
     button_height = font_height + 8L;
+
+    /* Build and measure the complete requester layout before opening the
+     * window.  WPOS_CENTERWINDOW is intentionally not used here: on classic
+     * ReAction 3.2 the final layout domain can differ from the provisional
+     * window size used for WPOS_CENTERWINDOW, which made short requesters
+     * (Trash/Spam/Draft) visibly or permanently offset while the larger
+     * delete requester happened to be centered. */
+    layout = VGroupObject,
+        LAYOUT_SpaceOuter, TRUE,
+        LAYOUT_SpaceInner, FALSE,
+
+        /* Put the message lines directly into the outer group.  The previous
+         * nested VGroup introduced an additional vertical layout gap before
+         * the Yes/No row on classic ReAction.  Keeping the text objects as
+         * direct children removes that apparent blank line while the window
+         * is still measured and centered from the final LayoutLimits(). */
+        LAYOUT_AddChild, ButtonObject,
+            GA_ReadOnly, TRUE,
+            GA_Text, question ? question : "",
+            BUTTON_BevelStyle, BVS_NONE,
+            BUTTON_Transparent, TRUE,
+        EndObject,
+        CHILD_MinHeight, question_height,
+        CHILD_MaxHeight, question_height,
+        CHILD_WeightedHeight, 0,
+
+        note && *note ? LAYOUT_AddChild : TAG_IGNORE, ButtonObject,
+            GA_ReadOnly, TRUE,
+            GA_Text, note && *note ? note : "",
+            BUTTON_BevelStyle, BVS_NONE,
+            BUTTON_Transparent, TRUE,
+        EndObject,
+        note && *note ? CHILD_MinHeight : TAG_IGNORE, note_height,
+        note && *note ? CHILD_MaxHeight : TAG_IGNORE, note_height,
+        note && *note ? CHILD_WeightedHeight : TAG_IGNORE, 0,
+
+        LAYOUT_AddChild, HGroupObject,
+            LAYOUT_SpaceOuter, FALSE,
+            LAYOUT_SpaceInner, TRUE,
+            LAYOUT_EvenSize, TRUE,
+            LAYOUT_AddChild, ButtonObject,
+                GA_ID, GID_CONFIRM_YES,
+                GA_RelVerify, TRUE,
+                GA_Text, T(MSG_YES, "_Yes"),
+            EndObject,
+            LAYOUT_AddChild, ButtonObject,
+                GA_ID, GID_CONFIRM_NO,
+                GA_RelVerify, TRUE,
+                GA_Text, T(MSG_NO, "_No"),
+            EndObject,
+        EndObject,
+        CHILD_MinHeight, button_height,
+        CHILD_MaxHeight, button_height,
+        CHILD_WeightedHeight, 0,
+    EndObject;
+    if (!layout) return 0;
+
+    memset(&limits, 0, sizeof(limits));
+    LayoutLimits((struct Gadget *)layout, &limits,
+                 gui->screen->RastPort.Font, gui->screen);
+
+    /* LayoutLimits() reports the inner layout domain without window borders.
+     * The reference window uses the same screen/title style, so its border
+     * sizes are a safe classic-ReAction allowance.  Keep the historical
+     * caller width as a minimum, but enlarge it before centering if the
+     * translated text actually requires more room. */
+    outer_width = width;
+    min_outer_width = (LONG)limits.MinWidth +
+                      (LONG)ref_window->BorderLeft +
+                      (LONG)ref_window->BorderRight;
+    if (outer_width < min_outer_width) outer_width = min_outer_width;
+    outer_height = (LONG)limits.MinHeight +
+                   (LONG)ref_window->BorderTop +
+                   (LONG)ref_window->BorderBottom;
+    if (outer_height < 1L) outer_height = 1L;
+
+    if (outer_width > (LONG)gui->screen->Width)
+        outer_width = (LONG)gui->screen->Width;
+    if (outer_height > (LONG)gui->screen->Height)
+        outer_height = (LONG)gui->screen->Height;
+
+    left = (LONG)ref_window->LeftEdge +
+           ((LONG)ref_window->Width - outer_width) / 2L;
+    top = (LONG)ref_window->TopEdge +
+          ((LONG)ref_window->Height - outer_height) / 2L;
+    max_left = (LONG)gui->screen->Width - outer_width;
+    max_top = (LONG)gui->screen->Height - outer_height;
+    if (max_left < 0L) max_left = 0L;
+    if (max_top < 0L) max_top = 0L;
+    if (left < 0L) left = 0L;
+    if (top < 0L) top = 0L;
+    if (left > max_left) left = max_left;
+    if (top > max_top) top = max_top;
 
     dialog = WindowObject,
         WA_Title, "AmiMail",
-        WA_Width, width,
-        WA_MinWidth, width,
-        WA_MaxWidth, width,
+        WA_Left, left,
+        WA_Top, top,
+        WA_Width, outer_width,
+        WA_Height, outer_height,
+        WA_MinWidth, outer_width,
+        WA_MaxWidth, outer_width,
+        WA_MinHeight, outer_height,
+        WA_MaxHeight, outer_height,
         WA_PubScreen, gui->screen,
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                   WFLG_ACTIVATE,
         WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
-        WINDOW_RefWindow, ref_window,
-        WINDOW_Position, WPOS_CENTERWINDOW,
-        WINDOW_ParentGroup, VGroupObject,
-            LAYOUT_SpaceOuter, TRUE,
-            LAYOUT_SpaceInner, FALSE,
-            LAYOUT_AddChild, VGroupObject,
-                LAYOUT_SpaceOuter, FALSE,
-                LAYOUT_SpaceInner, FALSE,
-                LAYOUT_AddChild, ButtonObject,
-                    GA_ReadOnly, TRUE,
-                    GA_Text, question ? question : "",
-                    BUTTON_BevelStyle, BVS_NONE,
-                    BUTTON_Transparent, TRUE,
-                EndObject,
-                CHILD_MinHeight, question_height,
-                CHILD_MaxHeight, question_height,
-                CHILD_WeightedHeight, 0,
-                LAYOUT_AddChild, ButtonObject,
-                    GA_ReadOnly, TRUE,
-                    GA_Text, note && *note ? note : "",
-                    BUTTON_BevelStyle, BVS_NONE,
-                    BUTTON_Transparent, TRUE,
-                EndObject,
-                CHILD_MinHeight, note && *note ? note_height : 0,
-                CHILD_MaxHeight, note && *note ? note_height : 0,
-                CHILD_WeightedHeight, 0,
-            EndObject,
-            CHILD_MinHeight, text_height,
-            CHILD_MaxHeight, text_height,
-            CHILD_WeightedHeight, 0,
-
-            LAYOUT_AddChild, HGroupObject,
-                LAYOUT_SpaceOuter, FALSE,
-                LAYOUT_SpaceInner, FALSE,
-            EndObject,
-            CHILD_MinHeight, font_height,
-            CHILD_MaxHeight, font_height,
-            CHILD_WeightedHeight, 0,
-
-            LAYOUT_AddChild, HGroupObject,
-                LAYOUT_SpaceOuter, FALSE,
-                LAYOUT_SpaceInner, TRUE,
-                LAYOUT_EvenSize, TRUE,
-                LAYOUT_AddChild, ButtonObject,
-                    GA_ID, GID_CONFIRM_YES,
-                    GA_RelVerify, TRUE,
-                    GA_Text, T(MSG_YES, "_Yes"),
-                EndObject,
-                LAYOUT_AddChild, ButtonObject,
-                    GA_ID, GID_CONFIRM_NO,
-                    GA_RelVerify, TRUE,
-                    GA_Text, T(MSG_NO, "_No"),
-                EndObject,
-            EndObject,
-            CHILD_MinHeight, button_height,
-            CHILD_MaxHeight, button_height,
-            CHILD_WeightedHeight, 0,
-        EndObject,
+        WINDOW_Layout, (ULONG)(uintptr_t)layout,
     EndWindow;
-    if (!dialog) return 0;
+    if (!dialog) {
+        DisposeObject(layout);
+        return 0;
+    }
 
     window = RA_OpenWindow(dialog);
     if (!window) {
@@ -2598,14 +2688,14 @@ static int confirm_question_dialog(AmgGui *gui, const char *question,
 {
     return confirm_question_dialog(
         gui, T(MSG_REALLY_EMPTY_TRASH, "Really empty Trash?"),
-        NULL, 280L);
+        T(MSG_THIS_ACTION_CANNOT_BE_UNDONE, "This action cannot be undone."), 310L);
 }
 
  int confirm_empty_spam_dialog(AmgGui *gui)
 {
     return confirm_question_dialog(
         gui, T(MSG_REALLY_EMPTY_SPAM, "Really empty Spam?"),
-        NULL, 280L);
+        T(MSG_THIS_ACTION_CANNOT_BE_UNDONE, "This action cannot be undone."), 310L);
 }
 
 #endif /* AMIGMAIL_AMIGA */

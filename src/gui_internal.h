@@ -184,10 +184,6 @@ struct AmgGui {
     LONG preview_url_signal_bit;
     ULONG preview_url_signal_mask;
     struct Task *preview_url_signal_task;
-    Object *notification_sound_object;
-    LONG notification_sound_signal_bit;
-    ULONG notification_sound_signal_mask;
-    struct Task *notification_sound_signal_task;
     struct Hook label_tree_render_hook;
     struct Hook system_label_render_hook;
     struct Hook message_flag_render_hook;
@@ -203,7 +199,8 @@ struct AmgGui {
     char current_mailbox_utf8[512];
     char current_label_local[512];
     unsigned long active_message_uid;
-    unsigned long move_uid;
+    ULONG *move_uids;
+    size_t move_uid_count;
     char move_source_mailbox_utf8[512];
     int move_pending;
     char reply_to_local[768];
@@ -294,7 +291,6 @@ int rawkey_is_rcommand_letter(Object *window_object, ULONG result,
                               char letter);
 int rawkey_is_delete(ULONG result);
 int rawkey_is_help(ULONG result);
-int input_event_has_multiselect_qualifier(Object *window_object);
 Object *static_text_label(const char *text);
 void draw_embedded_banner_at(AmgGui *gui, struct Window *window,
                              LONG left, LONG top,
@@ -354,10 +350,6 @@ int gui_signature_save(const AmgGui *gui, const char *text);
 /* Workbench iconification and notification sound. */
 void gui_iconify(AmgGui *gui);
 int gui_uniconify(AmgGui *gui);
-int gui_notify_init(AmgGui *gui);
-void gui_notify_cleanup(AmgGui *gui);
-ULONG gui_notify_signal_mask(const AmgGui *gui);
-void gui_notify_handle_signal(AmgGui *gui);
 int gui_notify_preview_sound(AmgGui *gui, const char *path);
 void gui_notify_new_mail(AmgGui *gui);
 void gui_notify_new_mail_for_account(AmgGui *gui,
@@ -401,6 +393,7 @@ void handle_menu(AmgGui *gui, ULONG menu_code, AmgError *error);
 int create_window(AmgGui *gui, AmgError *error);
 void center_window_on_screen(struct Window *window);
 void draw_window_overlays(AmgGui *gui);
+void gui_draw_date_sort_icon(AmgGui *gui);
 void gui_mail_split_update_limits(AmgGui *gui, int relayout);
 ULONG gui_mail_split_current_percent(const AmgGui *gui);
 
@@ -429,6 +422,8 @@ int build_unique_attachment_path(const char *drawer, const char *name,
 /* Message-list module entry points. Private to src/gui_*.c. */
 struct Node *message_placeholder_node(const char *text);
 void default_messages(AmgGui *gui);
+void attach_messages_default_date_sort(AmgGui *gui);
+void gui_toggle_message_date_sort(AmgGui *gui);
 void show_message_placeholder(AmgGui *gui, const char *text);
 size_t message_uid_stats(const unsigned char *payload, size_t length,
                          unsigned long baseline, unsigned long *max_uid,
@@ -445,7 +440,6 @@ size_t merge_new_messages_from_payload(AmgGui *gui,
                                        const unsigned char *payload,
                                        size_t length, int *parse_error);
 size_t selected_message_uids(AmgGui *gui, ULONG *uids, size_t capacity);
-void normalize_message_selection_for_click(AmgGui *gui);
 ULONG *selected_message_uids_alloc(AmgGui *gui, size_t *count);
 int message_is_seen(AmgGui *gui, ULONG uid);
 int message_is_flagged(AmgGui *gui, ULONG uid);

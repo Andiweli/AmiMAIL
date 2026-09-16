@@ -17,6 +17,12 @@ void amg_mailto_request_init(AmgMailtoRequest *request);
 void amg_mailto_request_clear(AmgMailtoRequest *request);
 int amg_mailto_parse(const char *url, AmgMailtoRequest *request,
                      AmgError *error);
+/* Helpers used by the read-only mail preview to recognize bare email
+ * addresses without involving the GUI.  The token helper returns the length
+ * of a syntactically plausible addr-spec starting at text, or zero. */
+size_t amg_email_address_token_length(const char *text);
+int amg_mailto_url_from_email_at(const char *line, size_t click_position,
+                                 char *url, size_t capacity);
 const char *amg_mailto_find_argument(int argc, char **argv);
 /* Return an owned mailto: URI from argv or the raw AmigaDOS argument string.
  * detached_child is set when the URI came from AmiMail's private temporary

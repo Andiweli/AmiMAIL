@@ -2,129 +2,100 @@
 
 #if AMIGMAIL_AMIGA
 
-#include <datatypes/datatypes.h>
-#include <datatypes/datatypesclass.h>
-#include <datatypes/soundclass.h>
+#include <dos/dos.h>
+#include <dos/dostags.h>
 #include <exec/tasks.h>
-#include <proto/datatypes.h>
+#include <proto/dos.h>
 #include <proto/exec.h>
-#include <utility/tagitem.h>
 
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
-extern struct Library *DataTypesBase;
+#define AMIMAIL_SOUNDPLAYER "C:SoundPlayer"
+#define AMIMAIL_SOUND_TASK_NAME "AmiMAIL SoundPlayer"
+#define AMIMAIL_SOUND_COMMAND_MAX 640U
 
-static void notification_sound_dispose(AmgGui *gui, int stop)
+/*
+ * AmiMAIL intentionally does not own a live sound.datatype object anymore.
+ * On classic AmigaOS a notification can overlap an already active AHI client
+ * (for example AmigaAMP). Keeping the DataType object in the GUI task made
+ * object completion/cleanup part of AmiMAIL's lifetime and exposed the main
+ * process to any timing-sensitive sound.datatype/AHI teardown path.
+ *
+ * AmigaOS 3.2 already provides C:SoundPlayer. Delegate the whole playback
+ * lifetime to that OS command in a separate process. AmiMAIL only launches
+ * it and never stops or disposes an active sound object itself.
+ */
+
+static int path_is_shell_safe(const char *path)
 {
-    if (!gui || !gui->notification_sound_object) return;
-    if (stop) {
-        struct dtTrigger trigger;
-        /* Stopping is best-effort only. The normal lifetime is completion
-         * signal -> DisposeDTObject(). */
-        trigger.MethodID = DTM_TRIGGER;
-        trigger.dtt_GInfo = NULL;
-        trigger.dtt_Function = STM_STOP;
-        trigger.dtt_Data = NULL;
-        (void)DoDTMethodA(gui->notification_sound_object, NULL, NULL,
-                          (Msg)&trigger);
-    }
-    DisposeDTObject(gui->notification_sound_object);
-    gui->notification_sound_object = NULL;
+    if (!path || !path[0]) return 0;
+    return strchr(path, '"') == NULL &&
+           strchr(path, '\r') == NULL &&
+           strchr(path, '\n') == NULL;
 }
 
-int gui_notify_init(AmgGui *gui)
+static int file_exists(const char *path)
 {
-    if (!gui) return 0;
-    if (gui->notification_sound_signal_bit >= 0)
-        return 1;
-    gui->notification_sound_signal_task = FindTask(NULL);
-    gui->notification_sound_signal_bit = AllocSignal(-1);
-    if (gui->notification_sound_signal_bit < 0) {
-        gui->notification_sound_signal_mask = 0UL;
-        gui->notification_sound_signal_task = NULL;
-        return 0;
-    }
-    gui->notification_sound_signal_mask =
-        1UL << (ULONG)gui->notification_sound_signal_bit;
+    BPTR lock;
+    if (!path || !path[0]) return 0;
+    lock = Lock((CONST_STRPTR)path, ACCESS_READ);
+    if (!lock) return 0;
+    UnLock(lock);
     return 1;
 }
 
-void gui_notify_cleanup(AmgGui *gui)
+static int notification_sound_process_active(void)
 {
-    if (!gui) return;
-    notification_sound_dispose(gui, 1);
-    if (gui->notification_sound_signal_bit >= 0) {
-        SetSignal(0UL, gui->notification_sound_signal_mask);
-        FreeSignal(gui->notification_sound_signal_bit);
-    }
-    gui->notification_sound_signal_bit = -1;
-    gui->notification_sound_signal_mask = 0UL;
-    gui->notification_sound_signal_task = NULL;
-}
+    struct Task *task;
 
-ULONG gui_notify_signal_mask(const AmgGui *gui)
-{
-    return gui ? gui->notification_sound_signal_mask : 0UL;
-}
-
-void gui_notify_handle_signal(AmgGui *gui)
-{
-    if (!gui) return;
-    notification_sound_dispose(gui, 0);
+    /* FindTask() walks Exec's task lists. Keep the lookup atomic; the pointer
+     * is only tested for NULL and is never dereferenced after Permit(). */
+    Forbid();
+    task = FindTask((CONST_STRPTR)AMIMAIL_SOUND_TASK_NAME);
+    Permit();
+    return task != NULL;
 }
 
 static int notification_sound_play_path(AmgGui *gui, const char *path)
 {
-    struct TagItem tags[7];
-    Object *object;
+    char command[AMIMAIL_SOUND_COMMAND_MAX];
+    BPTR input;
+    LONG result;
+    int written;
 
-    if (!gui || !path || !path[0] || !DataTypesBase) return 0;
-    if (gui->notification_sound_signal_bit < 0 && !gui_notify_init(gui))
+    (void)gui;
+    if (!path_is_shell_safe(path)) return 0;
+    if (!file_exists(path) || !file_exists(AMIMAIL_SOUNDPLAYER)) return 0;
+
+    /* Never overlap two notification/preview sounds. If the helper process is
+     * still alive, the existing sound wins and the new request is discarded.
+     * This is deliberate: a notification is optional and must never compete
+     * with itself or put pressure on the audio backend. */
+    if (notification_sound_process_active()) return 1;
+
+    written = snprintf(command, sizeof(command),
+                       "%s QUIET \"%s\"", AMIMAIL_SOUNDPLAYER, path);
+    if (written < 0 || (size_t)written >= sizeof(command)) return 0;
+
+    /* SystemTags(SYS_Asynch) transfers ownership of the supplied input handle
+     * after a successful launch. Explicit NIL: input/output keeps the detached
+     * helper completely independent from AmiMAIL's Workbench/Shell streams. */
+    input = Open((STRPTR)"NIL:", MODE_OLDFILE);
+    if (!input) return 0;
+    result = SystemTags((STRPTR)command,
+                        SYS_Asynch, TRUE,
+                        SYS_Input, input,
+                        SYS_Output, 0L,
+                        SYS_Error, 0L,
+                        NP_Name, (ULONG)(uintptr_t)AMIMAIL_SOUND_TASK_NAME,
+                        NP_StackSize, 16384UL,
+                        TAG_DONE);
+    if (result == -1) {
+        if (input) Close(input);
         return 0;
-
-    /*
-     * Do not stop/dispose a sound DataType object merely to replace it with
-     * another notification. Playback is asynchronous and an immediate
-     * STM_STOP + DisposeDTObject() sequence can race with completion/device
-     * activity on classic AmigaOS. One active notification is sufficient;
-     * duplicate requests are ignored until the current object completes.
-     */
-    if (gui->notification_sound_object)
-        return 1;
-
-    /* Clear a stale completion signal before creating the next object. */
-    SetSignal(0UL, gui->notification_sound_signal_mask);
-
-    /* Be explicit about a file source and a sound-class object. This makes
-     * extension-independent IFF/8SVX/WAV decoding the responsibility of the
-     * installed DataType subclass. */
-    tags[0].ti_Tag = DTA_GroupID;
-    tags[0].ti_Data = GID_SOUND;
-    tags[1].ti_Tag = DTA_SourceType;
-    tags[1].ti_Data = DTST_FILE;
-    tags[2].ti_Tag = SDTA_SignalTask;
-    tags[2].ti_Data =
-        (ULONG)(uintptr_t)gui->notification_sound_signal_task;
-    tags[3].ti_Tag = SDTA_SignalBit;
-    tags[3].ti_Data = gui->notification_sound_signal_mask;
-    tags[4].ti_Tag = SDTA_Volume;
-    tags[4].ti_Data = 64UL;
-    tags[5].ti_Tag = SDTA_Cycles;
-    tags[5].ti_Data = 1UL;
-    tags[6].ti_Tag = TAG_DONE;
-    tags[6].ti_Data = 0UL;
-
-    object = NewDTObjectA((APTR)path, tags);
-    if (!object) return 0;
-
-    gui->notification_sound_object = object;
-
-    /* Some classic sound DataTypes only finish loading their sample during
-     * layout. Use the same method sequence as established Amiga DataTypes
-     * programs, then trigger playback with the public varargs method rather
-     * than constructing a dtTrigger message by hand. */
-    (void)DoDTMethod(object, NULL, NULL, DTM_PROCLAYOUT, 0, 1);
-    (void)DoDTMethod(object, NULL, NULL, DTM_TRIGGER, 0, STM_PLAY, 0);
+    }
     return 1;
 }
 

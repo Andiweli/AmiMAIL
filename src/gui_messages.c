@@ -68,12 +68,14 @@ static struct Node *message_node(AmgGui *gui,
         TAG_DONE);
 }
 
-static void insert_message_node_date_desc(struct List *list,
-                                          struct Node *node,
-                                          const char *date, ULONG uid)
+static void insert_message_node_date_order(struct List *list,
+                                           struct Node *node,
+                                           const char *date, ULONG uid,
+                                           ULONG direction)
 {
     struct Node *current, *previous = NULL;
     const char *new_date = date ? date : "";
+    int descending = direction == LBMSORT_REVERSE;
     if (!list || !node) return;
 
     current = list->lh_Head;
@@ -87,13 +89,54 @@ static void insert_message_node_date_desc(struct List *list,
             LBNA_Column, 3,
             LBNCA_Text, (ULONG)(uintptr_t)&current_date,
             TAG_DONE);
-        comparison = strcmp(new_date, current_date ? (const char *)current_date : "");
-        if (comparison > 0 || (comparison == 0 && uid > current_uid))
+        comparison = strcmp(new_date,
+                            current_date ? (const char *)current_date : "");
+        if ((descending &&
+             (comparison > 0 ||
+              (comparison == 0 && uid > current_uid))) ||
+            (!descending &&
+             (comparison < 0 ||
+              (comparison == 0 && uid < current_uid))))
             break;
         previous = current;
         current = current->ln_Succ;
     }
     Insert(list, node, previous);
+}
+
+static void insert_message_node_date_desc(struct List *list,
+                                          struct Node *node,
+                                          const char *date, ULONG uid)
+{
+    insert_message_node_date_order(list, node, date, uid, LBMSORT_REVERSE);
+}
+
+static void sort_message_nodes_by_date(struct List *list, ULONG direction)
+{
+    struct List sorted;
+    struct Node *node;
+    if (!list) return;
+
+    NewList(&sorted);
+    while ((node = RemHead(list)) != NULL) {
+        STRPTR date = NULL;
+        ULONG uid = 0UL;
+        GetListBrowserNodeAttrs(
+            node,
+            LBNA_UserData, (ULONG)(uintptr_t)&uid,
+            LBNA_Column, 3,
+            LBNCA_Text, (ULONG)(uintptr_t)&date,
+            TAG_DONE);
+        /* Placeholder rows (UID 0) stay at the end. */
+        if (!uid)
+            AddTail(&sorted, node);
+        else
+            insert_message_node_date_order(
+                &sorted, node, date ? (const char *)date : "", uid,
+                direction);
+    }
+    while ((node = RemHead(&sorted)) != NULL)
+        AddTail(list, node);
 }
 
 struct Node *message_placeholder_node(const char *text)
@@ -273,15 +316,17 @@ static void address_name_only(char *sender, size_t capacity)
     if (node) AddTail(&gui->messages_list, node);
 }
 
-static void attach_messages_default_date_sort(AmgGui *gui)
+void attach_messages_default_date_sort(AmgGui *gui)
 {
     if (!gui || !gui->messages_gadget) return;
     update_message_party_column_title(gui);
+    sort_message_nodes_by_date(&gui->messages_list, LBMSORT_REVERSE);
     if (gui->columns) {
         SetLBColumnInfoAttrs(
             gui->columns,
             LBCIA_Column, 3,
             LBCIA_SortDirection, LBMSORT_REVERSE,
+            LBCIA_SortArrow, FALSE,
             TAG_DONE);
     }
     if (gui->window)
@@ -289,19 +334,62 @@ static void attach_messages_default_date_sort(AmgGui *gui)
             gui->messages_gadget, gui->window, NULL,
             LISTBROWSER_ColumnInfo, (ULONG)(uintptr_t)gui->columns,
             LISTBROWSER_Labels, (ULONG)(uintptr_t)&gui->messages_list,
-            LISTBROWSER_Selected, (ULONG)~0UL,
             LISTBROWSER_Top, 0,
-            LISTBROWSER_SortColumn, 3,
+            LISTBROWSER_SortColumn, (ULONG)~0UL,
             TAG_DONE);
     else
         SetAttrs((Object *)gui->messages_gadget,
             LISTBROWSER_ColumnInfo, (ULONG)(uintptr_t)gui->columns,
             LISTBROWSER_Labels, (ULONG)(uintptr_t)&gui->messages_list,
-            LISTBROWSER_Selected, (ULONG)~0UL,
             LISTBROWSER_Top, 0,
-            LISTBROWSER_SortColumn, 3,
+            LISTBROWSER_SortColumn, (ULONG)~0UL,
             TAG_DONE);
 }
+
+void gui_toggle_message_date_sort(AmgGui *gui)
+{
+    ULONG direction = LBMSORT_REVERSE;
+    ULONG top = 0UL;
+    if (!gui || !gui->messages_gadget || !gui->columns) return;
+
+    (void)GetLBColumnInfoAttrs(gui->columns,
+                              LBCIA_Column, 3,
+                              LBCIA_SortDirection, (ULONG)(uintptr_t)&direction,
+                              TAG_DONE);
+    direction = direction == LBMSORT_REVERSE
+        ? LBMSORT_FORWARD : LBMSORT_REVERSE;
+    GetAttr(LISTBROWSER_Top, (Object *)gui->messages_gadget, &top);
+
+    detach_listbrowser(gui->messages_gadget, gui->window);
+    sort_message_nodes_by_date(&gui->messages_list, direction);
+    SetLBColumnInfoAttrs(gui->columns,
+                         LBCIA_Column, 3,
+                         LBCIA_SortDirection, direction,
+                         LBCIA_SortArrow, FALSE,
+                         TAG_DONE);
+    if (gui->window)
+        SetGadgetAttrs(gui->messages_gadget, gui->window, NULL,
+                       LISTBROWSER_ColumnInfo,
+                           (ULONG)(uintptr_t)gui->columns,
+                       LISTBROWSER_Labels,
+                           (ULONG)(uintptr_t)&gui->messages_list,
+                       LISTBROWSER_Top, top,
+                       LISTBROWSER_SortColumn, (ULONG)~0UL,
+                       TAG_DONE);
+    else
+        SetAttrs((Object *)gui->messages_gadget,
+                 LISTBROWSER_ColumnInfo, (ULONG)(uintptr_t)gui->columns,
+                 LISTBROWSER_Labels,
+                     (ULONG)(uintptr_t)&gui->messages_list,
+                 LISTBROWSER_Top, top,
+                 LISTBROWSER_SortColumn, (ULONG)~0UL,
+                 TAG_DONE);
+
+    if (gui->window)
+        RefreshGList(gui->messages_gadget, gui->window, NULL, 1);
+    gui_draw_date_sort_icon(gui);
+}
+
 
  void show_message_placeholder(AmgGui *gui, const char *text)
 {
@@ -315,8 +403,7 @@ static void attach_messages_default_date_sort(AmgGui *gui)
     node = message_placeholder_node(text);
     if (node) AddTail(&gui->messages_list, node);
     update_message_party_column_title(gui);
-    attach_listbrowser(gui->messages_gadget, gui->window,
-                       &gui->messages_list);
+    attach_messages_default_date_sort(gui);
 }
 
 static unsigned mail_month_number(const char month[4])
@@ -474,8 +561,14 @@ void format_mail_date_local(const char *header, char *local, size_t capacity)
             while (*zone == ' ' || *zone == '\t') ++zone;
 
             if (mail_zone_minutes_east(zone, &source_minutes_east) &&
-                amg_locale_gmt_offset_minutes(&local_minutes_west)) {
-                /* struct Locale uses the opposite sign convention:
+                amg_current_gmt_offset_minutes(
+                    year, month, (unsigned int)day, (unsigned int)hour,
+                    (unsigned int)minute, &local_minutes_west)) {
+                /* The current local offset must use the same DST-aware
+                 * TZONE/TZ resolution as outgoing Date: headers.  Classic
+                 * locale.library often only exposes the base CET offset,
+                 * which made summertime messages appear one hour early.
+                 * The resolved value keeps struct Locale's sign convention:
                  * positive is west of GMT, negative is east. */
                 minute_of_day -= source_minutes_east;
                 minute_of_day -= local_minutes_west;
@@ -645,6 +738,7 @@ size_t update_messages_from_payload(AmgGui *gui,
     size_t position = 0U, added = 0U;
     int result = 0;
     ULONG old_top = 0UL;
+    ULONG sort_direction = LBMSORT_REVERSE;
     ULONG selected_uid;
     AmgImapFetchRecord record;
     struct Node *node, *next;
@@ -653,6 +747,11 @@ size_t update_messages_from_payload(AmgGui *gui,
     if (!gui || !gui->messages_gadget) return 0U;
     selected_uid = gui->active_message_uid;
     GetAttr(LISTBROWSER_Top, (Object *)gui->messages_gadget, &old_top);
+    if (gui->columns)
+        (void)GetLBColumnInfoAttrs(gui->columns,
+                                  LBCIA_Column, 3,
+                                  LBCIA_SortDirection, (ULONG)(uintptr_t)&sort_direction,
+                                  TAG_DONE);
     detach_listbrowser(gui->messages_gadget, gui->window);
 
     /* Platzhalter aus einer zuvor leeren Inbox entfernen, sobald echte
@@ -720,10 +819,12 @@ size_t update_messages_from_payload(AmgGui *gui,
     }
 
     update_message_party_column_title(gui);
+    sort_message_nodes_by_date(&gui->messages_list, sort_direction);
     if (gui->columns) {
         SetLBColumnInfoAttrs(gui->columns,
                              LBCIA_Column, 3,
-                             LBCIA_SortDirection, LBMSORT_REVERSE,
+                             LBCIA_SortDirection, sort_direction,
+                             LBCIA_SortArrow, FALSE,
                              TAG_DONE);
     }
     if (gui->window)
@@ -732,19 +833,17 @@ size_t update_messages_from_payload(AmgGui *gui,
                            (ULONG)(uintptr_t)gui->columns,
                        LISTBROWSER_Labels,
                            (ULONG)(uintptr_t)&gui->messages_list,
-                       LISTBROWSER_Selected, (ULONG)~0UL,
                        LISTBROWSER_Top,
                            old_top ? old_top + (ULONG)added : 0UL,
-                       LISTBROWSER_SortColumn, 3,
+                       LISTBROWSER_SortColumn, (ULONG)~0UL,
                        TAG_DONE);
     else
         SetAttrs((Object *)gui->messages_gadget,
                  LISTBROWSER_ColumnInfo, (ULONG)(uintptr_t)gui->columns,
                  LISTBROWSER_Labels,
                      (ULONG)(uintptr_t)&gui->messages_list,
-                 LISTBROWSER_Selected, (ULONG)~0UL,
                  LISTBROWSER_Top, old_top ? old_top + (ULONG)added : 0UL,
-                 LISTBROWSER_SortColumn, 3,
+                 LISTBROWSER_SortColumn, (ULONG)~0UL,
                  TAG_DONE);
     if (selected_uid)
         set_message_selected_visual(gui, selected_uid);
@@ -752,71 +851,6 @@ size_t update_messages_from_payload(AmgGui *gui,
     return added;
 }
 
-
-void normalize_message_selection_for_click(AmgGui *gui)
-{
-    struct Node *target = NULL;
-    struct Node *node;
-    ULONG release_event = LBRE_NORMAL;
-    ULONG target_uid = 0UL;
-    int changed = 0;
-
-    if (!gui || !gui->messages_gadget) return;
-
-    GetAttr(LISTBROWSER_RelEvent, (Object *)gui->messages_gadget,
-            &release_event);
-    if (release_event == LBRE_TITLECLICK) return;
-
-    GetAttr(LISTBROWSER_CursorNode, (Object *)gui->messages_gadget,
-            (ULONG *)&target);
-    if (!target)
-        GetAttr(LISTBROWSER_SelectedNode, (Object *)gui->messages_gadget,
-                (ULONG *)&target);
-    if (!target) return;
-
-    GetListBrowserNodeAttrs(
-        target, LBNA_UserData, (ULONG)(uintptr_t)&target_uid, TAG_DONE);
-    if (!target_uid) return;
-
-    node = gui->messages_list.lh_Head;
-    while (node && node->ln_Succ) {
-        ULONG selected = FALSE;
-        ULONG desired = node == target ? TRUE : FALSE;
-        GetListBrowserNodeAttrs(
-            node, LBNA_Selected, (ULONG)(uintptr_t)&selected, TAG_DONE);
-        if (selected != desired) {
-            struct TagItem tags[2];
-            struct lbEditNode edit;
-            tags[0].ti_Tag = LBNA_Selected;
-            tags[0].ti_Data = desired;
-            tags[1].ti_Tag = TAG_DONE;
-            tags[1].ti_Data = 0UL;
-            edit.MethodID = LBM_EDITNODE;
-            edit.lbe_GInfo = NULL;
-            edit.lbe_Node = node;
-            edit.lbe_NodeAttrs = tags;
-            if (gui->window)
-                (void)DoGadgetMethodA(gui->messages_gadget, gui->window,
-                                      NULL, (Msg)&edit);
-            else
-                SetListBrowserNodeAttrsA(node, tags);
-            changed = 1;
-        }
-        node = node->ln_Succ;
-    }
-
-    if (gui->window) {
-        SetGadgetAttrs(gui->messages_gadget, gui->window, NULL,
-                       LISTBROWSER_SelectedNode, (ULONG)(uintptr_t)target,
-                       TAG_DONE);
-        if (changed)
-            RefreshGList(gui->messages_gadget, gui->window, NULL, 1);
-    } else {
-        SetAttrs((Object *)gui->messages_gadget,
-                 LISTBROWSER_SelectedNode, (ULONG)(uintptr_t)target,
-                 TAG_DONE);
-    }
-}
 
  size_t selected_message_uids(AmgGui *gui, ULONG *uids,
                                     size_t capacity)

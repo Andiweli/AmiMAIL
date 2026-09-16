@@ -172,8 +172,7 @@ ULONG gui_runtime_signal_mask(AmgGui *gui)
            app_port_signal_mask(gui) |
            network_signals |
            periodic_timer_signal_mask(gui) |
-           gui->preview_url_signal_mask |
-           gui_notify_signal_mask(gui);
+           gui->preview_url_signal_mask;
 }
 
 void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
@@ -183,7 +182,6 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
     ULONG app_signal;
     ULONG network_signal = 0UL;
     ULONG timer_signal;
-    ULONG notify_signal;
 
     if (!gui) return;
     app_signal = app_port_signal_mask(gui);
@@ -193,14 +191,8 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
             network_signal |= amg_network_signal_mask(gui->networks[index]);
     }
     timer_signal = periodic_timer_signal_mask(gui);
-    notify_signal = gui_notify_signal_mask(gui);
     if (gui->window_object)
         GetAttr(WINDOW_SigMask, gui->window_object, &window_signal);
-
-    /* A completed sound is handled before network events.  Otherwise an old
-     * completion signal could dispose a newly-started notification object. */
-    if (notify_signal && (signals & notify_signal))
-        gui_notify_handle_signal(gui);
 
     if (network_signal && (signals & network_signal)) {
         size_t index;
@@ -318,7 +310,6 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
             1UL << (ULONG)gui->preview_url_signal_bit;
     else
         gui->preview_url_signal_mask = 0UL;
-    (void)gui_notify_init(gui);
 
     /* Never interrupt startup with master-password requesters.  Accounts
      * saved by this version carry an automatic startup key.  A migrated
@@ -389,7 +380,6 @@ int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,
         gui->preview_url_signal_mask = 0UL;
     }
     gui->preview_url_signal_task = NULL;
-    gui_notify_cleanup(gui);
     periodic_timer_cleanup(gui);
     gui_state_save_window(gui);
     gui_state_set_mail_status_inactive();

@@ -76,6 +76,65 @@ int amg_base64url_encode(const unsigned char *input, size_t length, AmgBuffer *o
     return AMG_OK;
 }
 
+int amg_quoted_printable_encode(const char *input, size_t length, AmgBuffer *output)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t i = 0;
+    size_t column = 0;
+
+    if ((!input && length) || !output) return AMG_ERR_ARGUMENT;
+
+    while (i < length) {
+        unsigned char c = (unsigned char)input[i];
+        unsigned char encoded[3];
+        const unsigned char *token;
+        size_t token_length;
+        int trailing_whitespace;
+
+        /* Normalize every source line ending to Internet CRLF. */
+        if (c == '\r' || c == '\n') {
+            if (c == '\r' && i + 1U < length && input[i + 1U] == '\n')
+                ++i;
+            if (amg_buffer_append_cstr(output, "\r\n") != AMG_OK)
+                return AMG_ERR_MEMORY;
+            column = 0;
+            ++i;
+            continue;
+        }
+
+        trailing_whitespace =
+            (c == ' ' || c == '\t') &&
+            (i + 1U == length || input[i + 1U] == '\r' ||
+             input[i + 1U] == '\n');
+
+        if (((c >= 33U && c <= 60U) || (c >= 62U && c <= 126U)) ||
+            ((c == ' ' || c == '\t') && !trailing_whitespace)) {
+            encoded[0] = c;
+            token = encoded;
+            token_length = 1U;
+        } else {
+            encoded[0] = '=';
+            encoded[1] = (unsigned char)hex[c >> 4];
+            encoded[2] = (unsigned char)hex[c & 15U];
+            token = encoded;
+            token_length = 3U;
+        }
+
+        /* RFC 2045 limits quoted-printable encoded lines to 76 characters.
+         * Reserve the 76th column for '=' on a soft line break. */
+        if (column + token_length > 75U) {
+            if (amg_buffer_append_cstr(output, "=\r\n") != AMG_OK)
+                return AMG_ERR_MEMORY;
+            column = 0;
+        }
+        if (amg_buffer_append(output, token, token_length) != AMG_OK)
+            return AMG_ERR_MEMORY;
+        column += token_length;
+        ++i;
+    }
+    return AMG_OK;
+}
+
 static int hex_value(unsigned char c)
 {
     if (c >= '0' && c <= '9') return c - '0';

@@ -308,7 +308,9 @@ Antworten, Allen Antworten, Weiterleitungen und mailto:-Entwürfe eingefügt.
 
 @NODE NOTIFY "Benachrichtigungen und Iconify"
 AmiMAIL kann beim Eintreffen neuer Mails für jedes aktive Konto einen
-konfigurierten Benachrichtigungston über AmigaOS DataTypes abspielen.
+konfigurierten Benachrichtigungston über den AmigaOS-3.2-SoundPlayer
+abspielen. Die Wiedergabe läuft in einem separaten Prozess, damit ein aktiver
+Sound nie zum AmiMAIL-GUI-Task gehört.
 
 Das Hauptfenster kann iconifiziert werden. Die Netzwerk-Worker der aktiven
 Konten, periodischer Abruf und Statusverwaltung laufen im Hintergrund weiter.

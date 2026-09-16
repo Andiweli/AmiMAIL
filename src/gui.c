@@ -1,4 +1,5 @@
 #include "gui_internal.h"
+#include "gui_icons.h"
 #include "banner_data.h"
 #include "buffer.h"
 #include "codec.h"
@@ -18,7 +19,6 @@
 #include <dos/dos.h>
 #include <devices/timer.h>
 #include <devices/inputevent.h>
-#include <datatypes/datatypes.h>
 #include <exec/io.h>
 #include <exec/libraries.h>
 #include <exec/lists.h>
@@ -41,7 +41,6 @@
 #include <proto/asl.h>
 #include <proto/button.h>
 #include <proto/clicktab.h>
-#include <proto/datatypes.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
 #include <proto/graphics.h>
@@ -74,7 +73,6 @@ struct Library *StringBase=NULL;
 struct Library *TextEditorBase=NULL;
 struct Library *OpenURLBase=NULL;
 struct Library *AslBase=NULL;
-struct Library *DataTypesBase=NULL;
 struct Library *IconBase=NULL;
 struct GfxBase *GfxBase=NULL;
 #define GUI_RAWKEY_KEYPAD_ENTER 0x43UL
@@ -122,21 +120,6 @@ int rawkey_is_help(ULONG result)
            (result & WMHI_KEYMASK) == GUI_RAWKEY_HELP;
 }
 
-int input_event_has_multiselect_qualifier(Object *window_object)
-{
-    ULONG input_event_value = 0UL;
-    struct InputEvent *input_event;
-    UWORD qualifiers;
-
-    if (!window_object) return 0;
-    GetAttr(WINDOW_InputEvent, window_object, &input_event_value);
-    input_event = (struct InputEvent *)(uintptr_t)input_event_value;
-    if (!input_event) return 0;
-
-    qualifiers = input_event->ie_Qualifier;
-    return (qualifiers & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT |
-                          IEQUALIFIER_CONTROL)) != 0;
-}
 Object *static_text_label(const char *text)
 {
     return NewObject(NULL, (CONST_STRPTR)"button.gadget",
@@ -164,7 +147,6 @@ static int open_classes(void)
      * funktionsfaehig, lediglich das Oeffnen erkannter URLs entfaellt. */
     OpenURLBase = OpenLibrary((CONST_STRPTR)"openurl.library", 0);
     AslBase = OpenLibrary((CONST_STRPTR)"asl.library", 37);
-    DataTypesBase = OpenLibrary((CONST_STRPTR)"datatypes.library", 44);
     IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 39);
     GfxBase = (struct GfxBase *)
         OpenLibrary((CONST_STRPTR)"graphics.library", 39);
@@ -175,7 +157,6 @@ static int open_classes(void)
 static void close_classes(void)
 {
     if (IconBase) CloseLibrary(IconBase);
-    if (DataTypesBase) CloseLibrary(DataTypesBase);
     if (AslBase) CloseLibrary(AslBase);
     if (OpenURLBase) CloseLibrary(OpenURLBase);
     if (TextEditorBase) CloseLibrary(TextEditorBase);
@@ -188,7 +169,6 @@ static void close_classes(void)
     if (WindowBase) CloseLibrary(WindowBase);
     if (GfxBase) CloseLibrary((struct Library *)GfxBase);
     IconBase = NULL;
-    DataTypesBase = NULL;
     AslBase = NULL;
     OpenURLBase = NULL;
     TextEditorBase = NULL;
@@ -764,12 +744,15 @@ static void reset_account_view(AmgGui *gui)
     NewList(&gui->messages_list);
     default_labels(gui);
     default_messages(gui);
-    attach_listbrowser(gui->messages_gadget, gui->window,
-                       &gui->messages_list);
+    attach_messages_default_date_sort(gui);
     set_preview_local(gui,
         T(MSG_SELECT_A_MESSAGE_AFTER_FETCHING,
           "Select a message after fetching."));
     gui->active_message_uid = 0UL;
+    free(gui->move_uids);
+    gui->move_uids = NULL;
+    gui->move_uid_count = 0U;
+    gui->move_source_mailbox_utf8[0] = 0;
     gui->move_pending = 0;
 }
 
@@ -848,13 +831,19 @@ AmgGui *amg_gui_create(AmgAccountSet *accounts, AmgError *error)
         close_classes();
         return NULL;
     }
+    if (!gui_icons_init()) {
+        free(gui);
+        close_classes();
+        amg_error_set(error, AMG_ERR_MEMORY,
+                      "GUI arrow images could not be created.");
+        return NULL;
+    }
     gui->account_set = accounts;
     gui->active_account = accounts->current < AMG_MAX_ACCOUNTS
         ? accounts->current : amg_account_set_first_enabled(accounts);
     if (!accounts->accounts[gui->active_account].enabled)
         gui->active_account = amg_account_set_first_enabled(accounts);
     gui->account = &accounts->accounts[gui->active_account];
-    gui->notification_sound_signal_bit = -1;
     gui->preview_url_signal_bit = -1;
     gui->account_tab_unread_pen = -1L;
     gui_state_set_mail_status_active();
@@ -886,7 +875,6 @@ void amg_gui_destroy(AmgGui *gui)
     size_t i;
     if (!gui) return;
     periodic_timer_cleanup(gui);
-    gui_notify_cleanup(gui);
 
     /* Stop all worker processes before tearing down ReAction objects, lists
      * and the public screen. A folder fetch or message request may still be
@@ -943,6 +931,10 @@ void amg_gui_destroy(AmgGui *gui)
     for (i = 0; i < AMG_MAX_ACCOUNTS; ++i)
         amg_network_destroy(gui->networks[i]);
     gui_state_set_mail_status_inactive();
+    free(gui->move_uids);
+    gui->move_uids = NULL;
+    gui->move_uid_count = 0U;
+    gui_icons_cleanup();
     free(gui);
     close_classes();
 }

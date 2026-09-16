@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#define SMTP_HEADER_RECOMMENDED_LINE 78U
+#define SMTP_MAX_CONTENT_LINE 998U
+
 static int header_safe(const char *value)
 {
     return value && !strchr(value, '\r') && !strchr(value, '\n');
@@ -69,32 +72,56 @@ int amg_smtp_reply_subject(const char *subject, AmgBuffer *output)
 
 static int append_header(AmgBuffer *output, const char *name, const char *value)
 {
-    if (!header_safe(value)) return AMG_ERR_ARGUMENT;
-    if (amg_buffer_append_cstr(output, name) != AMG_OK ||
-        amg_buffer_append_cstr(output, ": ") != AMG_OK ||
-        amg_buffer_append_cstr(output, value) != AMG_OK ||
-        amg_buffer_append_cstr(output, "\r\n") != AMG_OK)
-        return AMG_ERR_MEMORY;
-    return AMG_OK;
-}
+    const char *p;
+    size_t column;
+    int result;
 
-static int append_crlf_body(const char *body, AmgBuffer *output)
-{
-    const unsigned char *p = (const unsigned char *)(body ? body : "");
+    if (!output || !name || !*name || !header_safe(value))
+        return AMG_ERR_ARGUMENT;
+
+    result = amg_buffer_append_cstr(output, name);
+    if (result == AMG_OK) result = amg_buffer_append_cstr(output, ": ");
+    if (result != AMG_OK) return AMG_ERR_MEMORY;
+    column = strlen(name) + 2U;
+    if (column > SMTP_MAX_CONTENT_LINE) return AMG_ERR_LIMIT;
+
+    p = value;
     while (*p) {
-        if (*p == '\r') {
-            if (p[1] == '\n') ++p;
-            if (amg_buffer_append_cstr(output, "\r\n") != AMG_OK)
-                return AMG_ERR_MEMORY;
-        } else if (*p == '\n') {
-            if (amg_buffer_append_cstr(output, "\r\n") != AMG_OK)
-                return AMG_ERR_MEMORY;
-        } else if (amg_buffer_append_char(output, *p) != AMG_OK) {
-            return AMG_ERR_MEMORY;
+        if (*p == ' ' || *p == '\t') {
+            const char *word = p;
+            const char *end;
+            size_t upcoming;
+
+            while (*word == ' ' || *word == '\t') ++word;
+            end = word;
+            while (*end && *end != ' ' && *end != '\t') ++end;
+            upcoming = (size_t)(end - p);
+
+            /* Replace the existing folding whitespace by CRLF + that same
+             * whitespace.  Unfolding therefore reproduces the original
+             * header value instead of inserting or deleting characters. */
+            if (*word && column + upcoming > SMTP_HEADER_RECOMMENDED_LINE) {
+                if (amg_buffer_append_cstr(output, "\r\n") != AMG_OK)
+                    return AMG_ERR_MEMORY;
+                column = 0;
+            }
         }
+
+        if (column + 1U > SMTP_MAX_CONTENT_LINE)
+            return AMG_ERR_LIMIT;
+        if (amg_buffer_append_char(output, (unsigned char)*p) != AMG_OK)
+            return AMG_ERR_MEMORY;
+        ++column;
         ++p;
     }
-    return AMG_OK;
+
+    return amg_buffer_append_cstr(output, "\r\n");
+}
+
+static int append_quoted_printable_body(const char *body, AmgBuffer *output)
+{
+    const char *text = body ? body : "";
+    return amg_quoted_printable_encode(text, strlen(text), output);
 }
 
 int amg_smtp_build_reply(const AmgReplyDraft *draft, AmgBuffer *output,
@@ -131,9 +158,9 @@ int amg_smtp_build_reply(const AmgReplyDraft *draft, AmgBuffer *output,
             &raw,
             "MIME-Version: 1.0\r\n"
             "Content-Type: text/plain; charset=UTF-8\r\n"
-            "Content-Transfer-Encoding: 8bit\r\n\r\n");
+            "Content-Transfer-Encoding: quoted-printable\r\n\r\n");
     if (result == AMG_OK)
-        result = append_crlf_body(draft->body_utf8, &raw);
+        result = append_quoted_printable_body(draft->body_utf8, &raw);
     if (result == AMG_OK &&
         (raw.length < 2U || raw.data[raw.length - 2U] != '\r' ||
          raw.data[raw.length - 1U] != '\n'))
@@ -820,14 +847,15 @@ static int append_mail_headers_common(const AmgMailDraft *draft,
             result = amg_buffer_append_cstr(
                 output,
                 "\r\nContent-Type: text/plain; charset=UTF-8\r\n"
-                "Content-Transfer-Encoding: 8bit\r\n\r\n");
+                "Content-Transfer-Encoding: quoted-printable\r\n\r\n");
     } else if (result == AMG_OK) {
         result = amg_buffer_append_cstr(
             output,
             "Content-Type: text/plain; charset=UTF-8\r\n"
-            "Content-Transfer-Encoding: 8bit\r\n\r\n");
+            "Content-Transfer-Encoding: quoted-printable\r\n\r\n");
     }
-    if (result == AMG_OK) result = append_crlf_body(draft->body_utf8, output);
+    if (result == AMG_OK)
+        result = append_quoted_printable_body(draft->body_utf8, output);
     if (result == AMG_OK &&
         (output->length < 2U || output->data[output->length - 2U] != '\r' ||
          output->data[output->length - 1U] != '\n'))

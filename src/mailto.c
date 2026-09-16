@@ -54,6 +54,111 @@ static int ascii_prefix_nocase(const char *text, const char *prefix)
     return 1;
 }
 
+static int email_local_char(unsigned char c)
+{
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9'))
+        return 1;
+    switch (c) {
+        case '!': case '#': case '$': case '%': case '&': case '\'':
+        case '*': case '+': case '-': case '/': case '=': case '?':
+        case '^': case '_': case '`': case '{': case '|': case '}':
+        case '~': case '.':
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int email_domain_char(unsigned char c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '-' || c == '.';
+}
+
+static int email_token_char(unsigned char c)
+{
+    return c == '@' || email_local_char(c) || email_domain_char(c);
+}
+
+size_t amg_email_address_token_length(const char *text)
+{
+    size_t pos = 0U, local_end, domain_start, end;
+    int previous_dot = 0;
+    if (!text || !text[0] || text[0] == '.') return 0U;
+
+    while (text[pos] && email_local_char((unsigned char)text[pos])) {
+        if (text[pos] == '.') {
+            if (previous_dot) return 0U;
+            previous_dot = 1;
+        } else {
+            previous_dot = 0;
+        }
+        ++pos;
+    }
+    local_end = pos;
+    if (!local_end || text[local_end - 1U] == '.' || text[pos] != '@')
+        return 0U;
+
+    ++pos;
+    domain_start = pos;
+    previous_dot = 0;
+    if (!text[pos] || text[pos] == '.' || text[pos] == '-') return 0U;
+    while (text[pos] && email_domain_char((unsigned char)text[pos])) {
+        if (text[pos] == '.') {
+            if (previous_dot) return 0U;
+            previous_dot = 1;
+        } else {
+            previous_dot = 0;
+        }
+        ++pos;
+    }
+    end = pos;
+    while (end > domain_start &&
+           (text[end - 1U] == '.' || text[end - 1U] == '-'))
+        --end;
+    if (end <= domain_start || text[end - 1U] == '.') return 0U;
+    return end;
+}
+
+int amg_mailto_url_from_email_at(const char *line, size_t click_position,
+                                 char *url, size_t capacity)
+{
+    static const char prefix[] = "mailto:";
+    size_t length, pos, start, address_length;
+    if (!line || !url || !capacity) return 0;
+    url[0] = 0;
+    length = strlen(line);
+    if (!length) return 0;
+    pos = click_position;
+    if (pos >= length) pos = length - 1U;
+    if (!email_token_char((unsigned char)line[pos])) {
+        if (pos == 0U || !email_token_char((unsigned char)line[pos - 1U]))
+            return 0;
+        --pos;
+    }
+    start = pos;
+    while (start > 0U &&
+           email_token_char((unsigned char)line[start - 1U]))
+        --start;
+    /* Preview link styling uses ESC + 'u' before underlined text.  Some
+     * texteditor.gadget versions expose that style marker in LineContents,
+     * so do not accidentally treat the marker's 'u' as part of the address. */
+    if (start > 0U && (unsigned char)line[start - 1U] == 0x1bU &&
+        (line[start] == 'u' || line[start] == 'b' ||
+         line[start] == 'i' || line[start] == 'n'))
+        ++start;
+    address_length = amg_email_address_token_length(line + start);
+    if (!address_length || pos < start || pos >= start + address_length)
+        return 0;
+    if (sizeof(prefix) - 1U + address_length + 1U > capacity)
+        return 0;
+    memcpy(url, prefix, sizeof(prefix) - 1U);
+    memcpy(url + sizeof(prefix) - 1U, line + start, address_length);
+    url[sizeof(prefix) - 1U + address_length] = 0;
+    return 1;
+}
+
 static int hex_value(unsigned char c)
 {
     if (c >= '0' && c <= '9') return (int)(c - '0');
