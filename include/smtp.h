@@ -15,8 +15,7 @@ typedef struct AmgReplyDraft {
     const char *message_id;
 } AmgReplyDraft;
 
-#define AMG_MAIL_MAX_ATTACHMENTS 8U
-#define AMG_MAIL_MAX_ATTACHMENT_TOTAL (10UL * 1024UL * 1024UL)
+#define AMG_MAIL_MAX_ATTACHMENT_TOTAL (20UL * 1024UL * 1024UL)
 #define AMG_MAIL_REPLY_UID_HEADER "X-AmiMAIL-Reply-UID"
 #define AMG_MAIL_REPLY_UIDVALIDITY_HEADER "X-AmiMAIL-Reply-UIDValidity"
 #define AMG_MAIL_REPLY_MAILBOX_HEADER "X-AmiMAIL-Reply-Mailbox"

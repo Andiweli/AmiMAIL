@@ -88,8 +88,9 @@ typedef struct DraftEditData {
     char reply_source_mailbox_utf8[512];
     unsigned long reply_source_uid;
     unsigned long reply_source_uid_validity;
-    ComposeAttachment attachments[AMG_MAIL_MAX_ATTACHMENTS];
+    ComposeAttachment *attachments;
     size_t attachment_count;
+    size_t attachment_capacity;
 } DraftEditData;
 
 typedef struct GuiLabel {

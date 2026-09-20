@@ -592,6 +592,33 @@ static void cleanup_compose_attachments(ComposeAttachment *attachments,
     }
 }
 
+static int reserve_compose_attachments(ComposeAttachment **attachments,
+                                       size_t *capacity, size_t needed)
+{
+    ComposeAttachment *grown;
+    size_t new_capacity;
+    if (!attachments || !capacity) return 0;
+    if (needed <= *capacity) return 1;
+    if (needed > ((size_t)-1) / sizeof(**attachments)) return 0;
+    new_capacity = *capacity ? *capacity : 4U;
+    while (new_capacity < needed) {
+        if (new_capacity > ((size_t)-1) / 2U) {
+            new_capacity = needed;
+            break;
+        }
+        new_capacity *= 2U;
+    }
+    if (new_capacity > ((size_t)-1) / sizeof(**attachments)) return 0;
+    grown = (ComposeAttachment *)realloc(
+        *attachments, new_capacity * sizeof(**attachments));
+    if (!grown) return 0;
+    memset(grown + *capacity, 0,
+           (new_capacity - *capacity) * sizeof(*grown));
+    *attachments = grown;
+    *capacity = new_capacity;
+    return 1;
+}
+
 static int write_compose_attachment_temp(ComposeAttachment *attachment,
                                        unsigned long uid, size_t index,
                                        const char *name_utf8,
@@ -656,7 +683,10 @@ void cleanup_draft_edit_files(DraftEditData *seed)
 {
     if (!seed) return;
     cleanup_compose_attachments(seed->attachments, seed->attachment_count);
+    free(seed->attachments);
+    seed->attachments = NULL;
     seed->attachment_count = 0U;
+    seed->attachment_capacity = 0U;
 }
 
 static void restore_draft_reply_source(const AmgMailHeaders *headers,
@@ -774,13 +804,15 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
                                        record.literal_length,
                                        &attachment_count, error);
     if (result != AMG_OK) goto done;
-    if (attachment_count > AMG_MAIL_MAX_ATTACHMENTS) {
-        result = AMG_ERR_LIMIT;
+    if (attachment_count &&
+        !reserve_compose_attachments(&seed->attachments,
+                                     &seed->attachment_capacity,
+                                     attachment_count)) {
+        result = AMG_ERR_MEMORY;
         amg_error_set(error, result,
-                      T(MSG_THE_DRAFT_CONTAINS_MORE_THAN_8_ATTACHMENTS, "The draft contains more than 8 attachments."));
+                      T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
         goto done;
     }
-
     for (i = 0U; i < attachment_count; ++i) {
         AmgBuffer name_utf8, data;
         amg_buffer_init(&name_utf8);
@@ -794,7 +826,7 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
                           attachment_total_bytes) {
             result = AMG_ERR_LIMIT;
             amg_error_set(error, result,
-                          T(MSG_DRAFT_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Draft attachments total more than 10 MB."));
+                          T(MSG_DRAFT_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Draft attachments total more than 20 MB."));
         }
         if (result == AMG_OK)
             result = write_compose_attachment_temp(
@@ -1256,10 +1288,13 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
                                        record.literal_length,
                                        &attachment_count, error);
     if (result != AMG_OK) goto done;
-    if (attachment_count > AMG_MAIL_MAX_ATTACHMENTS) {
-        result = AMG_ERR_LIMIT;
+    if (attachment_count &&
+        !reserve_compose_attachments(&seed->attachments,
+                                     &seed->attachment_capacity,
+                                     attachment_count)) {
+        result = AMG_ERR_MEMORY;
         amg_error_set(error, result,
-                      T(MSG_THE_MESSAGE_CONTAINS_MORE_THAN_8_ATTACHMENTS, "The message contains more than 8 attachments."));
+                      T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
         goto done;
     }
     for (i = 0U; i < attachment_count; ++i) {
@@ -1275,7 +1310,7 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
                           attachment_total_bytes) {
             result = AMG_ERR_LIMIT;
             amg_error_set(error, result,
-                          T(MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Attachments total more than 10 MB."));
+                          T(MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Attachments total more than 20 MB."));
         }
         if (result == AMG_OK)
             result = write_compose_attachment_temp(
@@ -1356,23 +1391,20 @@ static void update_compose_status(struct Gadget *status_gadget,
 {
     char text[160];
     unsigned long total = attachment_total(attachments, count);
-    amg_tr_snprintf(text, sizeof(text), MSG_VALUE_ATTACHMENT_S_VALUE_KB_OF_10240_KB, "%lu attachment(s), %lu KB of 10240 KB", (unsigned long)count, (total + 1023UL) / 1024UL);
+    amg_tr_snprintf(text, sizeof(text), MSG_VALUE_ATTACHMENT_S_VALUE_KB_OF_10240_KB, "%lu attachment(s), %lu KB of 20480 KB", (unsigned long)count, (total + 1023UL) / 1024UL);
     set_string(status_gadget, window, text);
 }
 
 static int add_attachment(struct Window *window, struct Gadget *list_gadget,
                           struct Gadget *status_gadget, struct List *list,
-                          ComposeAttachment *attachments, size_t *count)
+                          ComposeAttachment **attachments, size_t *count,
+                          size_t *capacity)
 {
     struct FileRequester *request;
     char path[COMPOSE_PATH_MAX];
     unsigned long size, total;
     size_t i;
-    if (*count >= AMG_MAIL_MAX_ATTACHMENTS) {
-        set_string(status_gadget, window,
-                   T(MSG_A_MAXIMUM_OF_8_ATTACHMENTS_IS_ALLOWED, "A maximum of 8 attachments is allowed."));
-        return 0;
-    }
+    if (!attachments || !count || !capacity) return 0;
     request = (struct FileRequester *)AllocAslRequestTags(
         ASL_FileRequest,
         ASLFR_TitleText, (ULONG)(uintptr_t)T(MSG_SELECT_ATTACHMENT, "Select attachment"),
@@ -1395,11 +1427,12 @@ static int add_attachment(struct Window *window, struct Gadget *list_gadget,
     if (!AddPart((STRPTR)path, request->rf_File,
                  (LONG)sizeof(path))) {
         FreeAslRequest(request);
-        set_string(status_gadget, window, T(MSG_FILE_PATH_IS_TOO_LONG, "File path is too long."));
+        set_string(status_gadget, window,
+                   T(MSG_FILE_PATH_IS_TOO_LONG, "File path is too long."));
         return 0;
     }
     for (i = 0; i < *count; ++i) {
-        if (!strcmp(attachments[i].path, path)) {
+        if (!strcmp((*attachments)[i].path, path)) {
             FreeAslRequest(request);
             set_string(status_gadget, window,
                        T(MSG_THIS_FILE_IS_ALREADY_ATTACHED, "This file is already attached."));
@@ -1412,31 +1445,38 @@ static int add_attachment(struct Window *window, struct Gadget *list_gadget,
                    T(MSG_FILE_COULD_NOT_BE_READ, "File could not be read."));
         return 0;
     }
-    total = attachment_total(attachments, *count);
+    total = attachment_total(*attachments, *count);
     if (size > AMG_MAIL_MAX_ATTACHMENT_TOTAL - total) {
         FreeAslRequest(request);
         set_string(status_gadget, window,
-                   T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_LOCAL, "Attachments may total no more than 10 MB."));
+                   T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_LOCAL,
+                     "Attachments may total no more than 20 MB."));
         return 0;
     }
-    strncpy(attachments[*count].path, path,
-            sizeof(attachments[*count].path) - 1U);
-    attachments[*count].path[sizeof(attachments[*count].path) - 1U] = 0;
-    strncpy(attachments[*count].name_local,
+    if (!reserve_compose_attachments(attachments, capacity, *count + 1U)) {
+        FreeAslRequest(request);
+        set_string(status_gadget, window,
+                   T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+        return 0;
+    }
+    strncpy((*attachments)[*count].path, path,
+            sizeof((*attachments)[*count].path) - 1U);
+    (*attachments)[*count].path[sizeof((*attachments)[*count].path) - 1U] = 0;
+    strncpy((*attachments)[*count].name_local,
             request->rf_File ? (const char *)request->rf_File : "attachment.bin",
-            sizeof(attachments[*count].name_local) - 1U);
-    attachments[*count].name_local[
-        sizeof(attachments[*count].name_local) - 1U] = 0;
-    if (local_to_utf8(attachments[*count].name_local,
-                      attachments[*count].name_utf8,
-                      sizeof(attachments[*count].name_utf8)) != AMG_OK)
-        strcpy(attachments[*count].name_utf8, "attachment.bin");
-    attachments[*count].size = size;
-    attachments[*count].temporary = 0;
+            sizeof((*attachments)[*count].name_local) - 1U);
+    (*attachments)[*count].name_local[
+        sizeof((*attachments)[*count].name_local) - 1U] = 0;
+    if (local_to_utf8((*attachments)[*count].name_local,
+                      (*attachments)[*count].name_utf8,
+                      sizeof((*attachments)[*count].name_utf8)) != AMG_OK)
+        strcpy((*attachments)[*count].name_utf8, "attachment.bin");
+    (*attachments)[*count].size = size;
+    (*attachments)[*count].temporary = 0;
     ++*count;
     FreeAslRequest(request);
-    rebuild_attachment_list(list_gadget, window, list, attachments, *count);
-    update_compose_status(status_gadget, window, attachments, *count);
+    rebuild_attachment_list(list_gadget, window, list, *attachments, *count);
+    update_compose_status(status_gadget, window, *attachments, *count);
     return 1;
 }
 
@@ -1558,7 +1598,7 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
     char from_header[768];
     char date[96], message_id[256];
     AmgBuffer body_utf8;
-    AmgAttachmentInput inputs[AMG_MAIL_MAX_ATTACHMENTS];
+    AmgAttachmentInput *inputs = NULL;
     AmgMailDraft draft;
     const unsigned char *p;
     STRPTR body_local = NULL;
@@ -1612,6 +1652,24 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
         amg_error_set(error, result, T(MSG_MAIL_TEXT_IS_TOO_LARGE, "Mail text is too large."));
         return result;
     }
+    if (attachment_count) {
+        if (attachment_count > ((size_t)-1) / sizeof(*inputs)) {
+            amg_buffer_free(&body_utf8);
+            FreeVec(body_local);
+            amg_error_set(error, AMG_ERR_MEMORY,
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+            return AMG_ERR_MEMORY;
+        }
+        inputs = (AmgAttachmentInput *)calloc(attachment_count,
+                                               sizeof(*inputs));
+        if (!inputs) {
+            amg_buffer_free(&body_utf8);
+            FreeVec(body_local);
+            amg_error_set(error, AMG_ERR_MEMORY,
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+            return AMG_ERR_MEMORY;
+        }
+    }
     for (i = 0; i < attachment_count; ++i) {
         inputs[i].path = attachments[i].path;
         inputs[i].name_utf8 = attachments[i].name_utf8;
@@ -1619,6 +1677,7 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
         inputs[i].delete_after_use = attachments[i].temporary;
     }
     if (make_date_and_message_id(date, message_id) != AMG_OK) {
+        free(inputs);
         amg_buffer_free(&body_utf8);
         FreeVec(body_local);
         amg_error_set(error, AMG_ERR_IO,
@@ -1696,6 +1755,7 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
             result = amg_network_request_mail(gui->network, &draft, error);
         }
     }
+    free(inputs);
     amg_buffer_free(&body_utf8);
     FreeVec(body_local);
     return result;
@@ -1713,8 +1773,9 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     struct Gadget *attachments_gadget, *attachments_scroller;
     struct Gadget *compose_status;
     struct List attachment_list;
-    ComposeAttachment attachments[AMG_MAIL_MAX_ATTACHMENTS];
-    size_t attachment_count = 0;
+    ComposeAttachment *attachments = NULL;
+    size_t attachment_count = 0U;
+    size_t attachment_capacity = 0U;
     ULONG signal_mask, compose_width = 600UL, compose_height = 400UL;
     ULONG compose_left = 0UL, compose_top = 0UL;
     const char *initial_to = "";
@@ -1741,7 +1802,6 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         return 0;
     }
 
-    memset(attachments, 0, sizeof(attachments));
     memset(&body_scroll_state, 0, sizeof(body_scroll_state));
     memset(&compose_input_state, 0, sizeof(compose_input_state));
     memset(&compose_idcmp_hook, 0, sizeof(compose_idcmp_hook));
@@ -1756,14 +1816,12 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         initial_bcc = draft_seed->bcc_local;
         initial_subject = draft_seed->subject_local;
         initial_body = draft_seed->body_local;
+        attachments = draft_seed->attachments;
         attachment_count = draft_seed->attachment_count;
-        if (attachment_count > AMG_MAIL_MAX_ATTACHMENTS)
-            attachment_count = AMG_MAIL_MAX_ATTACHMENTS;
-        if (attachment_count)
-            memcpy(attachments, draft_seed->attachments,
-                   attachment_count * sizeof(attachments[0]));
-        memset(draft_seed->attachments, 0, sizeof(draft_seed->attachments));
+        attachment_capacity = draft_seed->attachment_capacity;
+        draft_seed->attachments = NULL;
         draft_seed->attachment_count = 0U;
+        draft_seed->attachment_capacity = 0U;
     } else if (!edit_draft && draft_seed) {
         /* COMPOSE_MODE_NEW may carry an initial seed from a mailto: URL.
          * Draft-specific metadata and attachment ownership are deliberately
@@ -1779,14 +1837,12 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         initial_bcc = draft_seed->bcc_local;
         initial_subject = draft_seed->subject_local;
         initial_body = draft_seed->body_local;
+        attachments = draft_seed->attachments;
         attachment_count = draft_seed->attachment_count;
-        if (attachment_count > AMG_MAIL_MAX_ATTACHMENTS)
-            attachment_count = AMG_MAIL_MAX_ATTACHMENTS;
-        if (attachment_count)
-            memcpy(attachments, draft_seed->attachments,
-                   attachment_count * sizeof(attachments[0]));
-        memset(draft_seed->attachments, 0, sizeof(draft_seed->attachments));
+        attachment_capacity = draft_seed->attachment_capacity;
+        draft_seed->attachments = NULL;
         draft_seed->attachment_count = 0U;
+        draft_seed->attachment_capacity = 0U;
     }
     NewList(&attachment_list);
     to_gadget = cc_gadget = bcc_gadget = subject_gadget = NULL;
@@ -1821,6 +1877,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         amg_error_set(error, AMG_ERR_MEMORY,
                       T(MSG_SCROLLBAR_COULD_NOT_BE_CREATED, "Scrollbar could not be created."));
         cleanup_compose_attachments(attachments, attachment_count);
+        free(attachments);
         return 0;
     }
 
@@ -1832,6 +1889,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                       T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_CREATED,
                         "New mail window could not be created."));
         cleanup_compose_attachments(attachments, attachment_count);
+        free(attachments);
         return 0;
     }
 
@@ -2060,7 +2118,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                 compose_status = (struct Gadget *)StringObject,
                     GA_ID, GID_COMPOSE_STATUS,
                     GA_ReadOnly, TRUE,
-                    STRINGA_TextVal, T(MSG_0_ATTACHMENTS_0_KB_OF_10240_KB, "0 attachments, 0 KB of 10240 KB"),
+                    STRINGA_TextVal, T(MSG_0_ATTACHMENTS_0_KB_OF_10240_KB, "0 attachments, 0 KB of 20480 KB"),
                 EndObject,
             CHILD_WeightedHeight, 0,
 
@@ -2086,6 +2144,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         amg_error_set(error, AMG_ERR_MEMORY,
                       T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_CREATED, "New mail window could not be created."));
         cleanup_compose_attachments(attachments, attachment_count);
+        free(attachments);
         free(initial_body_with_signature);
         return 0;
     }
@@ -2096,6 +2155,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                       T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_CREATED,
                         "New mail window could not be created."));
         cleanup_compose_attachments(attachments, attachment_count);
+        free(attachments);
         free(initial_body_with_signature);
         return 0;
     }
@@ -2108,6 +2168,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         amg_error_set(error, AMG_ERR_IO,
                       T(MSG_NEW_MAIL_WINDOW_COULD_NOT_BE_OPENED, "New mail window could not be opened."));
         cleanup_compose_attachments(attachments, attachment_count);
+        free(attachments);
         free(initial_body_with_signature);
         return 0;
     }
@@ -2241,8 +2302,8 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                             case GID_COMPOSE_ADD_ATTACHMENT:
                                 add_attachment(
                                     window, attachments_gadget, compose_status,
-                                    &attachment_list, attachments,
-                                    &attachment_count);
+                                    &attachment_list, &attachments,
+                                    &attachment_count, &attachment_capacity);
                                 break;
 
                             case GID_COMPOSE_REMOVE_ATTACHMENT:
@@ -2299,6 +2360,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     FreeListBrowserList(&attachment_list);
     if (!submitted)
         cleanup_compose_attachments(attachments, attachment_count);
+    free(attachments);
     free(initial_body_with_signature);
     if (sent_queued)
         status_local(gui, T(MSG_SENDING_MAIL, "Sending mail..."));

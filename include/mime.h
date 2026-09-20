@@ -22,6 +22,11 @@ int amg_rfc2047_decode(const char *input, AmgBuffer *output);
 int amg_html_to_text(const char *input, size_t length, AmgBuffer *output);
 int amg_mime_extract_text(const char *message, size_t length, AmgBuffer *output, AmgError *error);
 int amg_mime_attachment_summary(const char *message, size_t length, AmgBuffer *output, AmgError *error);
+int amg_mime_attachment_grouped_summary(
+    const char *message, size_t length,
+    AmgBuffer *attachments, size_t *attachment_count,
+    AmgBuffer *embedded_graphics, size_t *embedded_graphics_count,
+    AmgError *error);
 int amg_mime_attachment_count(const char *message, size_t length,
                               size_t *count, AmgError *error);
 int amg_mime_extract_attachment(const char *message, size_t length,

@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_DE.guide
-@$VER: AmiMAIL_DE.guide 2.0 (03.09.2026)
+@$VER: AmiMAIL_DE.guide 2.0.6 (20.09.2026)
 
-@NODE MAIN "AmiMAIL 2.0 - Anleitung"
-AmiMAIL 2.0
+@NODE MAIN "AmiMAIL 2.0.6 - Anleitung"
+AmiMAIL 2.0.6
 Nativer IMAP/SMTP-Mailclient für AmigaOS 3.2+
 ReAction, IMAP, SMTP und AmiSSL
 
@@ -245,14 +245,17 @@ SMTP-Zustellung entfernt. Abbrechen verändert den Serverentwurf nicht.
 @ENDNODE
 
 @NODE ATTACHMENTS "Anhänge"
-AmiMAIL unterstützt bis zu 8 Anhänge pro Nachricht. Die Summe aller Anhänge
-ist auf 10 MB begrenzt.
+AmiMAIL hat keine feste Begrenzung der Anzahl von Anhängen pro Nachricht. Die
+Gesamtgröße aller Anhänge ist auf 20 MB begrenzt.
 
 Anhänge empfangener Mails können aus der Vorschau gespeichert werden. Beim
 Weiterleiten und Bearbeiten von Entwürfen können vorhandene Anhänge
 übernommen werden.
 
-Inline-Bilder aus HTML-Mails werden nicht automatisch geladen.
+In MIME eingebettete Bilder werden nicht direkt dargestellt. Sie erscheinen
+in der Vorschau getrennt als "Eingebettete Grafiken" und werden mit
+"Anhänge speichern" ebenfalls gesichert. Nur per HTML-URL referenzierte
+externe Bilder werden weiterhin nie automatisch geladen.
 
 
 @{"Zurück zum Inhalt" LINK MAIN}

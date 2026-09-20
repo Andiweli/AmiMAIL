@@ -493,7 +493,7 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
 {
     AmgImapFetchRecord record;
     AmgMailHeaders headers;
-    AmgBuffer body, preview, attachments;
+    AmgBuffer body, preview, attachments, embedded_graphics;
     char date_local[160];
     size_t position = 0;
     int result;
@@ -512,6 +512,7 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
     amg_buffer_init(&body);
     amg_buffer_init(&preview);
     amg_buffer_init(&attachments);
+    amg_buffer_init(&embedded_graphics);
     result = amg_mail_headers_parse((const char *)record.literal,
                                     record.literal_length, &headers, NULL);
     if (result == AMG_OK)
@@ -537,14 +538,24 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
     if (result == AMG_OK)
         result = amg_buffer_append(&preview, body.data, body.length);
     if (result == AMG_OK &&
-        amg_mime_attachment_summary((const char *)record.literal,
-                                    record.literal_length, &attachments,
-                                    NULL) == AMG_OK &&
-        attachments.length) {
-        result = amg_buffer_append_cstr(&preview, T(MSG_ATTACHMENTS_791D, "\n\nAttachments:\n"));
-        if (result == AMG_OK)
-            result = amg_buffer_append(&preview, attachments.data,
-                                       attachments.length);
+        amg_mime_attachment_grouped_summary(
+            (const char *)record.literal, record.literal_length,
+            &attachments, NULL, &embedded_graphics, NULL, NULL) == AMG_OK) {
+        if (attachments.length) {
+            result = amg_buffer_append_cstr(
+                &preview, T(MSG_ATTACHMENTS_791D, "\n\nAttachments:\n"));
+            if (result == AMG_OK)
+                result = amg_buffer_append(&preview, attachments.data,
+                                           attachments.length);
+        }
+        if (result == AMG_OK && embedded_graphics.length) {
+            result = amg_buffer_append_cstr(
+                &preview, T(MSG_EMBEDDED_GRAPHICS_7F31,
+                            "\n\nEmbedded graphics:\n"));
+            if (result == AMG_OK)
+                result = amg_buffer_append(&preview, embedded_graphics.data,
+                                           embedded_graphics.length);
+        }
     }
     if (result == AMG_OK && amg_buffer_terminate(&preview) == AMG_OK) {
         set_preview_utf8(gui, preview.data, preview.length);
@@ -556,6 +567,7 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
     amg_buffer_free(&body);
     amg_buffer_free(&preview);
     amg_buffer_free(&attachments);
+    amg_buffer_free(&embedded_graphics);
     return result;
 }
 

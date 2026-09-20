@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_EN.guide
-@$VER: AmiMAIL_EN.guide 2.0 (03.09.2026)
+@$VER: AmiMAIL_EN.guide 2.0.6 (20.09.2026)
 
-@NODE MAIN "AmiMAIL 2.0 - Guide"
-AmiMAIL 2.0
+@NODE MAIN "AmiMAIL 2.0.6 - Guide"
+AmiMAIL 2.0.6
 Native IMAP/SMTP mail client for AmigaOS 3.2+
 ReAction, IMAP, SMTP and AmiSSL
 
@@ -233,13 +233,15 @@ Cancelling leaves the server draft unchanged.
 @ENDNODE
 
 @NODE ATTACHMENTS "Attachments"
-AmiMAIL supports up to 8 attachments per message. The combined attachment
-size is limited to 10 MB.
+AmiMAIL has no fixed limit on the number of attachments per message. The
+combined size of all attachments is limited to 20 MB.
 
 Attachments from received messages can be saved from the preview. Existing
 attachments can be retained while forwarding or editing drafts.
 
-Inline images from HTML mail are not automatically loaded.
+MIME-embedded images are not rendered inline. They are listed separately as
+"Embedded graphics" in the preview and are included by Save attachments.
+External images referenced only by HTML URLs are never loaded automatically.
 
 
 @{"Back to contents" LINK MAIN}

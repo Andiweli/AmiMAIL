@@ -1,5 +1,11 @@
 # Changelog
 
+## AmiMail 2.0.6 - 2026-09-20
+- remove the fixed attachment-count limit; combined size remains 20 MB
+- expose MIME-embedded images as savable attachments
+- list embedded images separately as Embedded graphics in the preview
+- update the program and package version to 2.0.6
+
 ## AmiMail 2.0.5 - 2026-09-16
 - adjust the four shared Yes/No confirmation requesters by moving the full text-line spacer from below the message to above it, placing the message one line lower while keeping the Yes/No row tight and the deterministic pre-open centering unchanged
 - center the Account settings window deterministically before it becomes visible: measure the completed ReAction layout with `LayoutLimits()`, calculate the final geometry relative to the AmiMAIL main window and open directly at that position, removing the former visible right-to-center correction after `RA_OpenWindow()`

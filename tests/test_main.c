@@ -396,6 +396,28 @@ static void test_mime(void)
     const char *html_first="Content-Type: multipart/alternative; boundary=alt\r\n\r\n--alt\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n<p>HTML version</p>\r\n--alt\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nPlain version\r\n--alt--\r\n";
     const char *html_only="Content-Type: text/html; charset=UTF-8\r\n\r\n<html><head><style>.x{display:none}</style></head><body><h2>Hello</h2><p>Visit <a href=\"https://example.com/?a=1&amp;b=2\">our site</a>.</p><ul><li>One</li><li>Two</li></ul><script>evil()</script><!-- hidden --><img src=\"https://tracker.invalid/pixel.gif\"></body></html>";
     const char *with_attachment="Content-Type: multipart/mixed; boundary=mix\r\n\r\n--mix\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nHallo\r\n--mix\r\nContent-Type: application/pdf; name=\"rechnung.pdf\"\r\nContent-Disposition: attachment; filename=\"rechnung.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nQUJD\r\n--mix--\r\n";
+    const char *with_embedded_image=
+        "Content-Type: multipart/related; boundary=rel\r\n\r\n"
+        "--rel\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n"
+        "<html><body><p>Hello</p><img src=\"cid:logo-1\"></body></html>\r\n"
+        "--rel\r\nContent-Type: image/png\r\n"
+        "Content-ID: <logo-1>\r\n"
+        "Content-Disposition: inline\r\n"
+        "Content-Transfer-Encoding: base64\r\n\r\n"
+        "iVBORw0KGgo=\r\n--rel--\r\n";
+    const char *with_attached_image=
+        "Content-Type: image/jpeg; name=\"photo.jpg\"\r\n"
+        "Content-ID: <photo-1>\r\n"
+        "Content-Disposition: attachment; filename=\"photo.jpg\"\r\n"
+        "Content-Transfer-Encoding: base64\r\n\r\n"
+        "QUJD\r\n";
+    const char *with_related_named_image=
+        "Content-Type: multipart/related; boundary=rel2\r\n\r\n"
+        "--rel2\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n"
+        "<html><body><img src=\"cid:banner\"></body></html>\r\n"
+        "--rel2\r\nContent-Type: image/gif; name=\"banner.gif\"\r\n"
+        "Content-Transfer-Encoding: base64\r\n\r\n"
+        "R0lGODlh\r\n--rel2--\r\n";
     AmgBuffer output,name,data;AmgError error;size_t attachment_count=0;amg_buffer_init(&output);CHECK(amg_mime_extract_text(message,strlen(message),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Hallo Welt")!=NULL);amg_buffer_free(&output);
     amg_buffer_init(&output);CHECK(amg_mime_extract_text(html_first,strlen(html_first),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Plain version")!=NULL);CHECK(strstr((char*)output.data,"HTML version")==NULL);amg_buffer_free(&output);
     amg_buffer_init(&output);CHECK(amg_mime_extract_text(html_only,strlen(html_only),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"Hello")!=NULL);CHECK(strstr((char*)output.data,"our site <https://example.com/?a=1&b=2>")!=NULL);CHECK(strstr((char*)output.data,"- One")!=NULL);CHECK(strstr((char*)output.data,"- Two")!=NULL);CHECK(strstr((char*)output.data,"evil")==NULL);CHECK(strstr((char*)output.data,"tracker.invalid")==NULL);amg_buffer_free(&output);
@@ -432,6 +454,50 @@ static void test_mime(void)
     amg_buffer_init(&output);CHECK(amg_mime_attachment_summary(with_attachment,strlen(with_attachment),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"rechnung.pdf")!=NULL);CHECK(strstr(text(&output),"application/pdf")!=NULL);amg_buffer_free(&output);
     CHECK(amg_mime_attachment_count(with_attachment,strlen(with_attachment),&attachment_count,&error)==AMG_OK);CHECK(attachment_count==1U);
     amg_buffer_init(&name);amg_buffer_init(&data);CHECK(amg_mime_extract_attachment(with_attachment,strlen(with_attachment),0U,&name,&data,&error)==AMG_OK);CHECK(!strcmp(text(&name),"rechnung.pdf"));CHECK(data.length==3U&&!memcmp(data.data,"ABC",3U));amg_buffer_free(&name);amg_buffer_free(&data);
+    attachment_count=0U;CHECK(amg_mime_attachment_count(with_embedded_image,strlen(with_embedded_image),&attachment_count,&error)==AMG_OK);CHECK(attachment_count==1U);
+    amg_buffer_init(&output);CHECK(amg_mime_attachment_summary(with_embedded_image,strlen(with_embedded_image),&output,&error)==AMG_OK);CHECK(strstr(text(&output),"embedded-image.png")!=NULL);amg_buffer_free(&output);
+    amg_buffer_init(&name);amg_buffer_init(&data);CHECK(amg_mime_extract_attachment(with_embedded_image,strlen(with_embedded_image),0U,&name,&data,&error)==AMG_OK);CHECK(!strcmp(text(&name),"embedded-image.png"));CHECK(data.length>0U);amg_buffer_free(&name);amg_buffer_free(&data);
+    {
+        AmgBuffer files, embedded;
+        size_t files_count=0U, embedded_count=0U;
+        amg_buffer_init(&files); amg_buffer_init(&embedded);
+        CHECK(amg_mime_attachment_grouped_summary(
+            with_attachment, strlen(with_attachment),
+            &files, &files_count, &embedded, &embedded_count, &error)==AMG_OK);
+        CHECK(files_count==1U); CHECK(embedded_count==0U);
+        CHECK(strstr(text(&files),"rechnung.pdf")!=NULL);
+        CHECK(embedded.length==0U);
+        amg_buffer_free(&files); amg_buffer_free(&embedded);
+
+        files_count=embedded_count=0U;
+        amg_buffer_init(&files); amg_buffer_init(&embedded);
+        CHECK(amg_mime_attachment_grouped_summary(
+            with_embedded_image, strlen(with_embedded_image),
+            &files, &files_count, &embedded, &embedded_count, &error)==AMG_OK);
+        CHECK(files_count==0U); CHECK(embedded_count==1U);
+        CHECK(files.length==0U);
+        CHECK(strstr(text(&embedded),"embedded-image.png")!=NULL);
+        amg_buffer_free(&files); amg_buffer_free(&embedded);
+
+        files_count=embedded_count=0U;
+        amg_buffer_init(&files); amg_buffer_init(&embedded);
+        CHECK(amg_mime_attachment_grouped_summary(
+            with_attached_image, strlen(with_attached_image),
+            &files, &files_count, &embedded, &embedded_count, &error)==AMG_OK);
+        CHECK(files_count==1U); CHECK(embedded_count==0U);
+        CHECK(strstr(text(&files),"photo.jpg")!=NULL);
+        CHECK(embedded.length==0U);
+        amg_buffer_free(&files); amg_buffer_free(&embedded);
+
+        files_count=embedded_count=0U;
+        amg_buffer_init(&files); amg_buffer_init(&embedded);
+        CHECK(amg_mime_attachment_grouped_summary(
+            with_related_named_image, strlen(with_related_named_image),
+            &files, &files_count, &embedded, &embedded_count, &error)==AMG_OK);
+        CHECK(files_count==0U); CHECK(embedded_count==1U);
+        CHECK(strstr(text(&embedded),"banner.gif")!=NULL);
+        amg_buffer_free(&files); amg_buffer_free(&embedded);
+    }
     amg_buffer_init(&output);CHECK(amg_html_to_text("<p>A &amp; B</p><script>evil()</script><br>C",strlen("<p>A &amp; B</p><script>evil()</script><br>C"),&output)==AMG_OK);CHECK(strstr(text(&output),"evil")==NULL);CHECK(strstr((char*)output.data,"A & B")!=NULL);amg_buffer_free(&output);
     amg_buffer_init(&output);CHECK(amg_html_to_text("<p>Mit freundlichen Gr&uuml;&szlig;en &Auml;&Ouml;&Uuml;</p>",strlen("<p>Mit freundlichen Gr&uuml;&szlig;en &Auml;&Ouml;&Uuml;</p>"),&output)==AMG_OK);CHECK(strstr(text(&output),"Mit freundlichen Gr\xC3\xBC\xC3\x9F" "en")!=NULL);CHECK(strstr(text(&output),"\xC3\x84\xC3\x96\xC3\x9C")!=NULL);CHECK(strstr(text(&output),"&uuml;")==NULL);amg_buffer_free(&output);
     amg_buffer_init(&output);CHECK(amg_html_to_text("Hallo &lt;span class=&quot;x&quot;&gt;Welt&lt;/span&gt;!",strlen("Hallo &lt;span class=&quot;x&quot;&gt;Welt&lt;/span&gt;!"),&output)==AMG_OK);CHECK(strstr(text(&output),"<span")==NULL);CHECK(strstr(text(&output),"</span>")==NULL);CHECK(strstr(text(&output),"Hallo Welt!")!=NULL);amg_buffer_free(&output);
@@ -705,6 +771,25 @@ static void test_smtp(void)
         CHECK(!strcmp(text(&name),"rechnung.pdf"));
         CHECK(data.length==3U&&!memcmp(data.data,"ABC",3U));
         amg_buffer_free(&name);amg_buffer_free(&data);amg_buffer_free(&output);
+        remove(path);
+    }
+    {
+        const char *path="build/many-attachments.bin";
+        FILE *file=fopen(path,"wb");
+        AmgAttachmentInput attachments[12];
+        AmgMailDraft mail;
+        size_t i;
+        CHECK(file!=NULL);
+        if(file){CHECK(fwrite("X",1U,1U,file)==1U);CHECK(fclose(file)==0);}
+        memset(attachments,0,sizeof(attachments));
+        for(i=0U;i<12U;++i){attachments[i].path=path;attachments[i].name_utf8="tiny.bin";attachments[i].size=1U;}
+        memset(&mail,0,sizeof(mail));
+        mail.from="me@example.com";mail.to="to@example.com";mail.subject="Many attachments";
+        mail.body_utf8="Body";mail.date_rfc2822="Wed, 12 Aug 2026 10:00:00 +0200";
+        mail.message_id="<many@example.com>";mail.attachments=attachments;mail.attachment_count=12U;
+        amg_buffer_init(&output);
+        CHECK(amg_smtp_build_mail(&mail,0,&output,&error)==AMG_OK);
+        amg_buffer_free(&output);
         remove(path);
     }
     {

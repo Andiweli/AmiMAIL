@@ -54,7 +54,7 @@ typedef struct AmgNetMessage {
     char references[1024];
     char date[96];
     char message_id[256];
-    AmgNetAttachment attachments[AMG_MAIL_MAX_ATTACHMENTS];
+    AmgNetAttachment *attachments;
     size_t attachment_count;
     AmgAccount account_update;
     AmgBuffer payload;
@@ -113,6 +113,9 @@ static void free_net_message(AmgNetMessage *message)
     if (!message) return;
     amg_account_clear(&message->account_update);
     amg_buffer_free(&message->payload);
+    free(message->attachments);
+    message->attachments = NULL;
+    message->attachment_count = 0U;
     free(message);
 }
 
@@ -339,7 +342,7 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
                          AmgNetMessage *message, const char *access_token,
                          AmgError *error)
 {
-    AmgAttachmentInput attachments[AMG_MAIL_MAX_ATTACHMENTS];
+    AmgAttachmentInput *attachments = NULL;
     AmgMailDraft draft;
     AmgBuffer raw;
     AmgError detail_error;
@@ -347,6 +350,15 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
     int result;
     int detail_result;
 
+    if (message->attachment_count) {
+        attachments = (AmgAttachmentInput *)calloc(
+            message->attachment_count, sizeof(*attachments));
+        if (!attachments) {
+            amg_error_set(error, AMG_ERR_MEMORY,
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+            return AMG_ERR_MEMORY;
+        }
+    }
     for (i = 0; i < message->attachment_count; ++i) {
         attachments[i].path = message->attachments[i].path;
         attachments[i].name_utf8 = message->attachments[i].name_utf8;
@@ -371,7 +383,10 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
     draft.reply_source_mailbox = message->reply_source_mailbox;
 
     result = amg_smtp_send_mail(&network->account, access_token, &draft, error);
-    if (result != AMG_OK) return result;
+    if (result != AMG_OK) {
+        free(attachments);
+        return result;
+    }
     amg_error_set(error, AMG_OK, "");
 
     if (amg_account_should_append_sent(&network->account)) {
@@ -452,13 +467,14 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
             message->reply_answered_marked = 1;
         }
     }
+    free(attachments);
     return AMG_OK;
 }
 
 static int save_mail_draft(AmgNetwork *network, AmgImapSession *imap,
                            AmgNetMessage *message, AmgError *error)
 {
-    AmgAttachmentInput attachments[AMG_MAIL_MAX_ATTACHMENTS];
+    AmgAttachmentInput *attachments = NULL;
     AmgMailDraft draft;
     AmgBuffer raw;
     AmgError delete_error;
@@ -466,6 +482,15 @@ static int save_mail_draft(AmgNetwork *network, AmgImapSession *imap,
     int result;
     int delete_result;
 
+    if (message->attachment_count) {
+        attachments = (AmgAttachmentInput *)calloc(
+            message->attachment_count, sizeof(*attachments));
+        if (!attachments) {
+            amg_error_set(error, AMG_ERR_MEMORY,
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+            return AMG_ERR_MEMORY;
+        }
+    }
     for (i = 0; i < message->attachment_count; ++i) {
         attachments[i].path = message->attachments[i].path;
         attachments[i].name_utf8 = message->attachments[i].name_utf8;
@@ -491,6 +516,8 @@ static int save_mail_draft(AmgNetwork *network, AmgImapSession *imap,
 
     amg_buffer_init(&raw);
     result = amg_smtp_build_mail(&draft, 1, &raw, error);
+    free(attachments);
+    attachments = NULL;
     if (result == AMG_OK)
         result = add_reply_source_headers_to_draft(message, &raw, error);
     if (result == AMG_OK)
@@ -959,8 +986,7 @@ static int request_mail_message(AmgNetwork *network,
     size_t i;
     unsigned long total = 0;
     if (!network || !draft || !network->running) return AMG_ERR_ARGUMENT;
-    if (draft->attachment_count > AMG_MAIL_MAX_ATTACHMENTS ||
-        !text_fits(draft->from, 768U) || !text_fits(draft->to, 768U) ||
+    if (!text_fits(draft->from, 768U) || !text_fits(draft->to, 768U) ||
         !text_fits(draft->cc, 768U) || !text_fits(draft->bcc, 768U) ||
         !text_fits(draft->subject, 512U) ||
         !text_fits(draft->body_utf8, AMG_NET_BODY_MAX) ||
@@ -979,7 +1005,7 @@ static int request_mail_message(AmgNetwork *network,
             !text_fits(draft->attachments[i].name_utf8, AMG_NET_NAME_MAX) ||
             draft->attachments[i].size > AMG_MAIL_MAX_ATTACHMENT_TOTAL - total) {
             amg_error_set(error, AMG_ERR_LIMIT,
-                          T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8, "Attachments may total no more than 10 MB."));
+                          T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8, "Attachments may total no more than 20 MB."));
             return AMG_ERR_LIMIT;
         }
         total += draft->attachments[i].size;
@@ -1010,6 +1036,22 @@ static int request_mail_message(AmgNetwork *network,
         copy_text(message->reply_source_mailbox,
                   sizeof(message->reply_source_mailbox),
                   draft->reply_source_mailbox);
+    }
+    if (draft->attachment_count) {
+        if (draft->attachment_count > ((size_t)-1) / sizeof(*message->attachments)) {
+            free_net_message(message);
+            amg_error_set(error, AMG_ERR_MEMORY,
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+            return AMG_ERR_MEMORY;
+        }
+        message->attachments = (AmgNetAttachment *)calloc(
+            draft->attachment_count, sizeof(*message->attachments));
+        if (!message->attachments) {
+            free_net_message(message);
+            amg_error_set(error, AMG_ERR_MEMORY,
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+            return AMG_ERR_MEMORY;
+        }
     }
     message->attachment_count = draft->attachment_count;
     for (i = 0; i < draft->attachment_count; ++i) {

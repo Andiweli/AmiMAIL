@@ -44,12 +44,17 @@ void amg_i18n_init(void) {
     if (!LocaleBase) return;
     tags[0].ti_Tag=OC_BuiltInLanguage; tags[0].ti_Data=(ULONG)(uintptr_t)"english";
     tags[1].ti_Tag=OC_BuiltInCodeSet; tags[1].ti_Data=0UL;
-    /* Require the current catalog generation. locale.library caches catalogs
-     * across application restarts, so without OC_Version an older cached
-     * AmiMAIL.catalog can keep serving English fallbacks for newly added IDs. */
-    tags[2].ti_Tag=OC_Version; tags[2].ti_Data=6UL;
+    /* Prefer the current catalog generation. OC_Version requests an exact
+     * catalog version, so try V7 first. If only an older catalog is installed,
+     * retry with version 0 (accept any) instead of falling back completely to
+     * the built-in English strings. */
+    tags[2].ti_Tag=OC_Version; tags[2].ti_Data=7UL;
     tags[3].ti_Tag=TAG_DONE; tags[3].ti_Data=0UL;
     catalog=OpenCatalogA(NULL,(STRPTR)"AmiMAIL.catalog",tags);
+    if (!catalog) {
+        tags[2].ti_Data=0UL;
+        catalog=OpenCatalogA(NULL,(STRPTR)"AmiMAIL.catalog",tags);
+    }
 #endif
 }
 void amg_i18n_cleanup(void) {

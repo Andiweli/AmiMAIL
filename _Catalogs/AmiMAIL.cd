@@ -1,9 +1,9 @@
-## version 6
+## version 7
 ## language english
 ## basename AmiMAIL
 ;
 MSG_0_ATTACHMENTS_0_KB_OF_10240_KB (1571006799//)
-0 attachments, 0 KB of 10240 KB
+0 attachments, 0 KB of 20480 KB
 ;
 MSG_ABOUT_AMIMAIL (1041730441//)
 About AmiMail
@@ -153,13 +153,13 @@ MSG_ATTACHMENTS_COULD_NOT_BE_PARSED (887295686//)
 Attachments could not be parsed.
 ;
 MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_LOCAL (417073450//)
-Attachments may total no more than 10 MB.
+Attachments may total no more than 20 MB.
 ;
 MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8 (1093978111//)
-Attachments may total no more than 10 MB.
+Attachments may total no more than 20 MB.
 ;
 MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB (1507586028//)
-Attachments total more than 10 MB.
+Attachments total more than 20 MB.
 ;
 MSG_ATTACHMENT_BIN (1746848713//)
 attachment.bin
@@ -303,7 +303,7 @@ MSG_DRAFTS_CAN_ONLY_BE_EDITED_IN_THE_DRAFTS (437617551//)
 Drafts can only be edited in the Drafts folder.
 ;
 MSG_DRAFT_ATTACHMENTS_TOTAL_MORE_THAN_10_MB (1103694835//)
-Draft attachments total more than 10 MB.
+Draft attachments total more than 20 MB.
 ;
 MSG_DRAFT_BODY_IS_TOO_LARGE_TO_EDIT (984044220//)
 Draft body is too large to edit.
@@ -1387,7 +1387,7 @@ MSG_VALUE_ATTACHMENT_S_SAVED (441030919//)
 %lu attachment(s) saved.
 ;
 MSG_VALUE_ATTACHMENT_S_VALUE_KB_OF_10240_KB (1841213418//)
-%lu attachment(s), %lu KB of 10240 KB
+%lu attachment(s), %lu KB of 20480 KB
 ;
 MSG_VALUE_CONTACTS_DELETED (2123759322//)
 %lu contacts deleted.
@@ -1530,3 +1530,6 @@ Mail was replied to on %s at %s.
 ;
 MSG_THE_MAIL_CAN_BE_EDITED_LATER (2100000029//)
 The mail can be edited later.
+;
+MSG_EMBEDDED_GRAPHICS_7F31 (2100000030//)
+\n\nEmbedded graphics:\n

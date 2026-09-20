@@ -1082,6 +1082,70 @@ static int append_parameter_utf8(const char *value, AmgBuffer *output)
     return result;
 }
 
+static const char *embedded_image_extension(const char *content_type)
+{
+    if (!content_type) return "img";
+    if (ci_starts_with(content_type, "image/jpeg") ||
+        ci_starts_with(content_type, "image/jpg")) return "jpg";
+    if (ci_starts_with(content_type, "image/png")) return "png";
+    if (ci_starts_with(content_type, "image/gif")) return "gif";
+    if (ci_starts_with(content_type, "image/webp")) return "webp";
+    if (ci_starts_with(content_type, "image/bmp")) return "bmp";
+    if (ci_starts_with(content_type, "image/tiff")) return "tif";
+    if (ci_starts_with(content_type, "image/svg+xml")) return "svg";
+    return "img";
+}
+
+static int entity_attachment_name(const AmgMailHeaders *headers,
+                                  int related_context,
+                                  char filename[512],
+                                  int *embedded_graphic)
+{
+    const char *content_type, *disposition, *content_id;
+    int is_image, is_attachment, is_inline, embedded = 0;
+    if (!headers || !filename) return 0;
+    content_type = amg_mail_header_get(headers, "Content-Type");
+    disposition = amg_mail_header_get(headers, "Content-Disposition");
+    content_id = amg_mail_header_get(headers, "Content-ID");
+    if (!content_type) content_type = "text/plain";
+    is_image = ci_starts_with(content_type, "image/");
+    is_attachment = disposition && ci_starts_with(disposition, "attachment");
+    is_inline = disposition && ci_starts_with(disposition, "inline");
+
+    filename[0] = 0;
+    if (disposition) {
+        if (!param_value(disposition, "filename", filename, 512U))
+            param_value(disposition, "filename*", filename, 512U);
+    }
+    if (!filename[0]) {
+        if (!param_value(content_type, "name", filename, 512U))
+            param_value(content_type, "name*", filename, 512U);
+    }
+
+    /* An explicit attachment disposition always wins, even for images with
+     * a Content-ID.  Otherwise image parts used inline, referenced by CID,
+     * or carried by multipart/related are shown separately as embedded
+     * graphics in the preview. */
+    if (is_image && !is_attachment &&
+        (is_inline || (content_id && *content_id) || related_context))
+        embedded = 1;
+
+    /* multipart/related often carries inline image parts without any name.
+     * Keep them savable by assigning a deterministic extension-based name. */
+    if (!filename[0] && is_image)
+        snprintf(filename, 512U, "%s.%s",
+                 embedded ? "embedded-image" : "image",
+                 embedded_image_extension(content_type));
+
+    if (embedded_graphic) *embedded_graphic = embedded;
+    return filename[0] &&
+        (is_image ||
+         (disposition &&
+          (is_attachment || is_inline)) ||
+         (!ci_starts_with(content_type, "text/plain") &&
+          !ci_starts_with(content_type, "text/html")));
+}
+
 static int append_attachment_line(const char *name, const char *content_type,
                                   size_t encoded_size, AmgBuffer *output)
 {
@@ -1110,11 +1174,16 @@ static int append_attachment_line(const char *name, const char *content_type,
 
 static int collect_attachment_entity(const char *message, size_t length,
                                      unsigned depth, AmgBuffer *output,
-                                     size_t *count)
+                                     size_t *count,
+                                     AmgBuffer *attachment_output,
+                                     size_t *attachment_count,
+                                     AmgBuffer *embedded_output,
+                                     size_t *embedded_count,
+                                     int related_context)
 {
     AmgMailHeaders headers;
     size_t body_offset = 0;
-    const char *content_type, *disposition;
+    const char *content_type;
     char boundary[256], filename[512];
     int result;
     if (depth > 8U || length > AMIGMAIL_MAX_MESSAGE) return AMG_ERR_LIMIT;
@@ -1125,7 +1194,6 @@ static int collect_attachment_entity(const char *message, size_t length,
         return result;
     }
     content_type = amg_mail_header_get(&headers, "Content-Type");
-    disposition = amg_mail_header_get(&headers, "Content-Disposition");
     if (!content_type) content_type = "text/plain";
 
     if (ci_starts_with(content_type, "multipart/") &&
@@ -1133,6 +1201,8 @@ static int collect_attachment_entity(const char *message, size_t length,
         AmgBuffer marker;
         const char *body = message + body_offset, *end = message + length;
         const char *part;
+        int child_related = related_context ||
+            ci_starts_with(content_type, "multipart/related");
         amg_buffer_init(&marker);
         result = amg_buffer_append_cstr(&marker, "--");
         if (result == AMG_OK) result = amg_buffer_append_cstr(&marker, boundary);
@@ -1155,7 +1225,9 @@ static int collect_attachment_entity(const char *message, size_t length,
             while (next > start && (next[-1] == '\r' || next[-1] == '\n'))
                 --next;
             result = collect_attachment_entity(
-                start, (size_t)(next - start), depth + 1U, output, count);
+                start, (size_t)(next - start), depth + 1U,
+                output, count, attachment_output, attachment_count,
+                embedded_output, embedded_count, child_related);
             if (result != AMG_OK) {
                 amg_buffer_free(&marker);
                 amg_mail_headers_free(&headers);
@@ -1168,28 +1240,33 @@ static int collect_attachment_entity(const char *message, size_t length,
         return AMG_OK;
     }
 
-    filename[0] = 0;
-    if (disposition) {
-        if (!param_value(disposition, "filename", filename, sizeof(filename)))
-            param_value(disposition, "filename*", filename, sizeof(filename));
-    }
-    if (!filename[0]) {
-        if (!param_value(content_type, "name", filename, sizeof(filename)))
-            param_value(content_type, "name*", filename, sizeof(filename));
-    }
-
-    if (filename[0] &&
-        ((disposition &&
-          (ci_starts_with(disposition, "attachment") ||
-           ci_starts_with(disposition, "inline"))) ||
-         (!ci_starts_with(content_type, "text/plain") &&
-          !ci_starts_with(content_type, "text/html")))) {
-        if (count) ++*count;
-        if (output)
-            result = append_attachment_line(
-                filename, content_type,
-                length > body_offset ? length - body_offset : 0U,
-                output);
+    {
+        int embedded = 0;
+        if (entity_attachment_name(&headers, related_context,
+                                   filename, &embedded)) {
+            if (count) ++*count;
+            if (embedded) {
+                if (embedded_count) ++*embedded_count;
+                if (embedded_output)
+                    result = append_attachment_line(
+                        filename, content_type,
+                        length > body_offset ? length - body_offset : 0U,
+                        embedded_output);
+            } else {
+                if (attachment_count) ++*attachment_count;
+                if (attachment_output)
+                    result = append_attachment_line(
+                        filename, content_type,
+                        length > body_offset ? length - body_offset : 0U,
+                        attachment_output);
+            }
+            if (result == AMG_OK && output &&
+                output != attachment_output && output != embedded_output)
+                result = append_attachment_line(
+                    filename, content_type,
+                    length > body_offset ? length - body_offset : 0U,
+                    output);
+        }
     }
 
     amg_mail_headers_free(&headers);
@@ -1495,12 +1572,40 @@ int amg_mime_attachment_summary(const char *message, size_t length,
 {
     int result;
     if (!message || !output) return AMG_ERR_ARGUMENT;
-    result = collect_attachment_entity(message, length, 0U, output, NULL);
+    result = collect_attachment_entity(message, length, 0U,
+                                       output, NULL,
+                                       NULL, NULL, NULL, NULL, 0);
     if (result != AMG_OK)
         amg_error_set(error, result,
                       T(MSG_ATTACHMENTS_COULD_NOT_BE_PARSED, "Attachments could not be parsed."));
     else
         amg_error_set(error, AMG_OK, "");
+    return result;
+}
+
+int amg_mime_attachment_grouped_summary(
+    const char *message, size_t length,
+    AmgBuffer *attachments, size_t *attachment_count,
+    AmgBuffer *embedded_graphics, size_t *embedded_graphics_count,
+    AmgError *error)
+{
+    int result;
+    size_t files = 0U, embedded = 0U;
+    if (!message || (!attachments && !embedded_graphics &&
+                     !attachment_count && !embedded_graphics_count))
+        return AMG_ERR_ARGUMENT;
+    result = collect_attachment_entity(message, length, 0U,
+                                       NULL, NULL,
+                                       attachments, &files,
+                                       embedded_graphics, &embedded, 0);
+    if (result != AMG_OK) {
+        amg_error_set(error, result,
+                      T(MSG_ATTACHMENTS_COULD_NOT_BE_PARSED, "Attachments could not be parsed."));
+    } else {
+        if (attachment_count) *attachment_count = files;
+        if (embedded_graphics_count) *embedded_graphics_count = embedded;
+        amg_error_set(error, AMG_OK, "");
+    }
     return result;
 }
 
@@ -1510,7 +1615,9 @@ int amg_mime_attachment_count(const char *message, size_t length,
     int result;
     size_t found = 0U;
     if (!message || !count) return AMG_ERR_ARGUMENT;
-    result = collect_attachment_entity(message, length, 0U, NULL, &found);
+    result = collect_attachment_entity(message, length, 0U,
+                                       NULL, &found,
+                                       NULL, NULL, NULL, NULL, 0);
     if (result == AMG_OK) {
         *count = found;
         amg_error_set(error, AMG_OK, "");
@@ -1519,31 +1626,6 @@ int amg_mime_attachment_count(const char *message, size_t length,
                       T(MSG_ATTACHMENTS_COULD_NOT_BE_PARSED, "Attachments could not be parsed."));
     }
     return result;
-}
-
-static int entity_attachment_name(const AmgMailHeaders *headers,
-                                  char filename[512])
-{
-    const char *content_type, *disposition;
-    if (!headers || !filename) return 0;
-    content_type = amg_mail_header_get(headers, "Content-Type");
-    disposition = amg_mail_header_get(headers, "Content-Disposition");
-    if (!content_type) content_type = "text/plain";
-    filename[0] = 0;
-    if (disposition) {
-        if (!param_value(disposition, "filename", filename, 512U))
-            param_value(disposition, "filename*", filename, 512U);
-    }
-    if (!filename[0]) {
-        if (!param_value(content_type, "name", filename, 512U))
-            param_value(content_type, "name*", filename, 512U);
-    }
-    return filename[0] &&
-        ((disposition &&
-          (ci_starts_with(disposition, "attachment") ||
-           ci_starts_with(disposition, "inline"))) ||
-         (!ci_starts_with(content_type, "text/plain") &&
-          !ci_starts_with(content_type, "text/html")));
 }
 
 static int decode_attachment_body(const char *message, size_t length,
@@ -1569,7 +1651,7 @@ static int decode_attachment_body(const char *message, size_t length,
 static int extract_attachment_entity(const char *message, size_t length,
                                      unsigned depth, size_t target,
                                      size_t *current, AmgBuffer *name_utf8,
-                                     AmgBuffer *data)
+                                     AmgBuffer *data, int related_context)
 {
     AmgMailHeaders headers;
     size_t body_offset = 0U;
@@ -1591,6 +1673,8 @@ static int extract_attachment_entity(const char *message, size_t length,
         AmgBuffer marker;
         const char *body = message + body_offset, *end = message + length;
         const char *part;
+        int child_related = related_context ||
+            ci_starts_with(content_type, "multipart/related");
         amg_buffer_init(&marker);
         result = amg_buffer_append_cstr(&marker, "--");
         if (result == AMG_OK) result = amg_buffer_append_cstr(&marker, boundary);
@@ -1616,7 +1700,7 @@ static int extract_attachment_entity(const char *message, size_t length,
                 --part_end;
             result = extract_attachment_entity(
                 start, (size_t)(part_end - start), depth + 1U,
-                target, current, name_utf8, data);
+                target, current, name_utf8, data, child_related);
             if (result == AMG_OK) {
                 amg_buffer_free(&marker);
                 amg_mail_headers_free(&headers);
@@ -1634,7 +1718,7 @@ static int extract_attachment_entity(const char *message, size_t length,
         return AMG_ERR_CANCELLED;
     }
 
-    if (entity_attachment_name(&headers, filename)) {
+    if (entity_attachment_name(&headers, related_context, filename, NULL)) {
         if (*current == target) {
             result = append_parameter_utf8(filename, name_utf8);
             if (result == AMG_OK) result = amg_buffer_terminate(name_utf8);
@@ -1658,7 +1742,7 @@ int amg_mime_extract_attachment(const char *message, size_t length,
     int result;
     if (!message || !name_utf8 || !data) return AMG_ERR_ARGUMENT;
     result = extract_attachment_entity(message, length, 0U, index, &current,
-                                       name_utf8, data);
+                                       name_utf8, data, 0);
     if (result == AMG_ERR_CANCELLED) {
         result = AMG_ERR_ARGUMENT;
         amg_error_set(error, result, T(MSG_ATTACHMENT_WAS_NOT_FOUND, "Attachment was not found."));

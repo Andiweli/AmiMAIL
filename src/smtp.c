@@ -778,10 +778,6 @@ static int validate_attachments(const AmgMailDraft *draft, AmgError *error)
 {
     size_t i;
     unsigned long total = 0;
-    if (draft->attachment_count > AMG_MAIL_MAX_ATTACHMENTS) {
-        amg_error_set(error, AMG_ERR_LIMIT, T(MSG_TOO_MANY_ATTACHMENTS, "Too many attachments."));
-        return AMG_ERR_LIMIT;
-    }
     for (i = 0; i < draft->attachment_count; ++i) {
         unsigned long size;
         if (!draft->attachments || !draft->attachments[i].path ||
@@ -793,7 +789,7 @@ static int validate_attachments(const AmgMailDraft *draft, AmgError *error)
         }
         if (size > AMG_MAIL_MAX_ATTACHMENT_TOTAL - total) {
             amg_error_set(error, AMG_ERR_LIMIT,
-                          T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8, "Attachments may total no more than 10 MB."));
+                          T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8, "Attachments may total no more than 20 MB."));
             return AMG_ERR_LIMIT;
         }
         total += size;

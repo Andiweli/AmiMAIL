@@ -1,9 +1,9 @@
-## version $VER: AmiMAIL.catalog 6.0 (10.09.2026)
+## version $VER: AmiMAIL.catalog 7.0 (20.09.2026)
 ## language deutsch
 ## codeset 0
 ;
 MSG_0_ATTACHMENTS_0_KB_OF_10240_KB
-0 Anlagen, 0 KB von 10240 KB
+0 Anlagen, 0 KB von 20480 KB
 ;
 MSG_ABOUT_AMIMAIL
 \334ber AmiMail
@@ -163,15 +163,15 @@ MSG_ATTACHMENTS_COULD_NOT_BE_PARSED
 Dateianh\303\244nge konnten nicht ausgewertet werden.
 ;
 MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_LOCAL
-Anlagen d\374rfen zusammen h\366chstens 10 MB gro\337 sein.
+Anlagen d\374rfen zusammen h\366chstens 20 MB gro\337 sein.
 ;
 ; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8
-Dateianlagen d\303\274rfen zusammen h\303\266chstens 10 MB gro\303\237 sein.
+Dateianlagen d\303\274rfen zusammen h\303\266chstens 20 MB gro\303\237 sein.
 ;
 ; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB
-Anlagen sind zusammen gr\303\266\303\237er als 10 MB.
+Anlagen sind zusammen gr\303\266\303\237er als 20 MB.
 ;
 MSG_ATTACHMENT_BIN
 Anhang.bin
@@ -322,7 +322,7 @@ Entw\374rfe k\366nnen nur im Ordner Entw\374rfe bearbeitet werden.
 ;
 ; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_DRAFT_ATTACHMENTS_TOTAL_MORE_THAN_10_MB
-Entwurfsanlagen sind zusammen gr\303\266\303\237er als 10 MB.
+Entwurfsanlagen sind zusammen gr\303\266\303\237er als 20 MB.
 ;
 ; Internal UTF-8 path: byte escapes intentionally preserved.
 MSG_DRAFT_BODY_IS_TOO_LARGE_TO_EDIT
@@ -1469,7 +1469,7 @@ MSG_VALUE_ATTACHMENT_S_SAVED
 %lu Anhang/Anh\344nge gespeichert.
 ;
 MSG_VALUE_ATTACHMENT_S_VALUE_KB_OF_10240_KB
-%lu Anlage(n), %lu KB von 10240 KB
+%lu Anlage(n), %lu KB von 20480 KB
 ;
 MSG_VALUE_CONTACTS_DELETED
 %lu Kontakte gel\366scht.
@@ -1614,3 +1614,6 @@ Mail wurde am %s um %s Uhr beantwortet.
 ;
 MSG_THE_MAIL_CAN_BE_EDITED_LATER
 Das Mail kann sp\344ter weiterbearbeitet werden.
+;
+MSG_EMBEDDED_GRAPHICS_7F31
+\n\nEingebettete Grafiken:\n
