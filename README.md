@@ -33,7 +33,7 @@ AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a
 - Create, save, reopen, edit and send **IMAP drafts**
 - Improved **HTML-to-text conversion** for HTML-only or malformed messages, while preferring clean plain-text alternatives when available
 - MIME messages with Base64, Quoted-Printable, RFC 2047 and extended HTML-entity handling
-- Send up to **8 attachments with a combined maximum of 10 MB**
+- Send **attachments with a combined maximum of 20 MB**
 - Preserve attachments when forwarding messages and save attachments from received messages
 - Sort messages by sender, subject, date or message size
 - Clickable URLs and **`mailto:` integration with single-instance hand-off**
@@ -42,7 +42,6 @@ AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a
 - Select one or multiple contacts for **To, CC and BCC** while composing mail
 - Optional configurable **new-mail notification sound** per account using AmigaOS DataTypes
 - Native **ReAction Iconify** support with background mail checks and an embedded Workbench AppIcon
-- Window position and size are restored between program starts
 - Built-in asynchronous **GitHub update check and release download to `RAM:`**
 - Live mail status through the AmigaOS **ENV/ENVARC** `AmiMAILStatus` variable
 - German UI on German AmigaOS systems, English UI otherwise
