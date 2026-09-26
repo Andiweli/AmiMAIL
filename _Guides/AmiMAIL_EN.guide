@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_EN.guide
-@$VER: AmiMAIL_EN.guide 2.0.6 (20.09.2026)
+@$VER: AmiMAIL_EN.guide 2.1.0 (26.09.2026)
 
-@NODE MAIN "AmiMAIL 2.0.6 - Guide"
-AmiMAIL 2.0.6
+@NODE MAIN "AmiMAIL 2.1.0 - Guide"
+AmiMAIL 2.1.0
 Native IMAP/SMTP mail client for AmigaOS 3.2+
 ReAction, IMAP, SMTP and AmiSSL
 
@@ -86,8 +86,10 @@ configured accounts as native ReAction tabs.
 - "+" creates another account, up to a maximum of five.
 - "-" removes the selected account. Its files are deleted only after Save;
   Cancel discards the change.
-- "<" and ">" change the account order. The same order is used for the
-  account tabs in the main window and Signature window.
+- "<" and ">" move the selected account by one configured position per
+  click. The selected account stays active. Save keeps the new order;
+  Cancel discards it. The same order is used for the account tabs in the
+  main window and Signature window.
 - At least one configured account remains.
 - At least one account must have "Activate account" enabled.
 
@@ -233,16 +235,77 @@ Cancelling leaves the server draft unchanged.
 @ENDNODE
 
 @NODE ATTACHMENTS "Attachments"
-AmiMAIL has no fixed limit on the number of attachments per message. The
-combined size of all attachments is limited to 20 MB.
+There is no fixed attachment-count limit. Outgoing attachments together may
+contain at most 20 MiB (20,971,520 bytes) of original file data. MIME encoding
+adds overhead; the complete received MIME message is limited to 32 MiB.
 
-Attachments from received messages can be saved from the preview. Existing
-attachments can be retained while forwarding or editing drafts.
+"Save attachments" opens a separate file-selection window. It lists each
+name, whether it is an attachment or an embedded graphic, and the encoded
+size in the original mail. Initially only regular attachments are selected.
+Choose individual rows, Select All, None, Attachments only or Graphics only.
+"Save selected" then asks for a destination drawer.
 
-MIME-embedded images are not rendered inline. They are listed separately as
-"Embedded graphics" in the preview and are included by Save attachments.
-External images referenced only by HTML URLs are never loaded automatically.
+Existing destination files are never overwritten. A numeric suffix is added
+on name collisions. Each export is decoded to a private temporary file in
+the destination drawer and published only after successful completion.
+Cancel stops the current export, removes that incomplete temporary file,
+and leaves any files already saved intact.
 
+MIME-embedded images remain separate under "Embedded graphics" in the
+preview. External images referenced only by HTML URLs are never downloaded.
+Attachments are preserved when forwarding or editing a supported draft.
+
+Large-mail processing and transfers
+----------------------------------
+Incoming MIME data is spooled to disk instead of retained as a full RAM copy.
+Only MIME metadata and a bounded text preview remain in memory. Scrolling,
+read-only protection and URL/mail-address double-clicks are unchanged.
+A long or unsupported text body does not prevent saving its attachments.
+
+Before sending or saving a draft, AmiMAIL prepares a private .eml snapshot.
+SMTP and the Sent-folder copy use that same snapshot. Uploads are streamed,
+not assembled as an additional full-size MIME buffer in memory.
+The bottom status row keeps messages on the left and shows a compact
+percentage bar on the right. No transfer popup is opened. Only the current
+account, folder and selected message can supply mail-transfer progress.
+The status field, progress bar and X share the same height.
+Loading a folder such as "All Mail" also shows progress for the selected
+account and folder. It counts processed messages in the configured fetch
+period, not transferred bytes. While the server search has not yet returned
+the count, the percentage is blank. 100% requires the final acknowledged
+fetch. The subsequent list rendering is not a separate progress stage.
+Background checks for other accounts and folders stay silent.
+For mail transfers the percentage refers to the current processing step or
+attachment. The bar is cleared after completion or a context change.
+
+The small X cancels only the displayed operation, when cancellation is safe.
+Cancel is available during receive, indexing and upload. During preparation
+it is disabled until a recovery copy is complete; it is also disabled while
+waiting for the final server confirmation. Attachment export uses the same
+status row. Navigation is temporarily locked during local file operations;
+X or Escape cancels them. If fuelgauge.gadget is unavailable, a percentage
+label is used instead of the bar. Closing AmiMAIL cancels network I/O and
+waits for workers to finish before freeing their data.
+
+Temporary data normally goes to PROGDIR:Spool on the program volume. To use
+another writable disk drawer, set the global environment variable
+AmiMAIL_SpoolDir to its path before starting AmiMAIL. Do not choose RAM: or
+T: when the goal is to reduce RAM use. Allow enough free disk space for the
+original mail, decoded draft attachments and the outgoing snapshot.
+
+Successful temporary work is removed automatically. Failed/uncertain sends
+or failed Sent copies retain the outgoing snapshot; the status message gives
+its path. An incoming spool also contains IMAP framing and is not a plain
+.eml export. Old job folders left by a crash are not deleted blindly.
+A partially prepared outgoing file is marked as incomplete and must not be
+resent as-is; its original temporary attachments are retained separately.
+
+A lost final server confirmation means the result is UNKNOWN. Check the
+server's Sent/Drafts folder and delivery before retrying, to avoid duplicate
+mail. AmiMAIL never retries an uncertain send automatically. Old server
+drafts are removed only after a confirmed replacement/save or SMTP send.
+Recovery files can contain private mail and Bcc recipients; protect their
+drawer and remove them manually only after the message has been recovered.
 
 @{"Back to contents" LINK MAIN}
 @ENDNODE
@@ -295,9 +358,18 @@ in new messages, replies, Reply All, forwards and mailto: drafts.
 @ENDNODE
 
 @NODE NOTIFY "Notifications and iconify"
-AmiMAIL can play a configured notification sound through the AmigaOS 3.2
-SoundPlayer for each active account when new mail arrives. Playback runs in a
-separate process so an active sound never belongs to the AmiMAIL GUI task.
+AmiMAIL can play a configured notification sound for each active account
+when new mail arrives. Sound preview uses the same playback path.
+
+Playback uses the installed sound DataTypes in a separate process. An
+external C:SoundPlayer command is not needed. The supplied 8SVX samples are
+suitable notification sounds. WAV files require a matching installed
+DataType for their encoding.
+
+Only one notification/preview sound plays at a time. Further requests during
+playback are skipped. Closing AmiMAIL stops the sound and waits for its
+worker to release the audio resources. A missing completion signal is
+limited by a two-minute watchdog; notifications are intended as short sounds.
 
 The main window can be iconified. Network workers for active accounts,
 periodic fetch and status handling continue in the background.
@@ -358,7 +430,7 @@ in bug reports.
 @ENDNODE
 
 @NODE ABOUT "About / Copyright"
-AmiMAIL 2.0 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
+AmiMAIL 2.1.0 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 

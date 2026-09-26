@@ -71,6 +71,7 @@ struct Library *ListBrowserBase=NULL;
 struct Library *ScrollerBase=NULL;
 struct Library *StringBase=NULL;
 struct Library *TextEditorBase=NULL;
+struct Library *FuelGaugeBase=NULL;
 struct Library *OpenURLBase=NULL;
 struct Library *AslBase=NULL;
 struct Library *IconBase=NULL;
@@ -143,6 +144,9 @@ static int open_classes(void)
     StringBase = OpenLibrary((CONST_STRPTR)"gadgets/string.gadget", 44);
     TextEditorBase =
         OpenLibrary((CONST_STRPTR)"gadgets/texteditor.gadget", 44);
+    /* Optional: a missing fuelgauge must not prevent startup. The status
+     * strip falls back to a read-only percentage label in that case. */
+    FuelGaugeBase = OpenLibrary((CONST_STRPTR)"gadgets/fuelgauge.gadget", 44);
     /* OpenURL ist optional: Ohne Library bleibt AmiMail voll
      * funktionsfaehig, lediglich das Oeffnen erkannter URLs entfaellt. */
     OpenURLBase = OpenLibrary((CONST_STRPTR)"openurl.library", 0);
@@ -159,6 +163,7 @@ static void close_classes(void)
     if (IconBase) CloseLibrary(IconBase);
     if (AslBase) CloseLibrary(AslBase);
     if (OpenURLBase) CloseLibrary(OpenURLBase);
+    if (FuelGaugeBase) CloseLibrary(FuelGaugeBase);
     if (TextEditorBase) CloseLibrary(TextEditorBase);
     if (StringBase) CloseLibrary(StringBase);
     if (ScrollerBase) CloseLibrary(ScrollerBase);
@@ -172,6 +177,7 @@ static void close_classes(void)
     AslBase = NULL;
     OpenURLBase = NULL;
     TextEditorBase = NULL;
+    FuelGaugeBase = NULL;
     GfxBase = NULL;
     StringBase = NULL;
     ScrollerBase = NULL;
@@ -835,7 +841,8 @@ AmgGui *amg_gui_create(AmgAccountSet *accounts, AmgError *error)
         free(gui);
         close_classes();
         amg_error_set(error, AMG_ERR_MEMORY,
-                      "GUI arrow images could not be created.");
+                      T(MSG_GUI_ARROW_IMAGES_COULD_NOT_BE_CREATED,
+                        "GUI arrow images could not be created."));
         return NULL;
     }
     gui->account_set = accounts;
@@ -874,6 +881,7 @@ void amg_gui_destroy(AmgGui *gui)
 {
     size_t i;
     if (!gui) return;
+    gui_notify_cleanup();
     periodic_timer_cleanup(gui);
 
     /* Stop all worker processes before tearing down ReAction objects, lists
@@ -884,6 +892,9 @@ void amg_gui_destroy(AmgGui *gui)
     for (i = 0; i < AMG_MAX_ACCOUNTS; ++i)
         amg_network_stop(gui->networks[i]);
 
+    gui_transfer_cleanup(gui);
+    amg_mailfile_close(gui->current_mail_file);
+    gui->current_mail_file = NULL;
     free(gui->current_message_payload);
     gui->current_message_payload = NULL;
     disconnect_texteditor_scroller(gui->preview_gadget,

@@ -3,6 +3,7 @@
 
 #include "account.h"
 #include "buffer.h"
+#include "transfer.h"
 
 typedef struct AmgReplyDraft {
     const char *from;
@@ -47,6 +48,10 @@ typedef struct AmgMailDraft {
     unsigned long reply_source_uid;
     unsigned long reply_source_uid_validity;
     const char *reply_source_mailbox;
+    /* GUI origin for transfer feedback only. Never written to MIME/SMTP.
+     * The network queue copies the string before returning to the caller. */
+    const char *progress_mailbox;
+    unsigned long progress_uid;
 } AmgMailDraft;
 
 int amg_smtp_dot_stuff(const char *message, size_t length, AmgBuffer *output);
@@ -62,5 +67,14 @@ int amg_smtp_build_mail(const AmgMailDraft *draft, int include_bcc,
                         AmgBuffer *output, AmgError *error);
 int amg_smtp_send_mail(const AmgAccount *account, const char *access_token,
                        const AmgMailDraft *draft, AmgError *error);
+
+int amg_smtp_build_mail_file(const AmgMailDraft *draft, int include_bcc,
+                             int include_reply_context, FILE *file,
+                             size_t *length, AmgTransfer *transfer,
+                             AmgError *error);
+int amg_smtp_send_mail_file(const AmgAccount *account, const char *access_token,
+                            const AmgMailDraft *envelope, FILE *file,
+                            size_t length, AmgTransfer *transfer,
+                            AmgError *error);
 
 #endif

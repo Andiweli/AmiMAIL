@@ -96,7 +96,76 @@ void amg_imap_disconnect(AmgImapSession *session)
     amg_imap_session_init(session);
 }
 
-static int imap_collect(AmgImapSession *session, const char *tag, AmgBuffer *response, AmgError *error)
+/* Small, per-command progress state. Header literals remain untouched; only
+ * the FETCH envelope/trailer is examined so BODY text containing "UID" or
+ * "FETCH" cannot advance the counter. The expected-UID set also excludes
+ * unsolicited flag notifications and duplicate responses. */
+#define IMAP_UID_BATCH 100U
+typedef struct ImapFolderProgress {
+    AmgTransfer *transfer;
+    const unsigned long *uids;
+    size_t count, offset, total, received;
+    unsigned char seen[IMAP_UID_BATCH];
+    AmgBuffer metadata;
+    int in_fetch, has_literal;
+} ImapFolderProgress;
+
+static int file_fetch_prefix(const unsigned char *line, size_t length);
+
+static int folder_progress_finish(ImapFolderProgress *progress,
+                                   AmgError *error)
+{
+    AmgImapFetchRecord record;
+    size_t i, done;
+    if (!progress->in_fetch || !progress->has_literal ||
+        amg_imap_fetch_metadata(progress->metadata.data,
+                               progress->metadata.length, &record) != AMG_OK)
+        return AMG_OK;
+    for (i = 0U; i < progress->count; ++i) {
+        if (progress->uids[i] != record.uid) continue;
+        if (progress->seen[i]) return AMG_OK;
+        progress->seen[i] = 1U;
+        ++progress->received;
+        done = progress->offset + progress->received;
+        /* Reserve 100% for the final tagged OK and successful append to the
+         * caller's response. A NO/disconnect after the last header must never
+         * advertise successful completion. */
+        if (done >= progress->total && progress->total) done = progress->total - 1U;
+        return amg_transfer_report(progress->transfer, AMG_TRANSFER_RECEIVE,
+                                    done, progress->total, error);
+    }
+    return AMG_OK;
+}
+
+static int folder_progress_event(ImapFolderProgress *progress,
+                                  const AmgImapEvent *event,
+                                  const char *tag, AmgError *error)
+{
+    size_t tag_length = strlen(tag);
+    int result, prefix, tagged;
+    if (event->type == AMG_IMAP_EVENT_LITERAL) {
+        if (progress->in_fetch) progress->has_literal = 1;
+        return AMG_OK;
+    }
+    if (event->type != AMG_IMAP_EVENT_LINE) return AMG_OK;
+    prefix = file_fetch_prefix(event->data, event->length);
+    tagged = event->length > tag_length &&
+        !memcmp(event->data, tag, tag_length) && event->data[tag_length] == ' ';
+    if (prefix || tagged) {
+        result = folder_progress_finish(progress, error);
+        if (result != AMG_OK) return result;
+        progress->metadata.length = 0U;
+        progress->has_literal = 0;
+        progress->in_fetch = prefix;
+    }
+    if (progress->in_fetch)
+        return amg_buffer_append(&progress->metadata, event->data, event->length);
+    return AMG_OK;
+}
+
+static int imap_collect_progress(AmgImapSession *session, const char *tag,
+                                  AmgBuffer *response,
+                                  ImapFolderProgress *progress, AmgError *error)
 {
     AmgImapParser parser;
     AmgImapEvent event;
@@ -104,6 +173,12 @@ static int imap_collect(AmgImapSession *session, const char *tag, AmgBuffer *res
     char rejection[192];
     int done = 0, ok = 0, result = AMG_OK;
     rejection[0] = 0;
+    if (response && (!response->limit ||
+        response->limit > AMIGMAIL_MAX_MESSAGE + AMIGMAIL_MAX_LINE)) {
+        result = amg_buffer_set_limit(response,
+                                      AMIGMAIL_MAX_MESSAGE + AMIGMAIL_MAX_LINE);
+        if (result != AMG_OK) return result;
+    }
     amg_imap_parser_init(&parser);
     while (!done) {
         long count = amg_tls_read(session->connection, input, sizeof(input), error);
@@ -114,10 +189,18 @@ static int imap_collect(AmgImapSession *session, const char *tag, AmgBuffer *res
             break;
         }
         while ((result = amg_imap_parser_next(&parser, &event)) > 0) {
-            if (response && amg_buffer_append(response, event.data, event.length) != AMG_OK) {
-                result = AMG_ERR_MEMORY;
+            if (response &&
+                (result = amg_buffer_append(response, event.data, event.length)) != AMG_OK) {
                 amg_error_set(error, result,
-                              T(MSG_NOT_ENOUGH_MEMORY_FOR_THE_IMAP_RESPONSE, "Not enough memory for the IMAP response."));
+                              result == AMG_ERR_LIMIT
+                                ? T(MSG_IMAP_LIMIT_WAS_EXCEEDED, "IMAP limit was exceeded.")
+                                : T(MSG_NOT_ENOUGH_MEMORY_FOR_THE_IMAP_RESPONSE,
+                                    "Not enough memory for the IMAP response."));
+                done = 1;
+                break;
+            }
+            if (progress &&
+                (result = folder_progress_event(progress, &event, tag, error)) != AMG_OK) {
                 done = 1;
                 break;
             }
@@ -171,7 +254,9 @@ static int imap_collect(AmgImapSession *session, const char *tag, AmgBuffer *res
     return AMG_OK;
 }
 
-static int imap_command(AmgImapSession *session, const char *command, AmgBuffer *response, AmgError *error)
+static int imap_command_progress(AmgImapSession *session, const char *command,
+                                  AmgBuffer *response,
+                                  ImapFolderProgress *progress, AmgError *error)
 {
     char tag[16]; AmgBuffer wire; int result;
     if (!session || !session->connection || !command) return AMG_ERR_ARGUMENT;
@@ -179,7 +264,14 @@ static int imap_command(AmgImapSession *session, const char *command, AmgBuffer 
     amg_buffer_init(&wire); amg_buffer_append_cstr(&wire, tag); amg_buffer_append_char(&wire, ' ');
     amg_buffer_append_cstr(&wire, command); amg_buffer_append_cstr(&wire, "\r\n");
     result = amg_tls_write_all(session->connection, wire.data, wire.length, error); amg_buffer_free(&wire);
-    return result == AMG_OK ? imap_collect(session, tag, response, error) : result;
+    return result == AMG_OK
+        ? imap_collect_progress(session, tag, response, progress, error) : result;
+}
+
+static int imap_command(AmgImapSession *session, const char *command,
+                         AmgBuffer *response, AmgError *error)
+{
+    return imap_command_progress(session, command, response, NULL, error);
 }
 
 static int read_greeting(AmgImapSession *session, int *preauthenticated, AmgError *error)
@@ -978,11 +1070,22 @@ static int parse_uid_search_result(const unsigned char *data, size_t length,
 static int append_uid_fetch_batch(AmgImapSession *session,
                                   const unsigned long *uids,
                                   size_t count, AmgBuffer *response,
-                                  AmgError *error)
+                                  AmgTransfer *transfer, size_t offset,
+                                  size_t total, AmgError *error)
 {
     AmgBuffer command, batch_response;
+    ImapFolderProgress progress;
     size_t i;
     int result = AMG_OK;
+    if (!count || count > IMAP_UID_BATCH) return AMG_ERR_ARGUMENT;
+    memset(&progress, 0, sizeof(progress));
+    progress.transfer = transfer;
+    progress.uids = uids;
+    progress.count = count;
+    progress.offset = offset;
+    progress.total = total;
+    amg_buffer_init(&progress.metadata);
+    (void)amg_buffer_set_limit(&progress.metadata, AMIGMAIL_MAX_LINE);
     amg_buffer_init(&command);
     amg_buffer_init(&batch_response);
     result = amg_buffer_append_cstr(&command, "UID FETCH ");
@@ -1003,14 +1106,23 @@ static int append_uid_fetch_batch(AmgImapSession *session,
     if (result == AMG_OK)
         result = amg_buffer_terminate(&command);
     if (result == AMG_OK)
-        result = imap_command(session, (const char *)command.data,
-                              &batch_response, error);
+        result = imap_command_progress(session, (const char *)command.data,
+                                         &batch_response,
+                                         transfer ? &progress : NULL, error);
     if (result == AMG_OK && batch_response.length)
         result = amg_buffer_append(response, batch_response.data,
                                    batch_response.length);
+    /* A message may be expunged after SEARCH. A successful FETCH still
+     * completes those requested UIDs; do not leave the bar stuck below 100%.
+     * The payload is unchanged, so absent messages are not added to the list. */
+    if (result == AMG_OK)
+        result = amg_transfer_report(transfer, AMG_TRANSFER_RECEIVE,
+                                     offset + count, total, error);
+    if (result != AMG_OK && transfer) amg_imap_abort(session);
     if (result != AMG_OK && (!error || error->code == AMG_OK))
         amg_error_set(error, result,
                       T(MSG_MESSAGE_LIST_COULD_NOT_BE_LOADED, "Message list could not be loaded."));
+    amg_buffer_free(&progress.metadata);
     amg_buffer_free(&command);
     amg_buffer_free(&batch_response);
     return result;
@@ -1101,11 +1213,17 @@ static int imap_recent_since_date(unsigned int days,
 int amg_imap_fetch_recent(AmgImapSession *session, unsigned int days,
                           AmgBuffer *response, AmgError *error)
 {
+    return amg_imap_fetch_recent_progress(session, days, response, NULL, error);
+}
+
+int amg_imap_fetch_recent_progress(AmgImapSession *session, unsigned int days,
+                                   AmgBuffer *response,
+                                   AmgTransfer *transfer, AmgError *error)
+{
     static const char *months[] = {
         "Jan", "Feb", "Mar", "Apr", "May", "Jun",
         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
     };
-    enum { UID_BATCH = 100 };
     AmgBuffer search_response;
     unsigned long *uids = NULL;
     size_t uid_count = 0, offset;
@@ -1115,6 +1233,8 @@ int amg_imap_fetch_recent(AmgImapSession *session, unsigned int days,
 
     if (!session || !response || days < 1U || days > 3650U)
         return AMG_ERR_ARGUMENT;
+    result = amg_transfer_report(transfer, AMG_TRANSFER_RECEIVE, 0U, 0U, error);
+    if (result != AMG_OK) return result;
     if (!session->selected_exists) {
         amg_error_set(error, AMG_OK, "");
         return AMG_OK;
@@ -1146,12 +1266,14 @@ int amg_imap_fetch_recent(AmgImapSession *session, unsigned int days,
         return result;
     }
 
-    for (offset = 0U; offset < uid_count; offset += UID_BATCH) {
+    result = amg_transfer_report(transfer, AMG_TRANSFER_RECEIVE,
+                                 0U, uid_count, error);
+    for (offset = 0U; result == AMG_OK && offset < uid_count;
+         offset += IMAP_UID_BATCH) {
         size_t batch = uid_count - offset;
-        if (batch > UID_BATCH) batch = UID_BATCH;
+        if (batch > IMAP_UID_BATCH) batch = IMAP_UID_BATCH;
         result = append_uid_fetch_batch(session, uids + offset, batch,
-                                        response, error);
-        if (result != AMG_OK) break;
+                                        response, transfer, offset, uid_count, error);
     }
     free(uids);
     if (result == AMG_OK) amg_error_set(error, AMG_OK, "");
@@ -1161,7 +1283,6 @@ int amg_imap_fetch_recent(AmgImapSession *session, unsigned int days,
 int amg_imap_fetch_after_uid(AmgImapSession *session, unsigned long uid,
                              AmgBuffer *response, AmgError *error)
 {
-    enum { UID_BATCH = 100 };
     AmgBuffer search_response;
     unsigned long *uids = NULL;
     size_t uid_count = 0U, offset;
@@ -1205,11 +1326,11 @@ int amg_imap_fetch_after_uid(AmgImapSession *session, unsigned long uid,
         uid_count = write_index;
     }
 
-    for (offset = 0U; offset < uid_count; offset += UID_BATCH) {
+    for (offset = 0U; offset < uid_count; offset += IMAP_UID_BATCH) {
         size_t batch = uid_count - offset;
-        if (batch > UID_BATCH) batch = UID_BATCH;
+        if (batch > IMAP_UID_BATCH) batch = IMAP_UID_BATCH;
         result = append_uid_fetch_batch(session, uids + offset, batch,
-                                        response, error);
+                                        response, NULL, offset, uid_count, error);
         if (result != AMG_OK) break;
     }
     free(uids);
@@ -1507,19 +1628,66 @@ static int imap_wait_append_continuation(AmgImapSession *session,
     }
 }
 
+/* After the final literal block only a tagged OK/NO/BAD determines the
+ * APPEND outcome. Malformed replies or a lost connection are not proof that
+ * the server failed to create the message. */
+static int imap_append_completion(AmgImapSession *session, const char *tag,
+                                  AmgError *error)
+{
+    char line[1024];
+    size_t used = 0U, total = 0U, tag_length = strlen(tag);
+    for (;;) {
+        const char *status;
+        char atom[8];
+        size_t atom_length;
+        long got;
+        if (used + 1U >= sizeof(line) || total >= AMIGMAIL_MAX_LINE) break;
+        got = amg_tls_read(session->connection, line + used, 1U, error);
+        if (got <= 0) break;
+        ++total;
+        if (line[used++] != '\n') continue;
+        line[used] = 0;
+        if (used > tag_length + 1U && !memcmp(line, tag, tag_length) &&
+            line[tag_length] == ' ') {
+            status = line + tag_length + 1U;
+            atom_length = strcspn(status, " \t\r\n");
+            if (!atom_length || atom_length >= sizeof(atom)) break;
+            memcpy(atom, status, atom_length); atom[atom_length] = 0;
+            if (ascii_ci_equal(atom, "OK")) {
+                amg_error_set(error, AMG_OK, "");
+                return AMG_OK;
+            }
+            if (ascii_ci_equal(atom, "NO") || ascii_ci_equal(atom, "BAD")) {
+                amg_error_set(error, AMG_ERR_PROTOCOL,
+                    T(MSG_THE_IMAP_SERVER_REJECTED_THE_COMMAND,
+                      "The IMAP server rejected the command."));
+                return AMG_ERR_PROTOCOL;
+            }
+            break;
+        }
+        if (line[0] != '*') break;
+        used = 0U;
+    }
+    amg_error_set(error, AMG_ERR_UNCERTAIN, T(MSG_DELIVERY_UNCERTAIN,
+        "Server confirmation missing. Check delivery before retrying."));
+    return AMG_ERR_UNCERTAIN;
+}
+
 static int imap_append_message(AmgImapSession *session,
                                const char *mailbox_utf8,
                                const char *flags,
                                const unsigned char *message, size_t length,
+                               FILE *file, AmgTransfer *transfer,
                                AmgError *error)
 {
     const char *mailbox;
     AmgBuffer wire;
     char tag[16], literal[64];
-    int result;
+    int result, final_attempted = 0;
 
     if (!session || !session->connection || !mailbox_utf8 ||
-        !*mailbox_utf8 || (!message && length))
+        !*mailbox_utf8 || (!message && length && !file) ||
+        length > AMIMAIL_MAX_MIME_MESSAGE)
         return AMG_ERR_ARGUMENT;
 
     mailbox = resolve_special_mailbox(session, mailbox_utf8);
@@ -1586,13 +1754,48 @@ static int imap_append_message(AmgImapSession *session,
 
     result = imap_wait_append_continuation(session, tag, error);
     if (result != AMG_OK) return result;
-    if (length) {
-        result = amg_tls_write_all(session->connection, message, length, error);
-        if (result != AMG_OK) return result;
+    if (file) {
+        unsigned char block[8192];
+        size_t sent = 0U;
+        if (fseek(file, 0L, SEEK_SET)) result = AMG_ERR_IO;
+        while (result == AMG_OK && sent < length) {
+            size_t amount = length - sent;
+            if (amount > sizeof(block)) amount = sizeof(block);
+            result = amg_transfer_report(transfer, AMG_TRANSFER_UPLOAD,
+                                         sent, length, error);
+            if (result != AMG_OK) break;
+            if (fread(block, 1U, amount, file) != amount) { result = AMG_ERR_IO; break; }
+            if (amount == length - sent) {
+                result = amg_transfer_report(transfer, AMG_TRANSFER_COMMIT,
+                                             sent, length, error);
+                if (result != AMG_OK) break;
+                final_attempted = 1;
+            }
+            result = amg_tls_write_all(session->connection, block, amount, error);
+            sent += amount;
+        }
+    } else if (length) {
+        result = amg_transfer_report(transfer, AMG_TRANSFER_COMMIT, 0U, length, error);
+        if (result == AMG_OK) {
+            final_attempted = 1;
+            result = amg_tls_write_all(session->connection, message, length, error);
+        }
     }
-    result = amg_tls_write_all(session->connection, "\r\n", 2U, error);
-    if (result != AMG_OK) return result;
-    return imap_collect(session, tag, NULL, error);
+    if (result == AMG_OK && !length) {
+        result = amg_transfer_report(transfer, AMG_TRANSFER_COMMIT, 0U, 0U, error);
+        if (result == AMG_OK) final_attempted = 1;
+    }
+    if (result == AMG_OK)
+        result = amg_tls_write_all(session->connection, "\r\n", 2U, error);
+    if (result != AMG_OK && final_attempted) {
+        result = AMG_ERR_UNCERTAIN;
+        amg_error_set(error, result, T(MSG_DELIVERY_UNCERTAIN,
+            "Server confirmation missing. Check delivery before retrying."));
+    } else if (result == AMG_OK) {
+        result = imap_append_completion(session, tag, error);
+    }
+    if (result != AMG_OK) amg_imap_abort(session);
+    return result;
 }
 
 int amg_imap_append_draft(AmgImapSession *session, const char *mailbox_utf8,
@@ -1600,14 +1803,14 @@ int amg_imap_append_draft(AmgImapSession *session, const char *mailbox_utf8,
                           AmgError *error)
 {
     return imap_append_message(session, mailbox_utf8, "\\Draft",
-                               message, length, error);
+                               message, length, NULL, NULL, error);
 }
 
 int amg_imap_append_sent(AmgImapSession *session, const unsigned char *message,
                          size_t length, AmgError *error)
 {
     return imap_append_message(session, "\\Sent", "\\Seen",
-                               message, length, error);
+                               message, length, NULL, NULL, error);
 }
 
 int amg_imap_empty_mailbox(AmgImapSession *session, const char *mailbox_utf8,
@@ -1654,4 +1857,151 @@ int amg_imap_empty_mailbox(AmgImapSession *session, const char *mailbox_utf8,
         }
     }
     return result;
+}
+
+void amg_imap_abort(AmgImapSession *session)
+{
+    /* Do not send LOGOUT into an unfinished literal after an I/O error. */
+    if (!session) return;
+    if (session->connection) amg_tls_close(session->connection);
+    amg_imap_session_init(session);
+}
+
+static int file_fetch_prefix(const unsigned char *line, size_t length)
+{
+    size_t i = 0U;
+    if (length < 10U || line[i++] != '*') return 0;
+    while (i < length && line[i] == ' ') ++i;
+    if (i >= length || !isdigit(line[i])) return 0;
+    while (i < length && isdigit(line[i])) ++i;
+    while (i < length && line[i] == ' ') ++i;
+    return i + 6U <= length &&
+        tolower(line[i]) == 'f' && tolower(line[i + 1U]) == 'e' &&
+        tolower(line[i + 2U]) == 't' && tolower(line[i + 3U]) == 'c' &&
+        tolower(line[i + 4U]) == 'h' && (line[i + 5U] == ' ' || line[i + 5U] == '\t');
+}
+
+static int file_fetch_finish(const AmgBuffer *meta, unsigned long uid,
+                              size_t candidate_offset, size_t candidate_length,
+                              int *found, size_t *offset, size_t *length,
+                              AmgImapFetchRecord *record)
+{
+    AmgImapFetchRecord parsed;
+    int result;
+    if (candidate_offset == SIZE_MAX) return AMG_OK;
+    result = amg_imap_fetch_metadata(meta->data, meta->length, &parsed);
+    if (result != AMG_OK) return result;
+    if (parsed.uid != uid) return AMG_OK;
+    if (*found) return AMG_ERR_PROTOCOL;
+    *found = 1; *offset = candidate_offset; *length = candidate_length;
+    *record = parsed; record->literal_length = candidate_length;
+    return AMG_OK;
+}
+
+int amg_imap_fetch_message_file(AmgImapSession *session, unsigned long uid,
+                                FILE *file, size_t *offset, size_t *length,
+                                AmgImapFetchRecord *record,
+                                AmgTransfer *transfer, AmgError *error)
+{
+    AmgImapParser parser;
+    AmgImapEvent event;
+    AmgBuffer meta;
+    unsigned char bytes[8192];
+    char tag[24], command[160];
+    size_t written = 0U, candidate_offset = SIZE_MAX, candidate_length = 0U;
+    size_t literal_done = 0U;
+    int result, step = 0, done = 0, accepted = 0, found = 0, in_fetch = 0;
+    if (!session || !session->connection || !uid || !file || !offset ||
+        !length || !record) return AMG_ERR_ARGUMENT;
+    *offset = *length = 0U;
+    memset(record, 0, sizeof(*record));
+    result = amg_transfer_report(transfer, AMG_TRANSFER_RECEIVE, 0U, 0U, error);
+    if (result != AMG_OK) return result;
+    snprintf(tag, sizeof(tag), "A%06lu", session->tag_counter++);
+    snprintf(command, sizeof(command), "%s UID FETCH %lu (UID FLAGS BODY.PEEK[])\r\n", tag, uid);
+    result = amg_tls_write_all(session->connection, command, strlen(command), error);
+    amg_imap_parser_init(&parser); parser.stream_literals = 1;
+    amg_buffer_init(&meta); (void)amg_buffer_set_limit(&meta, AMIGMAIL_MAX_LINE);
+    while (result == AMG_OK && !done) {
+        long got = amg_tls_read(session->connection, bytes, sizeof(bytes), error);
+        if (got <= 0) { result = error && error->code != AMG_OK ? error->code : AMG_ERR_IO; break; }
+        result = amg_imap_parser_feed(&parser, bytes, (size_t)got);
+        if (result != AMG_OK) break;
+        while ((step = amg_imap_parser_next(&parser, &event)) > 0) {
+            if (event.length > AMIMAIL_MAX_MIME_MESSAGE + AMIGMAIL_MAX_LINE - written) {
+                result = AMG_ERR_LIMIT; break;
+            }
+            if (event.type == AMG_IMAP_EVENT_LINE) {
+                size_t literal = 0U;
+                int prefix = file_fetch_prefix(event.data, event.length);
+                int tagged = event.length > strlen(tag) + 3U &&
+                    !memcmp(event.data, tag, strlen(tag)) && event.data[strlen(tag)] == ' ';
+                if (prefix || tagged) {
+                    result = file_fetch_finish(&meta, uid, candidate_offset,
+                        candidate_length, &found, offset, length, record);
+                    if (result != AMG_OK) break;
+                    meta.length = 0U; candidate_offset = SIZE_MAX;
+                    in_fetch = prefix;
+                }
+                if (in_fetch) {
+                    result = amg_buffer_append(&meta, event.data, event.length);
+                    if (result != AMG_OK) break;
+                }
+                if (amg_imap_parse_literal_length(event.data, event.length, &literal) > 0) {
+                    if (!in_fetch || candidate_offset != SIZE_MAX) {
+                        result = AMG_ERR_PROTOCOL; break;
+                    }
+                    candidate_offset = written + event.length;
+                    candidate_length = literal; literal_done = 0U;
+                }
+                if (tagged) {
+                    accepted = tolower(event.data[strlen(tag) + 1U]) == 'o' &&
+                        tolower(event.data[strlen(tag) + 2U]) == 'k' &&
+                        (event.data[strlen(tag) + 3U] == ' ' ||
+                         event.data[strlen(tag) + 3U] == '\r' ||
+                         event.data[strlen(tag) + 3U] == '\n');
+                    done = 1;
+                }
+            }
+            if (event.length && fwrite(event.data, 1U, event.length, file) != event.length) {
+                result = AMG_ERR_IO; break;
+            }
+            written += event.length;
+            if (event.type == AMG_IMAP_EVENT_LITERAL) {
+                literal_done += event.length;
+                result = amg_transfer_report(transfer, AMG_TRANSFER_RECEIVE,
+                                             literal_done, candidate_length, error);
+                if (result != AMG_OK) break;
+            }
+            if (done) break;
+        }
+        if (step < 0 && result == AMG_OK) result = step;
+    }
+    amg_imap_parser_free(&parser); amg_buffer_free(&meta);
+    if (result == AMG_OK && (!accepted || !found)) result = AMG_ERR_PROTOCOL;
+    if (result == AMG_OK && fflush(file)) result = AMG_ERR_IO;
+    if (result != AMG_OK) {
+        amg_imap_abort(session);
+        if (!error || error->code == AMG_OK)
+            amg_error_set(error, result,
+                T(MSG_MESSAGE_TEXT_COULD_NOT_BE_READ, "Message text could not be read."));
+    }
+    return result;
+}
+
+int amg_imap_append_draft_file(AmgImapSession *session, const char *mailbox,
+                               FILE *file, size_t length,
+                               AmgTransfer *transfer, AmgError *error)
+{
+    if (!file) return AMG_ERR_ARGUMENT;
+    return imap_append_message(session, mailbox, "\\Draft", NULL, length,
+                               file, transfer, error);
+}
+
+int amg_imap_append_sent_file(AmgImapSession *session, FILE *file, size_t length,
+                              AmgTransfer *transfer, AmgError *error)
+{
+    if (!file) return AMG_ERR_ARGUMENT;
+    return imap_append_message(session, "\\Sent", "\\Seen", NULL, length,
+                               file, transfer, error);
 }

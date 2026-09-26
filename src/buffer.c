@@ -9,6 +9,8 @@ void amg_buffer_init(AmgBuffer *buffer)
     buffer->data = NULL;
     buffer->length = 0;
     buffer->capacity = 0;
+    buffer->limit = 0;
+    buffer->limit_hit = 0;
 }
 
 void amg_buffer_free(AmgBuffer *buffer)
@@ -18,20 +20,32 @@ void amg_buffer_free(AmgBuffer *buffer)
     amg_buffer_init(buffer);
 }
 
+int amg_buffer_set_limit(AmgBuffer *buffer, size_t limit)
+{
+    if (!buffer || limit == SIZE_MAX) return AMG_ERR_ARGUMENT;
+    if (limit && buffer->length > limit) return AMG_ERR_LIMIT;
+    buffer->limit = limit;
+    buffer->limit_hit = 0;
+    return AMG_OK;
+}
+
 int amg_buffer_reserve(AmgBuffer *buffer, size_t capacity)
 {
     unsigned char *next;
     size_t grown;
     if (!buffer) return AMG_ERR_ARGUMENT;
+    if (buffer->limit && capacity > buffer->limit + 1U) {
+        buffer->limit_hit = 1;
+        return AMG_ERR_LIMIT;
+    }
     if (capacity <= buffer->capacity) return AMG_OK;
     grown = buffer->capacity ? buffer->capacity : 64U;
     while (grown < capacity) {
-        if (grown > (SIZE_MAX / 2U)) {
-            grown = capacity;
-            break;
-        }
+        if (grown > SIZE_MAX / 2U) { grown = capacity; break; }
         grown *= 2U;
     }
+    if (buffer->limit && grown > buffer->limit + 1U)
+        grown = buffer->limit + 1U;
     next = (unsigned char *)realloc(buffer->data, grown);
     if (!next) return AMG_ERR_MEMORY;
     buffer->data = next;
@@ -43,7 +57,9 @@ int amg_buffer_append(AmgBuffer *buffer, const void *data, size_t length)
 {
     int result;
     if (!buffer || (!data && length)) return AMG_ERR_ARGUMENT;
-    if (length > SIZE_MAX - buffer->length) return AMG_ERR_LIMIT;
+    /* Include the terminating byte in the overflow check. */
+    if (buffer->length == SIZE_MAX || length > SIZE_MAX - buffer->length - 1U)
+        return AMG_ERR_LIMIT;
     result = amg_buffer_reserve(buffer, buffer->length + length + 1U);
     if (result != AMG_OK) return result;
     if (length) memcpy(buffer->data + buffer->length, data, length);
@@ -66,6 +82,7 @@ int amg_buffer_terminate(AmgBuffer *buffer)
 {
     int result;
     if (!buffer) return AMG_ERR_ARGUMENT;
+    if (buffer->length == SIZE_MAX) return AMG_ERR_LIMIT;
     result = amg_buffer_reserve(buffer, buffer->length + 1U);
     if (result == AMG_OK) buffer->data[buffer->length] = 0;
     return result;

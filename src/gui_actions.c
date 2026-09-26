@@ -1383,6 +1383,17 @@ void handle_network(AmgGui *gui)
 {
     AmgNetworkEvent event;
     while (amg_network_poll(gui->network, &event) > 0) {
+        /* A slow previous selection must not replace the active mail, nor
+         * reset its progress/status. Always release its file-backed payload.
+         * The network object already scopes this queue to the active account. */
+        if ((event.type == AMG_NET_FETCH_MESSAGE &&
+             !gui_transfer_message_matches(gui, event.uid, event.argument2)) ||
+            (event.type == AMG_NET_FETCH_INBOX &&
+             !gui_transfer_mailbox_matches(gui,
+                 event.argument1[0] ? event.argument1 : "INBOX"))) {
+            amg_network_event_clear(&event);
+            continue;
+        }
         if (event.type == AMG_NET_CHECK_INBOX)
             gui->periodic_check_pending = 0;
         if (event.type == AMG_NET_RECONFIGURE)
@@ -1618,11 +1629,11 @@ void handle_network(AmgGui *gui)
                     int unread_before = !edit_draft &&
                         !message_is_seen(gui, event.uid);
                     memset(&preview_error, 0, sizeof(preview_error));
+                    retain_current_message_payload(gui, &event);
                     if (display_message_payload(
                             gui, event.payload, event.payload_length,
                             event.argument2, event.uid_validity,
                             &preview_error) == AMG_OK) {
-                        retain_current_message_payload(gui, &event);
                         gui->active_message_uid = event.uid;
                         if (unread_before) {
                             int in_inbox =
@@ -2069,6 +2080,9 @@ void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
              * here or a mouse drag is collapsed back to a single row on
              * GADGETUP. */
             request_message(gui, MESSAGE_ACTION_PREVIEW, error);
+            break;
+        case GID_TRANSFER_CANCEL:
+            gui_transfer_cancel(gui);
             break;
         case GID_MESSAGES_SCROLL:
             handle_messages_scroller(gui);

@@ -192,7 +192,13 @@ static int smtp_response_capture_code(AmgTlsConnection *connection,
         used = 0;
         while (used + 1U < sizeof(line)) {
             long count = amg_tls_read(connection, line + used, 1U, error);
-            if (count <= 0) return count < 0 ? (int)count : AMG_ERR_IO;
+            if (count <= 0) {
+                if (error && error->code != AMG_OK) return error->code;
+                amg_error_set(error, AMG_ERR_IO,
+                    T(MSG_THE_SERVER_CLOSED_THE_TLS_CONNECTION,
+                      "The server closed the TLS connection."));
+                return AMG_ERR_IO;
+            }
             if (line[used++] == '\n') {
                 saw_newline = 1;
                 break;
@@ -778,6 +784,11 @@ static int validate_attachments(const AmgMailDraft *draft, AmgError *error)
 {
     size_t i;
     unsigned long total = 0;
+    if (draft->body_utf8 && strlen(draft->body_utf8) > AMIMAIL_MAX_TEXT_PART) {
+        amg_error_set(error, AMG_ERR_LIMIT,
+                      T(MSG_MAIL_TEXT_IS_TOO_LARGE, "Mail text is too large."));
+        return AMG_ERR_LIMIT;
+    }
     for (i = 0; i < draft->attachment_count; ++i) {
         unsigned long size;
         if (!draft->attachments || !draft->attachments[i].path ||
@@ -865,13 +876,40 @@ static int append_mail_headers(const AmgMailDraft *draft, const char *boundary,
     return append_mail_headers_common(draft, boundary, 0, output);
 }
 
+/* Count MIME bytes, not SMTP dot transparency or the final DATA terminator.
+ * The same raw-message ceiling applies to buffered drafts and live sending. */
+static int smtp_take_mime_bytes(size_t *total, size_t length, AmgError *error)
+{
+    if (!total || *total > AMIMAIL_MAX_MIME_MESSAGE ||
+        length > AMIMAIL_MAX_MIME_MESSAGE - *total) {
+        amg_error_set(error, AMG_ERR_LIMIT,
+                      T(MSG_MIME_MESSAGE_TOO_LARGE,
+                        "Message exceeds the 32 MB MIME limit."));
+        return AMG_ERR_LIMIT;
+    }
+    *total += length;
+    return AMG_OK;
+}
+
+static int smtp_write_mime_bytes(AmgTlsConnection *connection,
+                                  const void *data, size_t length,
+                                  size_t *total, AmgError *error)
+{
+    int result = smtp_take_mime_bytes(total, length, error);
+    if (result == AMG_OK)
+        result = amg_tls_write_all(connection, data, length, error);
+    return result;
+}
+
 static int smtp_write_text(AmgTlsConnection *connection, const AmgBuffer *text,
-                           AmgError *error)
+                           size_t *mime_total, AmgError *error)
 {
     AmgBuffer stuffed;
     int result;
     amg_buffer_init(&stuffed);
-    result = amg_smtp_dot_stuff((const char *)text->data, text->length, &stuffed);
+    result = smtp_take_mime_bytes(mime_total, text->length, error);
+    if (result == AMG_OK)
+        result = amg_smtp_dot_stuff((const char *)text->data, text->length, &stuffed);
     if (result == AMG_OK)
         result = amg_tls_write_all(connection, stuffed.data, stuffed.length,
                                    error);
@@ -881,7 +919,9 @@ static int smtp_write_text(AmgTlsConnection *connection, const AmgBuffer *text,
 
 static int smtp_write_attachment(AmgTlsConnection *connection,
                                  const AmgAttachmentInput *attachment,
-                                 const char *boundary, AmgError *error)
+                                 const char *boundary,
+                                 unsigned long *attachment_total_bytes,
+                                 size_t *mime_total, AmgError *error)
 {
     FILE *file;
     unsigned char block[57];
@@ -898,26 +938,34 @@ static int smtp_write_attachment(AmgTlsConnection *connection,
     }
     amg_buffer_init(&header);
     amg_buffer_init(&encoded);
-    amg_buffer_append_cstr(&header, "--");
-    amg_buffer_append_cstr(&header, boundary);
-    amg_buffer_append_cstr(
-        &header,
-        "\r\nContent-Type: application/octet-stream; name=\"");
-    amg_buffer_append_cstr(&header, filename);
-    amg_buffer_append_cstr(
-        &header,
-        "\"\r\nContent-Transfer-Encoding: base64\r\n"
-        "Content-Disposition: attachment; filename=\"");
-    amg_buffer_append_cstr(&header, filename);
-    amg_buffer_append_cstr(&header, "\"\r\n\r\n");
-    result = amg_tls_write_all(connection, header.data, header.length, error);
+    result = amg_buffer_append_cstr(&header, "--");
+    if (result == AMG_OK) result = amg_buffer_append_cstr(&header, boundary);
+    if (result == AMG_OK) result = amg_buffer_append_cstr(
+        &header, "\r\nContent-Type: application/octet-stream; name=\"");
+    if (result == AMG_OK) result = amg_buffer_append_cstr(&header, filename);
+    if (result == AMG_OK) result = amg_buffer_append_cstr(
+        &header, "\"\r\nContent-Transfer-Encoding: base64\r\n"
+                 "Content-Disposition: attachment; filename=\"");
+    if (result == AMG_OK) result = amg_buffer_append_cstr(&header, filename);
+    if (result == AMG_OK) result = amg_buffer_append_cstr(&header, "\"\r\n\r\n");
+    if (result == AMG_OK)
+        result = smtp_write_mime_bytes(connection, header.data, header.length,
+                                        mime_total, error);
     while (result == AMG_OK && (count = fread(block, 1U, sizeof(block), file)) > 0) {
+        if (count > AMG_MAIL_MAX_ATTACHMENT_TOTAL - *attachment_total_bytes) {
+            result = AMG_ERR_LIMIT;
+            amg_error_set(error, result,
+                          T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8,
+                            "Attachments may total no more than 20 MB."));
+            break;
+        }
+        *attachment_total_bytes += (unsigned long)count;
         encoded.length = 0;
         result = amg_base64_encode(block, count, &encoded);
         if (result == AMG_OK) result = amg_buffer_append_cstr(&encoded, "\r\n");
         if (result == AMG_OK)
-            result = amg_tls_write_all(connection, encoded.data, encoded.length,
-                                       error);
+            result = smtp_write_mime_bytes(connection, encoded.data, encoded.length,
+                                            mime_total, error);
     }
     if (result == AMG_OK && ferror(file)) result = AMG_ERR_IO;
     fclose(file);
@@ -931,7 +979,9 @@ static int smtp_write_attachment(AmgTlsConnection *connection,
 
 static int append_attachment_to_buffer(const AmgAttachmentInput *attachment,
                                        const char *boundary,
-                                       AmgBuffer *output, AmgError *error)
+                                       AmgBuffer *output,
+                                       unsigned long *attachment_total_bytes,
+                                       AmgError *error)
 {
     FILE *file;
     unsigned char block[57];
@@ -967,6 +1017,14 @@ static int append_attachment_to_buffer(const AmgAttachmentInput *attachment,
     amg_buffer_init(&encoded);
     while (result == AMG_OK &&
            (count = fread(block, 1U, sizeof(block), file)) > 0U) {
+        if (count > AMG_MAIL_MAX_ATTACHMENT_TOTAL - *attachment_total_bytes) {
+            result = AMG_ERR_LIMIT;
+            amg_error_set(error, result,
+                          T(MSG_ATTACHMENTS_MAY_TOTAL_NO_MORE_THAN_10_MB_UTF8,
+                            "Attachments may total no more than 20 MB."));
+            break;
+        }
+        *attachment_total_bytes += (unsigned long)count;
         encoded.length = 0;
         result = amg_base64_encode(block, count, &encoded);
         if (result == AMG_OK)
@@ -990,6 +1048,7 @@ int amg_smtp_build_mail(const AmgMailDraft *draft, int include_bcc,
     char boundary[96];
     const char *used_boundary = NULL;
     size_t i;
+    unsigned long attachment_total_bytes = 0UL;
     int result;
 
     if (!draft || !output || !header_safe(draft->from) ||
@@ -1006,6 +1065,11 @@ int amg_smtp_build_mail(const AmgMailDraft *draft, int include_bcc,
         return AMG_ERR_ARGUMENT;
     }
 
+    if (!output->limit || output->limit > AMIMAIL_MAX_MIME_MESSAGE) {
+        result = amg_buffer_set_limit(output, AMIMAIL_MAX_MIME_MESSAGE);
+        if (result != AMG_OK) return result;
+    }
+    output->limit_hit = 0;
     result = validate_attachments(draft, error);
     if (result != AMG_OK) return result;
     if (draft->attachment_count) {
@@ -1017,13 +1081,20 @@ int amg_smtp_build_mail(const AmgMailDraft *draft, int include_bcc,
                                         include_bcc ? 1 : 0, output);
     for (i = 0; result == AMG_OK && i < draft->attachment_count; ++i)
         result = append_attachment_to_buffer(&draft->attachments[i],
-                                             used_boundary, output, error);
+                                             used_boundary, output,
+                                             &attachment_total_bytes, error);
     if (result == AMG_OK && used_boundary) {
         result = amg_buffer_append_cstr(output, "--");
         if (result == AMG_OK)
             result = amg_buffer_append_cstr(output, used_boundary);
         if (result == AMG_OK)
             result = amg_buffer_append_cstr(output, "--\r\n");
+    }
+    if (output->limit_hit) {
+        result = AMG_ERR_LIMIT;
+        amg_error_set(error, result,
+                      T(MSG_MIME_MESSAGE_TOO_LARGE,
+                        "Message exceeds the 32 MB MIME limit."));
     }
     if (result != AMG_OK && error && error->code == AMG_OK)
         amg_error_set(error, result,
@@ -1038,7 +1109,8 @@ int amg_smtp_send_mail(const AmgAccount *account, const char *access_token,
     AmgBuffer text, ending;
     char boundary[96];
     const char *used_boundary = NULL;
-    size_t i;
+    size_t i, mime_total = 0U;
+    unsigned long attachment_total_bytes = 0UL;
     int result;
     if (!account || !draft || !header_safe(draft->from) ||
         !header_safe(draft->to) || !header_safe(draft->cc ? draft->cc : "") ||
@@ -1062,19 +1134,22 @@ int amg_smtp_send_mail(const AmgAccount *account, const char *access_token,
     result = smtp_begin_data(connection, account->email, draft->to,
                              draft->cc, draft->bcc, error);
     amg_buffer_init(&text);
+    (void)amg_buffer_set_limit(&text, AMIMAIL_MAX_MIME_MESSAGE);
     amg_buffer_init(&ending);
     if (result == AMG_OK)
         result = append_mail_headers(draft, used_boundary, &text);
-    if (result == AMG_OK) result = smtp_write_text(connection, &text, error);
+    if (result == AMG_OK) result = smtp_write_text(connection, &text, &mime_total, error);
     for (i = 0; result == AMG_OK && i < draft->attachment_count; ++i)
         result = smtp_write_attachment(connection, &draft->attachments[i],
-                                       used_boundary, error);
+                                       used_boundary, &attachment_total_bytes,
+                                       &mime_total, error);
     if (result == AMG_OK && used_boundary) {
-        amg_buffer_append_cstr(&ending, "--");
-        amg_buffer_append_cstr(&ending, used_boundary);
-        amg_buffer_append_cstr(&ending, "--\r\n");
-        result = amg_tls_write_all(connection, ending.data, ending.length,
-                                   error);
+        result = amg_buffer_append_cstr(&ending, "--");
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&ending, used_boundary);
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&ending, "--\r\n");
+        if (result == AMG_OK)
+            result = smtp_write_mime_bytes(connection, ending.data, ending.length,
+                                            &mime_total, error);
     }
     if (result == AMG_OK)
         result = amg_tls_write_all(connection, ".\r\n", 3U, error);
@@ -1083,6 +1158,228 @@ int amg_smtp_send_mail(const AmgAccount *account, const char *access_token,
         (void)smtp_command(connection, "QUIT\r\n", 2, error);
     amg_buffer_free(&text);
     amg_buffer_free(&ending);
+    amg_tls_close(connection);
+    return result;
+}
+
+static int file_mime_write(FILE *file, const void *bytes, size_t length,
+                            size_t *total, AmgError *error)
+{
+    int result = smtp_take_mime_bytes(total, length, error);
+    if (result != AMG_OK) return result;
+    if (length && fwrite(bytes, 1U, length, file) != length) {
+        amg_error_set(error, AMG_ERR_IO,
+            T(MSG_AN_ATTACHMENT_COULD_NOT_BE_WRITTEN_TO_THE,
+              "An attachment could not be written to the draft."));
+        return AMG_ERR_IO;
+    }
+    return AMG_OK;
+}
+
+static int file_reply_headers(const AmgMailDraft *draft, AmgBuffer *output)
+{
+    AmgBuffer mailbox;
+    char number[48];
+    int result = AMG_OK;
+    if (!draft->reply_source_uid || !draft->reply_source_uid_validity ||
+        !draft->reply_source_mailbox || !*draft->reply_source_mailbox) return AMG_OK;
+    amg_buffer_init(&mailbox);
+    result = amg_modified_utf7_encode(draft->reply_source_mailbox, &mailbox);
+    if (result == AMG_OK) result = amg_buffer_terminate(&mailbox);
+    snprintf(number, sizeof(number), "%lu", draft->reply_source_uid);
+    if (result == AMG_OK) result = append_header(output, AMG_MAIL_REPLY_UID_HEADER, number);
+    snprintf(number, sizeof(number), "%lu", draft->reply_source_uid_validity);
+    if (result == AMG_OK) result = append_header(output, AMG_MAIL_REPLY_UIDVALIDITY_HEADER, number);
+    if (result == AMG_OK) result = append_header(output, AMG_MAIL_REPLY_MAILBOX_HEADER,
+                                                (const char *)mailbox.data);
+    amg_buffer_free(&mailbox);
+    return result;
+}
+
+int amg_smtp_build_mail_file(const AmgMailDraft *draft, int include_bcc,
+                             int include_reply_context, FILE *file,
+                             size_t *length, AmgTransfer *transfer,
+                             AmgError *error)
+{
+    AmgBuffer buffer, encoded;
+    unsigned char input[57U * 128U];
+    char boundary[96], filename[256];
+    const char *used_boundary = NULL;
+    size_t i, total = 0U;
+    unsigned long attached = 0UL, expected = 0UL;
+    int result;
+    if (length) *length = 0U;
+    if (!draft || !file || !length || !header_safe(draft->from) ||
+        !header_safe(draft->to ? draft->to : "") ||
+        !header_safe(draft->cc ? draft->cc : "") ||
+        !header_safe(draft->bcc ? draft->bcc : "") ||
+        !header_safe(draft->subject ? draft->subject : "") ||
+        !header_safe(draft->date_rfc2822) || !header_safe(draft->message_id) ||
+        !header_safe(draft->in_reply_to ? draft->in_reply_to : "") ||
+        !header_safe(draft->references ? draft->references : "")) return AMG_ERR_ARGUMENT;
+    result = validate_attachments(draft, error);
+    if (result != AMG_OK) return result;
+    for (i = 0U; i < draft->attachment_count; ++i) {
+        unsigned long size = 0UL;
+        if (attachment_file_size(draft->attachments[i].path, &size) != AMG_OK ||
+            size > AMG_MAIL_MAX_ATTACHMENT_TOTAL - expected) return AMG_ERR_LIMIT;
+        expected += size;
+    }
+    if (draft->attachment_count) { make_mime_boundary(draft, boundary); used_boundary = boundary; }
+    amg_buffer_init(&buffer); amg_buffer_init(&encoded);
+    (void)amg_buffer_set_limit(&buffer, AMIMAIL_MAX_MIME_MESSAGE);
+    (void)amg_buffer_set_limit(&encoded, 16384U);
+    result = amg_transfer_report(transfer, AMG_TRANSFER_PREPARE, 0U, expected, error);
+    if (result == AMG_OK && include_reply_context) result = file_reply_headers(draft, &buffer);
+    if (result == AMG_OK)
+        result = append_mail_headers_common(draft, used_boundary, include_bcc, &buffer);
+    if (result == AMG_OK) result = file_mime_write(file, buffer.data, buffer.length, &total, error);
+    for (i = 0U; result == AMG_OK && i < draft->attachment_count; ++i) {
+        FILE *attachment;
+        size_t got;
+        safe_filename(draft->attachments[i].name_utf8, filename, sizeof(filename));
+        attachment = fopen(draft->attachments[i].path, "rb");
+        if (!attachment) { result = AMG_ERR_IO; break; }
+        buffer.length = 0U;
+        result = amg_buffer_append_cstr(&buffer, "--");
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&buffer, boundary);
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&buffer,
+            "\r\nContent-Type: application/octet-stream; name=\"");
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&buffer, filename);
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&buffer,
+            "\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"");
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&buffer, filename);
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&buffer, "\"\r\n\r\n");
+        if (result == AMG_OK) result = file_mime_write(file, buffer.data, buffer.length, &total, error);
+        while (result == AMG_OK && (got = fread(input, 1U, sizeof(input), attachment)) > 0U) {
+            size_t pos = 0U;
+            if (got > AMG_MAIL_MAX_ATTACHMENT_TOTAL - attached) { result = AMG_ERR_LIMIT; break; }
+            attached += (unsigned long)got;
+            encoded.length = 0U;
+            while (pos < got && result == AMG_OK) {
+                size_t chunk = got - pos;
+                if (chunk > 57U) chunk = 57U;
+                result = amg_base64_encode(input + pos, chunk, &encoded);
+                if (result == AMG_OK) result = amg_buffer_append_cstr(&encoded, "\r\n");
+                pos += chunk;
+            }
+            if (result == AMG_OK) result = amg_transfer_report(transfer,
+                AMG_TRANSFER_PREPARE, attached, expected, error);
+            if (result == AMG_OK) result = file_mime_write(file, encoded.data, encoded.length, &total, error);
+        }
+        if (result == AMG_OK && ferror(attachment)) result = AMG_ERR_IO;
+        fclose(attachment);
+    }
+    if (result == AMG_OK && used_boundary) {
+        buffer.length = 0U;
+        result = amg_buffer_append_cstr(&buffer, "--");
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&buffer, boundary);
+        if (result == AMG_OK) result = amg_buffer_append_cstr(&buffer, "--\r\n");
+        if (result == AMG_OK) result = file_mime_write(file, buffer.data, buffer.length, &total, error);
+    }
+    if (result == AMG_OK && fflush(file)) result = AMG_ERR_IO;
+    if (result == AMG_OK) *length = total;
+    else if (!error || error->code == AMG_OK)
+        amg_error_set(error, result,
+            T(MSG_MAIL_DRAFT_COULD_NOT_BE_CREATED, "Mail draft could not be created."));
+    amg_buffer_free(&buffer); amg_buffer_free(&encoded);
+    return result;
+}
+
+/* Private spool files include Bcc for Drafts/Sent/recovery. This reader removes
+ * Bcc plus continuations from SMTP DATA and preserves dot-stuffing across
+ * block boundaries. Envelope recipients were supplied separately. */
+static int smtp_file_data(AmgTlsConnection *connection, FILE *file, size_t length,
+                           AmgTransfer *transfer, AmgError *error)
+{
+    unsigned char block[8192], stuffed[16384];
+    char line[1024];
+    size_t read_bytes = 0U;
+    int result = AMG_OK, skip = 0, in_headers = 1, line_start = 1;
+    unsigned char last = 0U, previous = 0U;
+    if (length > AMIMAIL_MAX_MIME_MESSAGE || fseek(file, 0L, SEEK_SET)) return AMG_ERR_IO;
+    while (in_headers && result == AMG_OK) {
+        size_t n;
+        result = amg_transfer_report(transfer, AMG_TRANSFER_UPLOAD, read_bytes, length, error);
+        if (result != AMG_OK) break;
+        if (!fgets(line, sizeof(line), file)) { result = AMG_ERR_IO; break; }
+        n = strlen(line);
+        if (!n || line[n - 1U] != '\n' || n > length - read_bytes) { result = AMG_ERR_PARSE; break; }
+        read_bytes += n;
+        if (line[0] != ' ' && line[0] != '\t')
+            skip = n >= 4U && tolower((unsigned char)line[0]) == 'b' &&
+                tolower((unsigned char)line[1]) == 'c' &&
+                tolower((unsigned char)line[2]) == 'c' && line[3] == ':';
+        if ((n == 2U && line[0] == '\r') || n == 1U) { skip = 0; in_headers = 0; }
+        if (!skip) result = amg_tls_write_all(connection, line, n, error);
+    }
+    while (result == AMG_OK && read_bytes < length) {
+        size_t want = length - read_bytes, got, i, used = 0U;
+        result = amg_transfer_report(transfer, AMG_TRANSFER_UPLOAD, read_bytes, length, error);
+        if (result != AMG_OK) break;
+        if (want > sizeof(block)) want = sizeof(block);
+        got = fread(block, 1U, want, file);
+        if (!got) { result = AMG_ERR_IO; break; }
+        read_bytes += got;
+        for (i = 0U; i < got; ++i) {
+            unsigned char c = block[i];
+            if (line_start && c == '.') stuffed[used++] = '.';
+            stuffed[used++] = c;
+            line_start = c == '\n'; previous = last; last = c;
+        }
+        result = amg_tls_write_all(connection, stuffed, used, error);
+    }
+    if (result == AMG_OK && (previous != '\r' || last != '\n'))
+        result = amg_tls_write_all(connection, "\r\n", 2U, error);
+    return result;
+}
+
+int amg_smtp_send_mail_file(const AmgAccount *account, const char *access_token,
+                            const AmgMailDraft *envelope, FILE *file,
+                            size_t length, AmgTransfer *transfer,
+                            AmgError *error)
+{
+    AmgTlsConnection *connection;
+    int result;
+    if (!account || !envelope || !file || !header_safe(envelope->to ? envelope->to : "") ||
+        !header_safe(envelope->cc ? envelope->cc : "") ||
+        !header_safe(envelope->bcc ? envelope->bcc : "")) return AMG_ERR_ARGUMENT;
+    result = amg_transfer_report(transfer, AMG_TRANSFER_UPLOAD, 0U, length, error);
+    if (result != AMG_OK) return result;
+    connection = smtp_open(account, access_token, error);
+    if (!connection) return error ? error->code : AMG_ERR_TLS;
+    result = smtp_begin_data(connection, account->email, envelope->to,
+                             envelope->cc, envelope->bcc, error);
+    if (result == AMG_OK) result = smtp_file_data(connection, file, length, transfer, error);
+    if (result == AMG_OK)
+        result = amg_transfer_report(transfer, AMG_TRANSFER_COMMIT, length, length, error);
+    if (result == AMG_OK) {
+        int reply_code = 0;
+        result = amg_tls_write_all(connection, ".\r\n", 3U, error);
+        if (result == AMG_OK)
+            result = smtp_response_capture_code(connection, 0, NULL,
+                                                 &reply_code, error);
+        if (result == AMG_OK && reply_code / 100 != 2) {
+            result = AMG_ERR_PROTOCOL;
+            amg_error_set(error, result,
+                T(MSG_INVALID_SMTP_RESPONSE, "Invalid SMTP response."));
+        }
+        /* Only an explicit final 4xx/5xx proves rejection. A disconnect,
+         * malformed reply, allocation failure or lost write status after
+         * DATA's terminator leaves the delivery outcome unknown. */
+        if (result != AMG_OK && !(result == AMG_ERR_PROTOCOL &&
+            (reply_code / 100 == 4 || reply_code / 100 == 5))) {
+            result = AMG_ERR_UNCERTAIN;
+            amg_error_set(error, result, T(MSG_DELIVERY_UNCERTAIN,
+                "Server confirmation missing. Check delivery before retrying."));
+        }
+    }
+    if (result == AMG_OK) {
+        AmgError ignored;
+        memset(&ignored, 0, sizeof(ignored));
+        (void)smtp_command(connection, "QUIT\r\n", 2, &ignored);
+        amg_error_set(error, AMG_OK, "");
+    }
     amg_tls_close(connection);
     return result;
 }

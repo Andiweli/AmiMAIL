@@ -104,7 +104,7 @@ static void test_utf8_to_local(void)
         "\xF0\x9F\xA7\x91\xE2\x80\x8D\xE2\x9A\x95\xEF\xB8\x8F"
         " L\xC3\xA4use \xE2\x82\x82 \xE2\x81\x89 \xE2\x9A\xA1",
         &output) == AMG_OK);
-    CHECK(!strcmp(text(&output), "[Grafik] L\xE4use 2 !? [Grafik]"));
+    CHECK(!strcmp(text(&output), "[Graphic] L\xE4use 2 !? [Graphic]"));
     amg_buffer_free(&output);
 }
 
@@ -241,7 +241,10 @@ static void test_imap_parser(void)
         }
     }
     {
-        const char *oversized_literal = "* 1 FETCH (BODY[] {8388609}\r\n";
+        char oversized_literal[80];
+        snprintf(oversized_literal, sizeof(oversized_literal),
+                 "* 1 FETCH (BODY[] {%lu}\r\n",
+                 (unsigned long)AMIGMAIL_MAX_MESSAGE + 1UL);
         amg_imap_parser_init(&parser);
         CHECK(amg_imap_parser_feed(&parser, oversized_literal,
                                    strlen(oversized_literal)) == AMG_OK);
@@ -429,7 +432,7 @@ static void test_mime(void)
         amg_buffer_init(&output);
         CHECK(amg_html_to_text(images, strlen(images), &output) == AMG_OK);
         CHECK(strstr(text(&output), "Logo Firmenlogo") != NULL);
-        CHECK(strstr((char *)output.data, "Bild [Grafik]") != NULL);
+        CHECK(strstr((char *)output.data, "Bild [Graphic]") != NULL);
         CHECK(strstr((char *)output.data, "pixel.gif") == NULL);
         amg_buffer_free(&output);
     }

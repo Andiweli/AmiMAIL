@@ -1,4 +1,4 @@
-## version 7
+## version 9
 ## language english
 ## basename AmiMAIL
 ;
@@ -1533,3 +1533,108 @@ The mail can be edited later.
 ;
 MSG_EMBEDDED_GRAPHICS_7F31 (2100000030//)
 \n\nEmbedded graphics:\n
+;
+MSG_PREVIEW_SIZE_LIMIT (2100000031//)
+\n\n[Preview shortened or omitted (size limit). Message and attachments are unchanged.]\n
+;
+MSG_PREVIEW_TEXT_UNAVAILABLE (2100000032//)
+[No supported text body. Attachments can still be saved.]\n
+;
+MSG_MIME_MESSAGE_TOO_LARGE (2100000033//)
+Message exceeds the 32 MB MIME limit.
+;
+MSG_TRANSFER_CANCELLED (2100000034//)
+Transfer cancelled.
+;
+MSG_SPOOL_UNAVAILABLE (2100000035//)
+Temporary folder unavailable. Check AmiMAIL_SpoolDir.
+;
+MSG_SPOOL_CREATE_FAILED (2100000036//)
+Temporary file could not be created.
+;
+MSG_TRANSFERS (2100000037//)
+Transfers
+;
+MSG_TRANSFER_PREPARE (2100000038//)
+Preparing local copy
+;
+MSG_TRANSFER_RECEIVE (2100000039//)
+Receiving message
+;
+MSG_TRANSFER_INDEX (2100000040//)
+Reading message
+;
+MSG_TRANSFER_UPLOAD (2100000041//)
+Uploading message
+;
+MSG_TRANSFER_COMMIT (2100000042//)
+Waiting for server confirmation
+;
+MSG_TRANSFER_EXPORT (2100000043//)
+Saving attachment
+;
+MSG_TRANSFER_IDLE (2100000044//)
+Idle
+;
+MSG_LOCAL_COPY_KEPT (2100000045//)
+Local recovery copy: %s
+;
+MSG_DELIVERY_UNCERTAIN (2100000046//)
+Server confirmation missing. Check delivery before retrying.
+;
+MSG_ATTACHMENT_SELECTION (2100000047//)
+Select attachments to save
+;
+MSG_ATTACHMENT_NAME (2100000048//)
+File name
+;
+MSG_ATTACHMENT_KIND (2100000049//)
+Type
+;
+MSG_REGULAR_ATTACHMENT (2100000050//)
+Attachment
+;
+MSG_EMBEDDED_GRAPHIC (2100000051//)
+Embedded graphic
+;
+MSG_SELECT_REGULAR_ATTACHMENTS (2100000052//)
+Attachments only
+;
+MSG_SELECT_EMBEDDED_GRAPHICS (2100000053//)
+Graphics only
+;
+MSG_SELECT_NONE (2100000054//)
+Select none
+;
+MSG_SAVE_SELECTED (2100000055//)
+Save selected
+;
+MSG_ATTACHMENT_EXPORT_RESULT (2100000056//)
+%lu saved, %lu failed.
+;
+MSG_ATTACHMENT_EXPORT_CANCELLED (2100000057//)
+Cancelled; %lu file(s) already saved.
+;
+MSG_TRANSFER_ACCOUNT_PROGRESS (2100000058//)
+%s: %lu / %lu KB
+;
+MSG_ATTACHMENT_ENCODED_SIZE (2100000059//)
+Encoded size
+;
+MSG_ATTACHMENT_SELECT_HINT (2100000060//)
+Select files. Existing files are never overwritten.
+;
+MSG_PARTIAL_COPY_KEPT (2100000061//)
+Incomplete copy; temporary attachments kept: %s
+;
+MSG_REACTION_WINDOW_COULD_NOT_BE_CREATED (2100000062//)
+ReAction window could not be created.
+;
+MSG_GUI_ARROW_IMAGES_COULD_NOT_BE_CREATED (2100000063//)
+GUI arrow images could not be created.
+;
+MSG_GRAPHIC_PLACEHOLDER_UTF8 (2100000064//)
+[Graphic]
+;
+MSG_GRAPHIC_PLACEHOLDER_LOCAL (2100000065//)
+[Graphic]

@@ -1,4 +1,5 @@
 #include "codec.h"
+#include "i18n.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -405,7 +406,7 @@ int amg_utf8_to_local(const char *utf8, AmgBuffer *output)
 
         /* Variation selectors and emoji modifiers belong to the preceding
          * pictograph.  A zero-width joiner joins the next pictograph into the
-         * same visual emoji, so emit only one [Grafik] marker for that glyph. */
+         * same visual emoji, so emit only one localized marker for that glyph. */
         if (cp >= 0xFE00U && cp <= 0xFE0FU) continue;
         if (cp >= 0x1F3FBU && cp <= 0x1F3FFU) continue;
         if (cp == 0x200DU) {
@@ -414,7 +415,8 @@ int amg_utf8_to_local(const char *utf8, AmgBuffer *output)
         }
 
         if (unicode_is_graphic_symbol(cp)) {
-            result = join_graphic ? AMG_OK : append_local_text(output, "[Grafik]");
+            result = join_graphic ? AMG_OK : append_local_text(
+                output, amg_tr(MSG_GRAPHIC_PLACEHOLDER_LOCAL, "[Graphic]"));
             if (result != AMG_OK) return result;
             previous_was_graphic = 1;
             join_graphic = 0;

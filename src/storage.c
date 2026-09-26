@@ -1,4 +1,5 @@
 #include "storage.h"
+#include "fileio.h"
 #include "buffer.h"
 #include "crypto.h"
 #include "tls.h"
@@ -94,24 +95,43 @@ static int storage_header_version(const char *data)
     return 0;
 }
 
-static int write_hex_line(FILE *file,const char *name,const unsigned char *data,size_t length)
+static int write_hex_line(FILE *file, const char *name,
+                           const unsigned char *data, size_t length)
 {
-    AmgBuffer encoded;int result;amg_buffer_init(&encoded);result=hex_encode(data,length,&encoded);if(result==AMG_OK){amg_buffer_terminate(&encoded);if(fprintf(file,"%s=%s\n",name,(char*)encoded.data)<0)result=AMG_ERR_IO;}amg_buffer_free(&encoded);return result;
+    AmgBuffer encoded;
+    int result;
+    amg_buffer_init(&encoded);
+    result = hex_encode(data, length, &encoded);
+    if (result == AMG_OK) result = amg_buffer_terminate(&encoded);
+    if (result == AMG_OK &&
+        fprintf(file, "%s=%s\n", name, (const char *)encoded.data) < 0)
+        result = AMG_ERR_IO;
+    amg_buffer_free(&encoded);
+    return result;
 }
 
-static int replace_file(const char *temporary,const char *path)
+static int replace_file(const char *temporary, const char *path)
 {
-#if AMIGMAIL_AMIGA
-    DeleteFile((CONST_STRPTR)path);
-    return Rename((CONST_STRPTR)temporary,(CONST_STRPTR)path)?AMG_OK:AMG_ERR_IO;
-#else
-    remove(path);
-    return rename(temporary,path)==0?AMG_OK:AMG_ERR_IO;
-#endif
+    return amg_file_replace(temporary, path);
 }
 
 static void discard_file(const char *path)
 {
+    size_t length;
+    char *backup;
+    if (!path) return;
+    length = strlen(path);
+    backup = length <= SIZE_MAX - 5U ? (char *)malloc(length + 5U) : NULL;
+    if (backup) {
+        memcpy(backup, path, length);
+        memcpy(backup + length, ".bak", 5U);
+#if AMIGMAIL_AMIGA
+        DeleteFile((CONST_STRPTR)backup);
+#else
+        remove(backup);
+#endif
+        free(backup);
+    }
 #if AMIGMAIL_AMIGA
     DeleteFile((CONST_STRPTR)path);
 #else
@@ -163,6 +183,7 @@ int amg_storage_load_account_order(size_t order[AMG_MAX_ACCOUNTS])
 
     if (!order) return AMG_ERR_ARGUMENT;
     account_order_identity(order);
+    if (amg_file_recover(account_order_path) != AMG_OK) return AMG_ERR_IO;
     file = fopen(account_order_path, "rb");
     if (!file) return AMG_ERR_IO;
     if (!fgets(header, sizeof(header), file) ||
@@ -646,10 +667,33 @@ int amg_storage_save_account_cached(const char *account_path,
 #endif
 }
 
-static char *read_all(const char *path,size_t *length)
+static char *read_all(const char *path, size_t *length)
 {
-    FILE *file=fopen(path,"rb");long size;char *data;if(!file)return NULL;if(fseek(file,0,SEEK_END)||((size=ftell(file))<0)||fseek(file,0,SEEK_SET)){fclose(file);return NULL;}
-    data=(char*)malloc((size_t)size+1U);if(!data){fclose(file);return NULL;}if(fread(data,1U,(size_t)size,file)!=(size_t)size){free(data);fclose(file);return NULL;}fclose(file);data[size]=0;*length=(size_t)size;return data;
+    FILE *file;
+    long size;
+    char *data;
+    if (!length) return NULL;
+    *length = 0U;
+    if (!path || amg_file_recover(path) != AMG_OK) return NULL;
+    file = fopen(path, "rb");
+    if (!file) return NULL;
+    if (fseek(file, 0L, SEEK_END) != 0 || (size = ftell(file)) < 0 ||
+        (unsigned long)size > 1024UL * 1024UL ||
+        fseek(file, 0L, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
+    data = (char *)malloc((size_t)size + 1U);
+    if (!data) { fclose(file); return NULL; }
+    if (fread(data, 1U, (size_t)size, file) != (size_t)size || ferror(file)) {
+        free(data);
+        fclose(file);
+        return NULL;
+    }
+    if (fclose(file) != 0) { free(data); return NULL; }
+    data[size] = 0;
+    *length = (size_t)size;
+    return data;
 }
 
 int amg_storage_copy_session_key(const char *source_path,

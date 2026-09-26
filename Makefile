@@ -1,10 +1,12 @@
-PROJECT := AmiMail
-VERSION := 2.0.6
+PROJECT := AmiMAIL
+VERSION := 2.1.0
 
 ifeq ($(origin CC),default)
 CC := m68k-amigaos-gcc
 endif
 HOST_CC ?= gcc
+PYTHON ?= python3
+HOST_TEST_FLAGS ?= -std=c99 -O2 $(COMMON_WARN) -Werror
 LHA ?= lha
 RELEASE_ASSET := AmiMAIL-v$(VERSION).lha
 RELEASE_ICON := assets/Icons/AmiMail.info
@@ -59,29 +61,34 @@ AMIGA_LDFLAGS := -m68020 -msoft-float -L"$(AMISSL_OS3_LIB)"
 AMISSL_EXTRA_LIBS ?=
 AMIGA_LIBS := $(AMISSL_EXTRA_LIBS) -Wl,--start-group -lc -lstubs -lamiga -Wl,--end-group
 
-SOURCES := src/main.c src/app.c src/splash.c src/common.c src/buffer.c src/account.c src/codec.c \
+SOURCES := src/main.c src/app.c src/splash.c src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/codec.c \
            src/crypto.c src/imap_parser.c src/mime.c src/mailto.c src/oauth.c src/tls.c src/update.c \
            src/imap.c src/smtp.c src/storage.c src/contacts.c src/contacts_import.c \
            src/network_task.c src/gui.c src/gui_runtime.c src/gui_actions.c src/gui_mailto.c \
            src/gui_window.c src/gui_icons.c src/gui_update.c src/iconified_data.c src/gui_state.c src/gui_notify.c \
            src/gui_dialogs.c src/gui_contacts.c src/gui_compose.c src/gui_folders.c \
-           src/gui_messages.c src/gui_preview.c src/charset.c src/i18n.c src/banner_data.c
+           src/gui_messages.c src/gui_preview.c src/gui_attachments.c src/gui_transfer.c src/charset.c src/i18n.c src/banner_data.c
 OBJECTS := $(SOURCES:src/%.c=build/%.o)
 
-HOST_SOURCES := src/common.c src/buffer.c src/account.c src/codec.c src/crypto.c \
+HOST_SOURCES := src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/codec.c src/crypto.c \
                 src/imap_parser.c src/mime.c src/mailto.c src/oauth.c src/tls.c src/smtp.c \
-                src/storage.c src/contacts.c src/contacts_import.c src/update.c src/i18n.c
+                src/storage.c src/contacts.c src/contacts_import.c src/update.c src/i18n.c src/charset.c
 HOST_TEST := build/host-tests
+HOST_HEADERS := $(wildcard include/*.h)
+REVIEW_TEST := build/review-tests
+FILEIO_TEST := build/fileio-fault-tests
+SMTP_STREAM_TEST := build/smtp-stream-tests
+CATALOG_TOOL := tools/catalog_tool.py
 
-.PHONY: all release debug clean dist release-lha source-dist host-test host-check check-env
+.PHONY: all release debug clean dist release-lha source-dist host-test host-check check-env catalogs catalogs-check catalog-test review-test mailfile-test imap-file-test smtp-file-test native-syntax-test mailfile-parity-test dialog-test progress-context-test imap-folder-progress-test locale-test
 
 all: release
 
 release: CFLAGS := $(AMIGA_CFLAGS) -Os -DNDEBUG
-release: check-env bin/$(PROJECT)
+release: check-env catalogs bin/$(PROJECT)
 
 debug: CFLAGS := $(AMIGA_CFLAGS) -O0 -g3
-debug: clean bin/$(PROJECT)
+debug: clean catalogs bin/$(PROJECT)
 
 bin/$(PROJECT): $(OBJECTS) | bin
 
@@ -103,9 +110,42 @@ host-check: | build
 
 	$(HOST_CC) -std=c99 -O2 $(COMMON_WARN) -Iinclude src/*.c -o build/amimail-host-check
 
-$(HOST_TEST): tests/test_main.c $(HOST_SOURCES) | build
+$(HOST_TEST): tests/test_main.c $(HOST_SOURCES) $(HOST_HEADERS) | build
 
-	$(HOST_CC) -std=c99 -O2 $(COMMON_WARN) -Iinclude $^ -o $@
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_main.c $(HOST_SOURCES) -o $@
+
+$(REVIEW_TEST): tests/test_review.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_review.c $(HOST_SOURCES) -o $@
+
+$(FILEIO_TEST): tests/test_fileio_faults.c src/fileio.c $(HOST_HEADERS) | build
+
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_fileio_faults.c -o $@
+
+$(SMTP_STREAM_TEST): tests/test_smtp_stream.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_smtp_stream.c $(filter-out src/smtp.c,$(HOST_SOURCES)) -o $@
+
+# The shipped catalog is rebuilt deterministically from the same ID set used
+# by the executable. Python is needed on the build host only, not the Amiga.
+catalogs:
+
+	@command -v $(PYTHON) >/dev/null || { echo "MISSING: $(PYTHON) (catalog build; set PYTHON=python if needed)"; exit 1; }
+	$(PYTHON) $(CATALOG_TOOL) --build
+
+catalogs-check:
+
+	$(PYTHON) $(CATALOG_TOOL) --check
+
+catalog-test:
+
+	$(PYTHON) -m unittest discover -s tests -p test_catalog_tool.py
+
+review-test: host-test $(REVIEW_TEST) $(FILEIO_TEST) $(SMTP_STREAM_TEST) catalogs-check catalog-test mailfile-test imap-file-test smtp-file-test native-syntax-test mailfile-parity-test dialog-test progress-context-test imap-folder-progress-test locale-test
+
+	./$(REVIEW_TEST)
+	./$(FILEIO_TEST)
+	./$(SMTP_STREAM_TEST)
 
 check-env:
 
@@ -123,13 +163,19 @@ dist: release
 
 	mkdir -p dist/$(PROJECT)-$(VERSION)/docs
 
-	cp bin/$(PROJECT) $(RELEASE_ICON) CHANGELOG.md LICENSE $(RELEASE_README) dist/$(PROJECT)-$(VERSION)/
+	cp bin/$(PROJECT) CHANGELOG.md LICENSE $(RELEASE_README) dist/$(PROJECT)-$(VERSION)/
+
+	cp $(RELEASE_ICON) dist/$(PROJECT)-$(VERSION)/$(PROJECT).info
 
 	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md dist/$(PROJECT)-$(VERSION)/docs/
 
 	cp -R config dist/$(PROJECT)-$(VERSION)/
 
-	cp -R $(RELEASE_CATALOGS) dist/$(PROJECT)-$(VERSION)/Catalogs
+	mkdir -p dist/$(PROJECT)-$(VERSION)/Catalogs/deutsch
+
+	cp $(RELEASE_CATALOGS)/deutsch/AmiMAIL.catalog dist/$(PROJECT)-$(VERSION)/Catalogs/deutsch/
+
+	cp -R _Guides dist/$(PROJECT)-$(VERSION)/Guides
 
 	cd dist && tar -czf $(PROJECT)-$(VERSION)-AmigaOS3.tar.gz $(PROJECT)-$(VERSION)
 
@@ -141,13 +187,19 @@ release-lha: release
 
 	mkdir -p dist/$(PROJECT)-$(VERSION)/docs
 
-	cp bin/$(PROJECT) $(RELEASE_ICON) CHANGELOG.md LICENSE $(RELEASE_README) dist/$(PROJECT)-$(VERSION)/
+	cp bin/$(PROJECT) CHANGELOG.md LICENSE $(RELEASE_README) dist/$(PROJECT)-$(VERSION)/
+
+	cp $(RELEASE_ICON) dist/$(PROJECT)-$(VERSION)/$(PROJECT).info
 
 	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md dist/$(PROJECT)-$(VERSION)/docs/
 
 	cp -R config dist/$(PROJECT)-$(VERSION)/
 
-	cp -R $(RELEASE_CATALOGS) dist/$(PROJECT)-$(VERSION)/Catalogs
+	mkdir -p dist/$(PROJECT)-$(VERSION)/Catalogs/deutsch
+
+	cp $(RELEASE_CATALOGS)/deutsch/AmiMAIL.catalog dist/$(PROJECT)-$(VERSION)/Catalogs/deutsch/
+
+	cp -R _Guides dist/$(PROJECT)-$(VERSION)/Guides
 
 	cd dist && $(LHA) a $(RELEASE_ASSET) $(PROJECT)-$(VERSION)
 
@@ -167,3 +219,56 @@ clean:
 	rm -rf build bin dist/$(PROJECT)-$(VERSION) dist/$(PROJECT)-$(VERSION)-AmigaOS3.tar.gz dist/$(RELEASE_ASSET) dist/$(PROJECT)-$(VERSION)-source.zip
 
 -include $(OBJECTS:.o=.d)
+
+# File-backed MIME / selective export, including a full 20 MiB round trip.
+build/mailfile-tests: tests/test_mailfile.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_mailfile.c $(HOST_SOURCES) -o $@
+
+mailfile-test: build/mailfile-tests
+	./build/mailfile-tests
+
+build/imap-file-tests: tests/test_imap_file.c tests/transfer_tls_double.h src/imap.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_imap_file.c $(HOST_SOURCES) -o $@
+
+imap-file-test: build/imap-file-tests
+	./build/imap-file-tests
+
+build/smtp-file-tests: tests/test_smtp_file.c tests/transfer_tls_double.h src/smtp.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_smtp_file.c $(filter-out src/smtp.c,$(HOST_SOURCES)) -o $@
+
+smtp-file-test: build/smtp-file-tests
+	./build/smtp-file-tests
+
+native-syntax-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/check_native_syntax.py
+
+build/mailfile-parity-tests: tests/test_mailfile_parity.c tests/test_main.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_mailfile_parity.c $(HOST_SOURCES) -o $@
+
+mailfile-parity-test: build/mailfile-parity-tests
+	./build/mailfile-parity-tests
+
+# Explicit API doubles: these do not replace a real m68k/AmigaOS test.
+dialog-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_dialog_regressions.py
+
+progress-context-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_progress_context.py
+
+# Actual IMAP parser with a scripted, command-gated TLS peer (host only).
+build/imap-folder-progress-tests: tests/test_imap_folder_progress.c tests/transfer_tls_double.h src/imap.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_imap_folder_progress.c $(HOST_SOURCES) -o $@
+
+imap-folder-progress-test: build/imap-folder-progress-tests
+	./build/imap-folder-progress-tests
+
+# Actual HTML/codec code with catalog-backed locale test doubles.
+locale-test: catalogs-check
+	HOST_CC="$(HOST_CC)" HOST_TEST_FLAGS="$(HOST_TEST_FLAGS)" $(PYTHON) tests/test_locale_markers.py
+
+# One-click account reordering and the native sound worker lifecycle.
+.PHONY: notify-order-test
+notify-order-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_notify_order.py
+
+review-test: notify-order-test

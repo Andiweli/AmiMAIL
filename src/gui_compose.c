@@ -577,7 +577,10 @@ static void append_local_limited(char *destination, size_t capacity,
 
 static void delete_compose_temp_file(const char *path)
 {
-    if (path && *path) DeleteFile((CONST_STRPTR)path);
+    if (path && *path) {
+        amg_spool_remove(path);
+        (void)DeleteFile((CONST_STRPTR)path);
+    }
 }
 
 static void cleanup_compose_attachments(ComposeAttachment *attachments,
@@ -677,6 +680,68 @@ static int write_compose_attachment_temp(ComposeAttachment *attachment,
     attachment->temporary = 1;
     amg_error_set(error, AMG_OK, "");
     return AMG_OK;
+}
+
+static int restore_disk_attachments(AmgGui *gui, DraftEditData *seed,
+                                     AmgError *error)
+{
+    char directory[AMG_SPOOL_PATH_MAX];
+    AmgMailFile *mail = gui->current_mail_file;
+    GuiFileProgress *progress = NULL;
+    unsigned long total = 0UL;
+    size_t i;
+    int result;
+    if (!mail || !mail->attachment_count) return AMG_OK;
+    if (!reserve_compose_attachments(&seed->attachments,
+                                     &seed->attachment_capacity,
+                                     mail->attachment_count)) {
+        amg_error_set(error, AMG_ERR_MEMORY, T(MSG_NOT_ENOUGH_MEMORY,
+                                              "Not enough memory."));
+        return AMG_ERR_MEMORY;
+    }
+    result = amg_spool_directory(directory, error);
+    if (result != AMG_OK) return result;
+    progress = gui_file_progress_open(gui, T(MSG_TRANSFER_PREPARE,
+                                            "Preparing local copy"));
+    if (!progress) {
+        amg_error_set(error, AMG_ERR_MEMORY, T(MSG_NOT_ENOUGH_MEMORY,
+                                              "Not enough memory."));
+        return AMG_ERR_MEMORY;
+    }
+    for (i = 0U; i < mail->attachment_count; ++i) {
+        ComposeAttachment *attachment = &seed->attachments[seed->attachment_count];
+        const AmgMailFilePart *part = amg_mailfile_attachment(mail, i);
+        size_t written = 0U;
+        FILE *file = NULL;
+        result = amg_spool_create(directory, attachment->path, &file, error);
+        if (result != AMG_OK) break;
+        sanitize_attachment_name(part->name_utf8, attachment->name_local,
+                                 sizeof(attachment->name_local));
+        gui_file_progress_item(progress, attachment->name_local);
+        result = amg_mailfile_extract(mail, i, file,
+            AMG_MAIL_MAX_ATTACHMENT_TOTAL - total, &written,
+            gui_file_progress_callback(progress), error);
+        if (fclose(file) != 0 && result == AMG_OK) result = AMG_ERR_IO;
+        if (result != AMG_OK) {
+            amg_spool_remove(attachment->path);
+            attachment->path[0] = 0;
+            if (result == AMG_ERR_LIMIT)
+                amg_error_set(error, result,
+                    T(MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB,
+                      "Attachments total more than 20 MB."));
+            break;
+        }
+        snprintf(attachment->name_utf8, sizeof(attachment->name_utf8),
+                 "%s", part->name_utf8);
+        sanitize_attachment_name(part->name_utf8, attachment->name_local,
+                                 sizeof(attachment->name_local));
+        attachment->size = (unsigned long)written;
+        attachment->temporary = 1;
+        total += attachment->size;
+        ++seed->attachment_count;
+    }
+    gui_file_progress_close(progress);
+    return result;
 }
 
 void cleanup_draft_edit_files(DraftEditData *seed)
@@ -784,8 +849,7 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
                  ? amg_mail_header_get(&headers, "References") : "");
     restore_draft_reply_source(&headers, seed);
 
-    result = amg_mime_extract_text((const char *)record.literal,
-                                   record.literal_length, &body_utf8, error);
+    result = gui_message_text(gui, &record, &body_utf8, error);
     if (result != AMG_OK) goto done;
     result = amg_buffer_terminate(&body_utf8);
     if (result == AMG_OK)
@@ -800,47 +864,52 @@ int prepare_draft_edit_payload(AmgGui *gui, const unsigned char *payload,
     }
     memcpy(seed->body_local, body_local.data, body_local.length + 1U);
 
-    result = amg_mime_attachment_count((const char *)record.literal,
-                                       record.literal_length,
-                                       &attachment_count, error);
-    if (result != AMG_OK) goto done;
-    if (attachment_count &&
-        !reserve_compose_attachments(&seed->attachments,
-                                     &seed->attachment_capacity,
-                                     attachment_count)) {
-        result = AMG_ERR_MEMORY;
-        amg_error_set(error, result,
-                      T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
-        goto done;
-    }
-    for (i = 0U; i < attachment_count; ++i) {
-        AmgBuffer name_utf8, data;
-        amg_buffer_init(&name_utf8);
-        amg_buffer_init(&data);
-        result = amg_mime_extract_attachment(
-            (const char *)record.literal, record.literal_length, i,
-            &name_utf8, &data, error);
-        if (result == AMG_OK) result = amg_buffer_terminate(&name_utf8);
-        if (result == AMG_OK &&
-            data.length > AMG_MAIL_MAX_ATTACHMENT_TOTAL -
-                          attachment_total_bytes) {
-            result = AMG_ERR_LIMIT;
-            amg_error_set(error, result,
-                          T(MSG_DRAFT_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Draft attachments total more than 20 MB."));
-        }
-        if (result == AMG_OK)
-            result = write_compose_attachment_temp(
-                &seed->attachments[seed->attachment_count], uid, i,
-                name_utf8.length ? (const char *)name_utf8.data
-                                 : "attachment.bin",
-                data.data, data.length, error);
-        if (result == AMG_OK) {
-            attachment_total_bytes += (unsigned long)data.length;
-            ++seed->attachment_count;
-        }
-        amg_buffer_free(&name_utf8);
-        amg_buffer_free(&data);
+    if (gui->current_mail_file && gui->current_mail_file->uid == record.uid) {
+        result = restore_disk_attachments(gui, seed, error);
         if (result != AMG_OK) goto done;
+    } else {
+        result = amg_mime_attachment_count((const char *)record.literal,
+                                           record.literal_length,
+                                           &attachment_count, error);
+        if (result != AMG_OK) goto done;
+        if (attachment_count &&
+            !reserve_compose_attachments(&seed->attachments,
+                                         &seed->attachment_capacity,
+                                         attachment_count)) {
+            result = AMG_ERR_MEMORY;
+            amg_error_set(error, result,
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+            goto done;
+        }
+        for (i = 0U; i < attachment_count; ++i) {
+            AmgBuffer name_utf8, data;
+            amg_buffer_init(&name_utf8);
+            amg_buffer_init(&data);
+            result = amg_mime_extract_attachment(
+                (const char *)record.literal, record.literal_length, i,
+                &name_utf8, &data, error);
+            if (result == AMG_OK) result = amg_buffer_terminate(&name_utf8);
+            if (result == AMG_OK &&
+                data.length > AMG_MAIL_MAX_ATTACHMENT_TOTAL -
+                              attachment_total_bytes) {
+                result = AMG_ERR_LIMIT;
+                amg_error_set(error, result,
+                              T(MSG_DRAFT_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Draft attachments total more than 20 MB."));
+            }
+            if (result == AMG_OK)
+                result = write_compose_attachment_temp(
+                    &seed->attachments[seed->attachment_count], uid, i,
+                    name_utf8.length ? (const char *)name_utf8.data
+                                     : "attachment.bin",
+                    data.data, data.length, error);
+            if (result == AMG_OK) {
+                attachment_total_bytes += (unsigned long)data.length;
+                ++seed->attachment_count;
+            }
+            amg_buffer_free(&name_utf8);
+            amg_buffer_free(&data);
+            if (result != AMG_OK) goto done;
+        }
     }
 
     amg_error_set(error, AMG_OK, "");
@@ -919,8 +988,7 @@ int prepare_reply_payload(AmgGui *gui, const unsigned char *payload,
                              sizeof(gui->reply_references_utf8), message_id);
     }
 
-    result = amg_mime_extract_text((const char *)record.literal,
-                                   record.literal_length, &body_utf8, error);
+    result = gui_message_text(gui, &record, &body_utf8, error);
     if (result != AMG_OK) goto done;
     result = amg_buffer_terminate(&body_utf8);
     if (result == AMG_OK)
@@ -1241,8 +1309,7 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
         snprintf(seed->subject_local, sizeof(seed->subject_local),
                  "Fwd: %.506s", subject_local);
 
-    result = amg_mime_extract_text((const char *)record.literal,
-                                   record.literal_length, &body_utf8, error);
+    result = gui_message_text(gui, &record, &body_utf8, error);
     if (result != AMG_OK) goto done;
     result = amg_buffer_terminate(&body_utf8);
     if (result == AMG_OK)
@@ -1284,48 +1351,54 @@ int prepare_forward_payload(AmgGui *gui, const unsigned char *payload,
     append_local_limited(seed->body_local, sizeof(seed->body_local),
                          (const char *)body_local.data);
 
-    result = amg_mime_attachment_count((const char *)record.literal,
-                                       record.literal_length,
-                                       &attachment_count, error);
-    if (result != AMG_OK) goto done;
-    if (attachment_count &&
-        !reserve_compose_attachments(&seed->attachments,
-                                     &seed->attachment_capacity,
-                                     attachment_count)) {
-        result = AMG_ERR_MEMORY;
-        amg_error_set(error, result,
-                      T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
-        goto done;
-    }
-    for (i = 0U; i < attachment_count; ++i) {
-        AmgBuffer name_utf8, data;
-        amg_buffer_init(&name_utf8);
-        amg_buffer_init(&data);
-        result = amg_mime_extract_attachment(
-            (const char *)record.literal, record.literal_length, i,
-            &name_utf8, &data, error);
-        if (result == AMG_OK) result = amg_buffer_terminate(&name_utf8);
-        if (result == AMG_OK &&
-            data.length > AMG_MAIL_MAX_ATTACHMENT_TOTAL -
-                          attachment_total_bytes) {
-            result = AMG_ERR_LIMIT;
-            amg_error_set(error, result,
-                          T(MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Attachments total more than 20 MB."));
-        }
-        if (result == AMG_OK)
-            result = write_compose_attachment_temp(
-                &seed->attachments[seed->attachment_count], uid, i,
-                name_utf8.length ? (const char *)name_utf8.data
-                                 : "attachment.bin",
-                data.data, data.length, error);
-        if (result == AMG_OK) {
-            attachment_total_bytes += (unsigned long)data.length;
-            ++seed->attachment_count;
-        }
-        amg_buffer_free(&name_utf8);
-        amg_buffer_free(&data);
+    if (gui->current_mail_file && gui->current_mail_file->uid == record.uid) {
+        result = restore_disk_attachments(gui, seed, error);
         if (result != AMG_OK) goto done;
+    } else {
+        result = amg_mime_attachment_count((const char *)record.literal,
+                                           record.literal_length,
+                                           &attachment_count, error);
+        if (result != AMG_OK) goto done;
+        if (attachment_count &&
+            !reserve_compose_attachments(&seed->attachments,
+                                         &seed->attachment_capacity,
+                                         attachment_count)) {
+            result = AMG_ERR_MEMORY;
+            amg_error_set(error, result,
+                          T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
+            goto done;
+        }
+        for (i = 0U; i < attachment_count; ++i) {
+            AmgBuffer name_utf8, data;
+            amg_buffer_init(&name_utf8);
+            amg_buffer_init(&data);
+            result = amg_mime_extract_attachment(
+                (const char *)record.literal, record.literal_length, i,
+                &name_utf8, &data, error);
+            if (result == AMG_OK) result = amg_buffer_terminate(&name_utf8);
+            if (result == AMG_OK &&
+                data.length > AMG_MAIL_MAX_ATTACHMENT_TOTAL -
+                              attachment_total_bytes) {
+                result = AMG_ERR_LIMIT;
+                amg_error_set(error, result,
+                              T(MSG_ATTACHMENTS_TOTAL_MORE_THAN_10_MB, "Attachments total more than 20 MB."));
+            }
+            if (result == AMG_OK)
+                result = write_compose_attachment_temp(
+                    &seed->attachments[seed->attachment_count], uid, i,
+                    name_utf8.length ? (const char *)name_utf8.data
+                                     : "attachment.bin",
+                    data.data, data.length, error);
+            if (result == AMG_OK) {
+                attachment_total_bytes += (unsigned long)data.length;
+                ++seed->attachment_count;
+            }
+            amg_buffer_free(&name_utf8);
+            amg_buffer_free(&data);
+            if (result != AMG_OK) goto done;
+        }
     }
+
     amg_error_set(error, AMG_OK, "");
 
 done:
@@ -1709,6 +1782,8 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
     }
     draft.attachments = inputs;
     draft.attachment_count = attachment_count;
+    draft.progress_mailbox = gui_transfer_mailbox(gui);
+    draft.progress_uid = gui->active_message_uid;
     draft.reply_source_uid = 0UL;
     draft.reply_source_uid_validity = 0UL;
     draft.reply_source_mailbox = NULL;

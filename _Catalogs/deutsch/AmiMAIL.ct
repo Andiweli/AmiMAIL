@@ -1,4 +1,4 @@
-## version $VER: AmiMAIL.catalog 7.0 (20.09.2026)
+## version $VER: AmiMAIL.catalog 9.0 (26.09.2026)
 ## language deutsch
 ## codeset 0
 ;
@@ -1617,3 +1617,113 @@ Das Mail kann sp\344ter weiterbearbeitet werden.
 ;
 MSG_EMBEDDED_GRAPHICS_7F31
 \n\nEingebettete Grafiken:\n
+;
+; Internal UTF-8 path: displayed after conversion.
+MSG_PREVIEW_SIZE_LIMIT
+\n\n[Vorschau wegen Gr\303\266\303\237enlimit gek\303\274rzt oder ausgelassen. Mail und Anh\303\244nge bleiben unver\303\244ndert.]\n
+;
+; Internal UTF-8 path: displayed after conversion.
+MSG_PREVIEW_TEXT_UNAVAILABLE
+[Kein unterst\303\274tzter Nachrichtentext. Anh\303\244nge k\303\266nnen weiterhin gespeichert werden.]\n
+;
+; Internal UTF-8 path: displayed after conversion.
+MSG_MIME_MESSAGE_TOO_LARGE
+Die Nachricht \303\274berschreitet das MIME-Limit von 32 MB.
+;
+MSG_TRANSFER_CANCELLED
+\303\234bertragung abgebrochen.
+;
+MSG_SPOOL_UNAVAILABLE
+Tempor\303\244rer Ordner nicht verf\303\274gbar. AmiMAIL_SpoolDir pr\303\274fen.
+;
+MSG_SPOOL_CREATE_FAILED
+Tempor\303\244re Datei konnte nicht erstellt werden.
+;
+MSG_TRANSFERS
+\334bertragungen
+;
+MSG_TRANSFER_PREPARE
+Lokale Kopie erstellen
+;
+MSG_TRANSFER_RECEIVE
+Nachricht empfangen
+;
+MSG_TRANSFER_INDEX
+Nachricht auswerten
+;
+MSG_TRANSFER_UPLOAD
+Nachricht \374bertragen
+;
+MSG_TRANSFER_COMMIT
+Warte auf Serverbest\344tigung
+;
+MSG_TRANSFER_EXPORT
+Anhang speichern
+;
+MSG_TRANSFER_IDLE
+Bereit
+;
+MSG_LOCAL_COPY_KEPT
+Lokale Wiederherstellungskopie: %s
+;
+MSG_DELIVERY_UNCERTAIN
+Serverbest\303\244tigung fehlt. Vor erneutem Senden Zustellung pr\303\274fen.
+;
+MSG_ATTACHMENT_SELECTION
+Anh\344nge zum Speichern ausw\344hlen
+;
+MSG_ATTACHMENT_NAME
+Dateiname
+;
+MSG_ATTACHMENT_KIND
+Art
+;
+MSG_REGULAR_ATTACHMENT
+Dateianhang
+;
+MSG_EMBEDDED_GRAPHIC
+Eingebettete Grafik
+;
+MSG_SELECT_REGULAR_ATTACHMENTS
+Nur Dateianh\344nge
+;
+MSG_SELECT_EMBEDDED_GRAPHICS
+Nur Grafiken
+;
+MSG_SELECT_NONE
+Keine ausw\344hlen
+;
+MSG_SAVE_SELECTED
+Auswahl speichern
+;
+MSG_ATTACHMENT_EXPORT_RESULT
+%lu gespeichert, %lu fehlgeschlagen.
+;
+MSG_ATTACHMENT_EXPORT_CANCELLED
+Abgebrochen; %lu Datei(en) bereits gespeichert.
+;
+MSG_TRANSFER_ACCOUNT_PROGRESS
+%s: %lu / %lu KB
+;
+MSG_ATTACHMENT_ENCODED_SIZE
+Kodierte Gr\366\337e
+;
+MSG_ATTACHMENT_SELECT_HINT
+Dateien ausw\344hlen. Vorhandene Dateien werden nie \374berschrieben.
+;
+MSG_PARTIAL_COPY_KEPT
+Unvollst\303\244ndige Kopie; tempor\303\244re Anh\303\244nge behalten: %s
+;
+MSG_REACTION_WINDOW_COULD_NOT_BE_CREATED
+ReAction-Fenster konnte nicht erzeugt werden.
+;
+MSG_GUI_ARROW_IMAGES_COULD_NOT_BE_CREATED
+Pfeilgrafiken konnten nicht erzeugt werden.
+;
+; Internal UTF-8 path: keep future non-ASCII translations UTF-8 encoded.
+MSG_GRAPHIC_PLACEHOLDER_UTF8
+[Grafik]
+;
+; Local display path: use the system character encoding, not UTF-8.
+MSG_GRAPHIC_PLACEHOLDER_LOCAL
+[Grafik]

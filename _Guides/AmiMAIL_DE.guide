@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_DE.guide
-@$VER: AmiMAIL_DE.guide 2.0.6 (20.09.2026)
+@$VER: AmiMAIL_DE.guide 2.1.0 (26.09.2026)
 
-@NODE MAIN "AmiMAIL 2.0.6 - Anleitung"
-AmiMAIL 2.0.6
+@NODE MAIN "AmiMAIL 2.1.0 - Anleitung"
+AmiMAIL 2.1.0
 Nativer IMAP/SMTP-Mailclient für AmigaOS 3.2+
 ReAction, IMAP, SMTP und AmiSSL
 
@@ -87,8 +87,10 @@ nur tatsächlich eingerichtete Konten als native ReAction-Reiter angezeigt.
 - "+" legt ein weiteres Konto an, bis maximal fünf Konten vorhanden sind.
 - "-" entfernt das ausgewählte Konto. Die Dateien werden erst mit "Speichern"
   wirklich gelöscht; "Abbrechen" verwirft die Änderung.
-- "<" und ">" ändern die Reihenfolge der Konten. Diese Reihenfolge wird auch
-  für die Konto-Reiter im Hauptfenster und im Signaturfenster verwendet.
+- "<" und ">" verschieben das gewählte Konto pro Klick um eine eingerichtete
+  Position. Das Konto bleibt ausgewählt. "Speichern" übernimmt die neue
+  Reihenfolge; "Abbrechen" verwirft sie. Die Reihenfolge gilt auch für die
+  Konto-Reiter im Hauptfenster und im Signaturfenster.
 - Mindestens ein eingerichtetes Konto bleibt erhalten.
 - Mindestens ein Konto muss als "Account aktivieren" eingeschaltet sein.
 
@@ -245,18 +247,84 @@ SMTP-Zustellung entfernt. Abbrechen verändert den Serverentwurf nicht.
 @ENDNODE
 
 @NODE ATTACHMENTS "Anhänge"
-AmiMAIL hat keine feste Begrenzung der Anzahl von Anhängen pro Nachricht. Die
-Gesamtgröße aller Anhänge ist auf 20 MB begrenzt.
+Die Anzahl der Anhänge ist nicht fest begrenzt. Ausgehende Anhänge dürfen
+zusammen höchstens 20 MiB (20.971.520 Byte) Originaldaten enthalten. Die
+MIME-Kodierung vergrößert die Mail; für die komplette empfangene MIME-Mail
+gilt eine Grenze von 32 MiB.
 
-Anhänge empfangener Mails können aus der Vorschau gespeichert werden. Beim
-Weiterleiten und Bearbeiten von Entwürfen können vorhandene Anhänge
-übernommen werden.
+"Anhänge speichern" öffnet eine eigene Dateiauswahl. Sie zeigt Dateiname,
+Art (Anhang oder eingebettete Grafik) und kodierte Größe in der Originalmail.
+Zunächst sind nur normale Anhänge ausgewählt. Möglich sind einzelne Zeilen,
+"Alles auswählen", "Keine", "Nur Anhänge" oder "Nur Grafiken".
+"Auswahl speichern" fragt anschließend nach dem Zielordner.
 
-In MIME eingebettete Bilder werden nicht direkt dargestellt. Sie erscheinen
-in der Vorschau getrennt als "Eingebettete Grafiken" und werden mit
-"Anhänge speichern" ebenfalls gesichert. Nur per HTML-URL referenzierte
-externe Bilder werden weiterhin nie automatisch geladen.
+Vorhandene Zieldateien werden niemals überschrieben. Bei Namensgleichheit
+wird eine Nummer angehängt. Jeder Export wird zunächst in eine private
+Temporärdatei im Zielordner dekodiert und erst nach Erfolg übernommen.
+Abbrechen entfernt die unvollständige aktuelle Datei. Bereits erfolgreich
+gespeicherte Dateien bleiben erhalten.
 
+MIME-Bilder stehen weiter getrennt unter "Eingebettete Grafiken" in der
+Vorschau. Externe Bilder aus HTML-URLs werden niemals heruntergeladen.
+Beim Weiterleiten oder Bearbeiten unterstützter Entwürfe bleiben Anhänge
+erhalten.
+
+Große Mails und Übertragungen
+----------------------------
+Empfangene MIME-Daten werden auf Disk zwischengespeichert statt vollständig
+im RAM gehalten. Im Speicher bleiben MIME-Metadaten und ein begrenzter
+Textauszug. Scrollen, Schreibschutz und URL-/Mail-Doppelklick bleiben gleich.
+Auch bei zu langem oder unbekanntem Textkörper sind Anhänge speicherbar.
+
+Vor Versand oder Entwurfsspeicherung erzeugt AmiMAIL eine private .eml-Kopie.
+SMTP und die Gesendet-Kopie verwenden dieselben Daten. Uploads erfolgen
+blockweise, ohne einen weiteren vollständigen MIME-Puffer im RAM.
+Die untere Statuszeile zeigt links Meldungen und rechts einen kompakten
+Fortschrittsbalken mit Prozentwert. Es öffnet sich kein Fortschrittsfenster.
+Statusfeld, Fortschrittsbalken und X haben dieselbe Höhe.
+Mailübertragungen bleiben an Konto, Ordner und ausgewählte Mail gebunden.
+Beim Laden eines Ordners wie "Alle Nachrichten" erscheint ebenfalls der
+Fortschritt des aktuellen Kontos und Ordners. Er zählt die abgearbeiteten
+Nachrichten des eingestellten Abrufzeitraums, nicht die übertragenen Bytes.
+Solange die Serversuche die Anzahl noch nicht geliefert hat, bleibt der
+Prozentwert leer. 100% wird erst nach dem letzten bestätigten Abruf gezeigt.
+Die anschließende Darstellung der Liste ist kein eigener Fortschrittsschritt.
+Hintergrundprüfungen anderer Konten und Ordner bleiben unsichtbar.
+Bei Mailübertragungen gilt der Prozentwert für den jeweiligen Arbeitsschritt
+oder Anhang. Nach Abschluss oder Kontextwechsel wird die Anzeige geleert.
+
+Das kleine X bricht nur den angezeigten, sicher abbrechbaren Vorgang ab.
+Empfang, MIME-Auswertung und Upload können abgebrochen werden. Während der
+Vorbereitung bleibt Abbrechen bis zur fertigen Sicherung gesperrt; ebenso
+während der abschließenden Serverbestätigung. Der Anhangsexport nutzt dieselbe
+Statuszeile. Bei lokalen Dateivorgängen ist die Navigation vorübergehend
+gesperrt; X oder Escape bricht sie ab. Fehlt fuelgauge.gadget, erscheint statt
+des Balkens eine Prozentanzeige. Beim Beenden bricht AmiMAIL Netzwerkzugriffe
+ab und wartet vor der Speicherfreigabe auf die Worker.
+
+Temporärdaten liegen standardmäßig in PROGDIR:Spool auf dem Programmvolume.
+Für einen anderen beschreibbaren Disk-Ordner vor dem Start die globale
+Umgebungsvariable AmiMAIL_SpoolDir auf dessen Pfad setzen. Zum RAM-Sparen
+keinesfalls RAM: oder T: wählen. Freier Platz wird für die Originalmail,
+dekodierte Entwurfsanhänge und die ausgehende Sicherung benötigt.
+
+Erfolgreiche temporäre Arbeit wird automatisch entfernt. Nach fehlgeschlagenem
+oder unklarem Versand bzw. fehlender Gesendet-Kopie bleibt die ausgehende
+Sicherung erhalten; ihr Pfad steht in der Statusmeldung. Empfangsspooldateien
+enthalten auch IMAP-Rahmendaten und sind kein reiner .eml-Export. Alte
+Job-Ordner nach einem Absturz werden nicht ungeprüft gelöscht.
+Unvollständig vorbereitete Kopien sind entsprechend gekennzeichnet und
+dürfen nicht unverändert versendet werden; die ursprünglichen temporären
+Anhänge bleiben dann separat erhalten.
+
+Fehlt die endgültige Serverbestätigung, ist der Ausgang UNBEKANNT. Vor einem
+erneuten Versuch Gesendet/Entwürfe und Zustellung kontrollieren, damit keine
+Dubletten entstehen. AmiMAIL wiederholt solche Sendungen nicht automatisch.
+Alte Serverentwürfe werden erst nach bestätigter Speicherung/Ersetzung oder
+SMTP-Zustellung entfernt. Sicherungen können private Mail und Bcc-Empfänger
+enthalten: Ordner schützen und Dateien erst nach erfolgreicher
+Wiederherstellung
+manuell entfernen.
 
 @{"Zurück zum Inhalt" LINK MAIN}
 @ENDNODE
@@ -311,9 +379,19 @@ Antworten, Allen Antworten, Weiterleitungen und mailto:-Entwürfe eingefügt.
 
 @NODE NOTIFY "Benachrichtigungen und Iconify"
 AmiMAIL kann beim Eintreffen neuer Mails für jedes aktive Konto einen
-konfigurierten Benachrichtigungston über den AmigaOS-3.2-SoundPlayer
-abspielen. Die Wiedergabe läuft in einem separaten Prozess, damit ein aktiver
-Sound nie zum AmiMAIL-GUI-Task gehört.
+konfigurierten Benachrichtigungston abspielen. Die Tonvorschau verwendet
+denselben Wiedergabeweg.
+
+Die Wiedergabe nutzt die installierten Sound-DataTypes in einem eigenen
+Prozess. Ein externes C:SoundPlayer ist nicht erforderlich. Die mitgelieferten
+8SVX-Dateien eignen sich als Hinweistöne. WAV-Dateien benötigen einen zur
+jeweiligen Kodierung passenden installierten DataType.
+
+Es läuft höchstens ein Hinweis-/Vorschauton gleichzeitig. Weitere Aufrufe
+während der Wiedergabe werden übersprungen. Beim Beenden stoppt AmiMAIL den
+Ton und wartet auf die Freigabe der Audioressourcen durch den Sound-Prozess.
+Ein fehlendes Fertigsignal wird durch ein Zwei-Minuten-Limit abgesichert;
+Benachrichtigungen sind für kurze Töne gedacht.
 
 Das Hauptfenster kann iconifiziert werden. Die Netzwerk-Worker der aktiven
 Konten, periodischer Abruf und Statusverwaltung laufen im Hintergrund weiter.
@@ -375,7 +453,7 @@ Serverkonfiguration erleichtern einen Fehlerbericht erheblich.
 @ENDNODE
 
 @NODE ABOUT "Über / Copyright"
-AmiMAIL 2.0 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
+AmiMAIL 2.1.0 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 

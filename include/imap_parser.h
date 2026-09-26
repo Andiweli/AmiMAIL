@@ -30,6 +30,7 @@ typedef struct AmgImapParser {
     size_t failure_size;
     size_t failure_limit;
     AmgImapParserFailure failure;
+    int stream_literals; /* Emit bounded literal chunks when enabled. */
     int waiting_literal;
     int failed;
 } AmgImapParser;
@@ -60,6 +61,8 @@ int amg_imap_parse_uidvalidity(const unsigned char *data, size_t length,
 int amg_imap_parse_fetch_sequence(const unsigned char *data, size_t length,
                                   unsigned long uid,
                                   unsigned long *sequence);
+int amg_imap_fetch_metadata(const unsigned char *data, size_t length,
+                             AmgImapFetchRecord *record);
 int amg_imap_fetch_record_next(const unsigned char *data, size_t length,
                                size_t *position,
                                AmgImapFetchRecord *record);

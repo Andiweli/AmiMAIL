@@ -5,14 +5,19 @@
 #include <stdint.h>
 
 #define AMIMAIL_NAME "AmiMail"
-#define AMIMAIL_VERSION "2.0.6"
+#define AMIMAIL_VERSION "2.1.0"
 /* Legacy internal names are kept as aliases while the codebase is gradually
  * renamed; new AmiMail-specific code should use AMIMAIL_* directly. */
 #define AMIGMAIL_NAME AMIMAIL_NAME
 #define AMIGMAIL_VERSION AMIMAIL_VERSION
 #define AMIGMAIL_PAGE_SIZE 50U
 #define AMIGMAIL_MAX_LINE (256UL * 1024UL)
-#define AMIGMAIL_MAX_MESSAGE (8UL * 1024UL * 1024UL)
+/* Raw MIME includes base64/line wrapping and part headers. These are
+ * intentionally separate from the 20 MiB decoded attachment budget. */
+#define AMIMAIL_MAX_MIME_MESSAGE (32UL * 1024UL * 1024UL)
+#define AMIMAIL_MAX_TEXT_PART (2UL * 1024UL * 1024UL)
+#define AMIMAIL_MAX_PREVIEW_TEXT (512UL * 1024UL)
+#define AMIGMAIL_MAX_MESSAGE AMIMAIL_MAX_MIME_MESSAGE
 #define AMIGMAIL_MAX_LABELS 256U
 #define AMIGMAIL_MAX_HEADERS 2048U
 
@@ -33,7 +38,8 @@ typedef enum AmgResult {
     AMG_ERR_PARSE = -7,
     AMG_ERR_LIMIT = -8,
     AMG_ERR_UNSUPPORTED = -9,
-    AMG_ERR_CANCELLED = -10
+    AMG_ERR_CANCELLED = -10,
+    AMG_ERR_UNCERTAIN = -11
 } AmgResult;
 
 typedef enum AmgAuthMode {

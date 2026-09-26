@@ -3,6 +3,8 @@
 
 #include "account.h"
 #include "tls.h"
+#include "transfer.h"
+#include "imap_parser.h"
 
 typedef struct AmgImapSession {
     AmgTlsConnection *connection;
@@ -49,10 +51,25 @@ int amg_imap_fetch_page(AmgImapSession *session, unsigned long before_uid,
                         size_t limit, AmgBuffer *response, AmgError *error);
 int amg_imap_fetch_recent(AmgImapSession *session, unsigned int days,
                           AmgBuffer *response, AmgError *error);
+/* RECEIVE progress is processed SEARCH-result UIDs / total matching UIDs,
+ * not bytes. Before SEARCH completes, total is unknown (zero). */
+int amg_imap_fetch_recent_progress(AmgImapSession *session, unsigned int days,
+                                   AmgBuffer *response,
+                                   AmgTransfer *transfer, AmgError *error);
 int amg_imap_fetch_after_uid(AmgImapSession *session, unsigned long uid,
                              AmgBuffer *response, AmgError *error);
 int amg_imap_fetch_message(AmgImapSession *session, unsigned long uid,
                            AmgBuffer *message, AmgError *error);
+int amg_imap_fetch_message_file(AmgImapSession *session, unsigned long uid,
+                                FILE *file, size_t *offset, size_t *length,
+                                AmgImapFetchRecord *record,
+                                AmgTransfer *transfer, AmgError *error);
+void amg_imap_abort(AmgImapSession *session);
+int amg_imap_append_draft_file(AmgImapSession *session, const char *mailbox,
+                               FILE *file, size_t length,
+                               AmgTransfer *transfer, AmgError *error);
+int amg_imap_append_sent_file(AmgImapSession *session, FILE *file, size_t length,
+                              AmgTransfer *transfer, AmgError *error);
 int amg_imap_set_seen(AmgImapSession *session, unsigned long uid, int seen, AmgError *error);
 int amg_imap_set_flagged(AmgImapSession *session, unsigned long uid,
                          int flagged, AmgError *error);

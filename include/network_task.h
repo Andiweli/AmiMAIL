@@ -3,6 +3,7 @@
 
 #include "account.h"
 #include "smtp.h"
+#include "mailfile.h"
 
 typedef enum AmgNetCommandType {
     AMG_NET_STOP = 0,
@@ -41,8 +42,24 @@ typedef struct AmgNetworkEvent {
     char message[256];
     unsigned char *payload;
     size_t payload_length;
+    AmgMailFile *mail_file;
+    char recovery_path[AMG_SPOOL_PATH_MAX];
 } AmgNetworkEvent;
 
+typedef struct AmgTransferProgress {
+    AmgNetCommandType type;
+    AmgTransferPhase phase;
+    size_t done, total;
+    unsigned long serial;
+    int active, cancellable;
+    /* Immutable UI origin of this job; UIDs are mailbox-local. */
+    unsigned long uid;
+    char mailbox[512];
+} AmgTransferProgress;
+
+int amg_network_events_pending(AmgNetwork *network);
+int amg_network_transfer_progress(AmgNetwork *network, AmgTransferProgress *progress);
+int amg_network_cancel_transfer(AmgNetwork *network, unsigned long serial);
 AmgNetwork *amg_network_create(void);
 void amg_network_destroy(AmgNetwork *network);
 int amg_network_start(AmgNetwork *network, const AmgAccount *account, AmgError *error);

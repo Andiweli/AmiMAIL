@@ -1,5 +1,28 @@
 # Changelog
 
+## AmiMAIL 2.1.0 - 2026-09-26
+- Play notification/preview sounds in a worker-owned native DataType process.
+- Remove the external C:SoundPlayer dependency and shell path interpretation.
+- Stop and join the sound worker before shutdown; bound completion waits.
+- Move accounts once per arrow activation and keep tab-node identities stable.
+- Add sound-lifecycle, failure-path and account-reordering regression tests.
+- Select individual attachments, regular files or embedded graphics to save.
+- Keep received MIME data on disk and decode attachments in bounded blocks.
+- Stream draft and Sent-folder uploads from an immutable local mail copy.
+- Show scoped percentage progress in the split status row, without popups.
+- Match status, progress and cancel-button heights to the native status field.
+- Report selected-folder loading progress from the matching message count.
+- Keep background account/folder/message transfers out of the progress strip.
+- Ignore obsolete mail/folder results after a newer selection.
+- Offer inline cancellation only for the matching, cancellable operation.
+- Keep local recovery copies on failure or an uncertain server response.
+- Preserve existing files and remove incomplete attachment exports safely.
+- Build and verify the German V9 catalog automatically, including new texts.
+- Localize window/arrow errors and HTML/emoji graphic markers consistently.
+- Audit registered lookup IDs and the corrected source literals during build.
+- Keep the original read-only preview and the existing message-list view.
+- Generate bin/AmiMAIL and update English and German guides to 2.1.0.
+
 ## AmiMail 2.0.6 - 2026-09-20
 - remove the fixed attachment-count limit; combined size remains 20 MB
 - expose MIME-embedded images as savable attachments

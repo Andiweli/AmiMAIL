@@ -55,7 +55,8 @@ enum MainGadgetId {
     GID_STATUS,
     GID_UPDATE,
     GID_REPLY_MENU,
-    GID_ACCOUNT_TABS
+    GID_ACCOUNT_TABS,
+    GID_TRANSFER_CANCEL
 };
 
 
@@ -222,6 +223,18 @@ struct AmgGui {
     unsigned int reply_status_text_index;
     GuiReplyStamp reply_stamp_cache[GUI_REPLY_STAMP_CACHE_SIZE];
     size_t reply_stamp_next;
+    struct Gadget *transfer_gadget;
+    struct Gadget *transfer_cancel_gadget;
+    int transfer_native_gauge;
+    int transfer_initialized, transfer_visible, transfer_known;
+    int transfer_cancellable;
+    unsigned int transfer_percent;
+    size_t transfer_account;
+    unsigned long transfer_serial;
+    char transfer_text[2][16];
+    unsigned int transfer_text_index;
+    struct GuiFileProgress *file_progress;
+    AmgMailFile *current_mail_file;
     unsigned char *current_message_payload;
     size_t current_message_payload_length;
     size_t current_attachment_count;
@@ -352,6 +365,7 @@ int gui_signature_save(const AmgGui *gui, const char *text);
 void gui_iconify(AmgGui *gui);
 int gui_uniconify(AmgGui *gui);
 int gui_notify_preview_sound(AmgGui *gui, const char *path);
+void gui_notify_cleanup(void);
 void gui_notify_new_mail(AmgGui *gui);
 void gui_notify_new_mail_for_account(AmgGui *gui,
                                      const AmgAccount *account);
@@ -413,8 +427,29 @@ void gui_note_answered_now(AmgGui *gui, size_t account_index,
                            unsigned long uid_validity, unsigned long uid);
 void clear_current_message_payload(AmgGui *gui);
 void retain_current_message_payload(AmgGui *gui,
-                                    const AmgNetworkEvent *event);
+                                    AmgNetworkEvent *event);
 void save_current_attachments(AmgGui *gui);
+int gui_message_text(AmgGui *gui, const AmgImapFetchRecord *record,
+                     AmgBuffer *body, AmgError *error);
+int gui_prepare_attachment_file(AmgGui *gui, AmgError *error);
+Object *gui_aux_window(AmgGui *gui, Object *layout, const char *title,
+                       LONG width, LONG height, ULONG flags);
+Object *gui_transfer_create_gauge(AmgGui *gui);
+Object *gui_transfer_create_status_row(AmgGui *gui);
+const char *gui_transfer_mailbox(const AmgGui *gui);
+int gui_transfer_mailbox_matches(const AmgGui *gui, const char *mailbox);
+int gui_transfer_message_matches(const AmgGui *gui, unsigned long uid,
+                                  const char *mailbox);
+void gui_transfer_update(AmgGui *gui);
+void gui_transfer_cancel(AmgGui *gui);
+void gui_transfer_cleanup(AmgGui *gui);
+/* Local file I/O pumps only cancel/close/refresh/resize input. It must never
+ * dispatch network replies or navigation while it borrows the current mail. */
+typedef struct GuiFileProgress GuiFileProgress;
+GuiFileProgress *gui_file_progress_open(AmgGui *gui, const char *title);
+AmgTransfer *gui_file_progress_callback(GuiFileProgress *progress);
+void gui_file_progress_item(GuiFileProgress *progress, const char *name);
+void gui_file_progress_close(GuiFileProgress *progress);
 void sanitize_attachment_name(const char *name_utf8, char *name_local,
                               size_t capacity);
 int build_unique_attachment_path(const char *drawer, const char *name,

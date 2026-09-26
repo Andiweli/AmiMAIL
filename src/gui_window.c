@@ -1344,12 +1344,9 @@ int create_window(AmgGui *gui, AmgError *error)
                 CHILD_MinWidth, 250,
             EndObject,
 
-                LAYOUT_AddChild,
-                    gui->status_gadget = (struct Gadget *)StringObject,
-                        GA_ID, GID_STATUS,
-                        GA_ReadOnly, TRUE,
-                        STRINGA_TextVal, T(MSG_READY, "Ready"),
-                    EndObject,
+                /* The row measures the native status field and applies its
+                 * exact height to the gauge and cancel button as well. */
+                LAYOUT_AddChild, gui_transfer_create_status_row(gui),
                 CHILD_WeightedHeight, 0,
 
             EndObject,
@@ -1368,7 +1365,8 @@ int create_window(AmgGui *gui, AmgError *error)
         gui->preview_group = NULL;
         gui->preview_scroller = NULL;
         amg_error_set(error, AMG_ERR_MEMORY,
-                      "ReAction-Fenster konnte nicht erzeugt werden.");
+                      T(MSG_REACTION_WINDOW_COULD_NOT_BE_CREATED,
+                        "ReAction window could not be created."));
         return AMG_ERR_MEMORY;
     }
 

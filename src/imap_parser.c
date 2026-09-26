@@ -9,10 +9,13 @@ void amg_imap_parser_init(AmgImapParser *parser)
     if (!parser) return;
     amg_buffer_init(&parser->pending);
     amg_buffer_init(&parser->event_data);
+    (void)amg_buffer_set_limit(&parser->pending,
+                               AMIGMAIL_MAX_MESSAGE + AMIGMAIL_MAX_LINE);
     parser->literal_remaining = 0;
     parser->failure_size = 0;
     parser->failure_limit = 0;
     parser->failure = AMG_IMAP_PARSER_FAILURE_NONE;
+    parser->stream_literals = 0;
     parser->waiting_literal = 0;
     parser->failed = 0;
 }
@@ -26,6 +29,7 @@ void amg_imap_parser_free(AmgImapParser *parser)
     parser->failure_size = 0;
     parser->failure_limit = 0;
     parser->failure = AMG_IMAP_PARSER_FAILURE_NONE;
+    parser->stream_literals = 0;
     parser->waiting_literal = 0;
     parser->failed = 0;
 }
@@ -425,14 +429,55 @@ int amg_imap_parser_next(AmgImapParser *parser, AmgImapEvent *event)
     event->type = AMG_IMAP_EVENT_NONE;
     event->data = NULL;
     event->length = 0;
+    /* The previous event's bytes are valid only until this call. Release
+     * large completed literals instead of retaining a second MIME-sized
+     * allocation for the next short response line. */
+    if (parser->event_data.capacity > 1024UL * 1024UL)
+        amg_buffer_free(&parser->event_data);
     parser->event_data.length = 0;
 
     if (parser->waiting_literal) {
-        if (parser->pending.length < parser->literal_remaining) return 0;
-        if (amg_buffer_append(&parser->event_data, parser->pending.data, parser->literal_remaining) != AMG_OK) {
-            parser->failed = 1; event->type = AMG_IMAP_EVENT_ERROR; return AMG_ERR_MEMORY;
+        if (parser->stream_literals) {
+            size_t amount = parser->literal_remaining;
+            int result;
+            if (amount && !parser->pending.length) return 0;
+            if (amount > parser->pending.length) amount = parser->pending.length;
+            result = amg_buffer_append(&parser->event_data,
+                                       parser->pending.data, amount);
+            if (result != AMG_OK) { parser->failed = 1; return result; }
+            amg_buffer_consume(&parser->pending, amount);
+            parser->literal_remaining -= amount;
+            parser->waiting_literal = parser->literal_remaining != 0U;
+            event->type = AMG_IMAP_EVENT_LITERAL;
+            event->data = parser->event_data.data;
+            event->length = amount;
+            return 1;
         }
-        amg_buffer_consume(&parser->pending, parser->literal_remaining);
+        if (parser->pending.length < parser->literal_remaining) return 0;
+        {
+            AmgBuffer literal = parser->pending;
+            AmgBuffer tail = parser->event_data;
+            size_t literal_size = parser->literal_remaining;
+            size_t tail_size = literal.length - literal_size;
+            int result;
+            tail.length = 0U;
+            (void)amg_buffer_set_limit(&tail,
+                                       AMIGMAIL_MAX_MESSAGE + AMIGMAIL_MAX_LINE);
+            result = amg_buffer_append(&tail, literal.data + literal_size, tail_size);
+            /* append may realloc: publish the updated tail even on failure. */
+            parser->event_data = tail;
+            if (result != AMG_OK) {
+                parser->failed = 1;
+                event->type = AMG_IMAP_EVENT_ERROR;
+                return result;
+            }
+            /* Transfer ownership of the large literal; copy only its small
+             * trailing response fragment. No second full-literal memcpy. */
+            parser->pending = tail;
+            parser->event_data = literal;
+            parser->event_data.length = literal_size;
+            parser->event_data.data[literal_size] = 0;
+        }
         parser->waiting_literal = 0;
         parser->literal_remaining = 0;
         event->type = AMG_IMAP_EVENT_LITERAL;
@@ -455,6 +500,14 @@ int amg_imap_parser_next(AmgImapParser *parser, AmgImapEvent *event)
         return 0;
     }
     line_length = i + 2U;
+    if (line_length > AMIGMAIL_MAX_LINE) {
+        parser->failure = AMG_IMAP_PARSER_FAILURE_LINE_LIMIT;
+        parser->failure_size = line_length;
+        parser->failure_limit = AMIGMAIL_MAX_LINE;
+        parser->failed = 1;
+        event->type = AMG_IMAP_EVENT_ERROR;
+        return AMG_ERR_LIMIT;
+    }
     if (amg_buffer_append(&parser->event_data, parser->pending.data, line_length) != AMG_OK) {
         parser->failed = 1; return AMG_ERR_MEMORY;
     }
@@ -477,4 +530,21 @@ int amg_imap_parser_next(AmgImapParser *parser, AmgImapEvent *event)
     event->data = parser->event_data.data;
     event->length = parser->event_data.length;
     return 1;
+}
+
+int amg_imap_fetch_metadata(const unsigned char *data, size_t length,
+                             AmgImapFetchRecord *record)
+{
+    unsigned long uid = 0UL, size = 0UL;
+    if (!data || !record) return AMG_ERR_ARGUMENT;
+    if (!line_find_number(data, length, "UID", &uid) || !uid)
+        return AMG_ERR_PARSE;
+    (void)line_find_number(data, length, "RFC822.SIZE", &size);
+    memset(record, 0, sizeof(*record));
+    record->uid = uid; record->rfc822_size = size;
+    record->seen = line_contains_text(data, length, "\\Seen");
+    record->flagged = line_contains_text(data, length, "\\Flagged");
+    record->answered = line_contains_text(data, length, "\\Answered");
+    record->deleted = line_contains_text(data, length, "\\Deleted");
+    return AMG_OK;
 }

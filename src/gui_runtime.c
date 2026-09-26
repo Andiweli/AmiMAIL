@@ -140,6 +140,7 @@ void gui_iconify(AmgGui *gui)
     GetAttr(WINDOW_Window, gui->window_object, &window_value);
     gui->window = (struct Window *)(uintptr_t)window_value;
     gui->iconified = gui->window ? 0 : 1;
+    gui_transfer_update(gui);
 }
 
 int gui_uniconify(AmgGui *gui)
@@ -152,8 +153,10 @@ int gui_uniconify(AmgGui *gui)
     if (!window) return 0;
     gui->window = window;
     gui->iconified = 0;
+    gui->transfer_initialized = 0;
     gui_mail_split_update_limits(gui, 0);
     draw_window_overlays(gui);
+    gui_transfer_update(gui);
     return 1;
 }
 
@@ -196,15 +199,18 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
 
     if (network_signal && (signals & network_signal)) {
         size_t index;
+        int handled = 0;
         for (index = 0U; index < AMG_MAX_ACCOUNTS; ++index) {
             ULONG mask = amg_network_signal_mask(gui->networks[index]);
-            if (!mask || !(signals & mask)) continue;
+            if (!mask || !(signals & mask) ||
+                !amg_network_events_pending(gui->networks[index])) continue;
+            handled = 1;
             if (index == gui->active_account)
                 handle_network(gui);
             else
                 gui_process_background_network(gui, index);
         }
-        draw_window_overlays(gui);
+        if (handled) draw_window_overlays(gui);
     }
 
     if (timer_signal && (signals & timer_signal)) {
@@ -284,6 +290,7 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
 
     if (gui->pending_preview_url_ready)
         open_pending_preview_url(gui);
+    gui_transfer_update(gui);
 }
 
 int amg_gui_run(AmgGui *gui, AmgMailtoServer *mailto_server,

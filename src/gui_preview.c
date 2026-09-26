@@ -486,6 +486,27 @@ static int append_preview_header(AmgBuffer *preview, const char *name,
     return result;
 }
 
+int gui_message_text(AmgGui *gui, const AmgImapFetchRecord *record,
+                     AmgBuffer *body, AmgError *error)
+{
+    int result;
+    if (!record || !body) return AMG_ERR_ARGUMENT;
+    if (!gui || !gui->current_mail_file ||
+        gui->current_mail_file->uid != record->uid)
+        return amg_mime_extract_text((const char *)record->literal,
+                                     record->literal_length, body, error);
+    /* Disk-backed FETCH carries a small synthetic text entity. Use the
+     * original extraction result, rather than decoding its HTML entities or
+     * charset twice, and never silently edit/forward a truncated body. */
+    result = amg_buffer_append(body, gui->current_mail_file->text.data,
+                               gui->current_mail_file->text.length);
+    if (result == AMG_OK) result = gui->current_mail_file->text_result;
+    amg_error_set(error, result, result == AMG_OK ? "" :
+        T(MSG_NO_DISPLAYABLE_TEXT_PART_WAS_FOUND_IN_THE,
+          "No displayable text part was found in the message."));
+    return result;
+}
+
 int display_message_payload(AmgGui *gui, const unsigned char *payload,
                             size_t payload_length,
                             const char *mailbox_utf8,
@@ -513,6 +534,10 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
     amg_buffer_init(&preview);
     amg_buffer_init(&attachments);
     amg_buffer_init(&embedded_graphics);
+    (void)amg_buffer_set_limit(&body, AMIMAIL_MAX_PREVIEW_TEXT);
+    (void)amg_buffer_set_limit(&preview, AMIMAIL_MAX_PREVIEW_TEXT * 2UL);
+    (void)amg_buffer_set_limit(&attachments, AMIMAIL_MAX_PREVIEW_TEXT / 4UL);
+    (void)amg_buffer_set_limit(&embedded_graphics, AMIMAIL_MAX_PREVIEW_TEXT / 4UL);
     result = amg_mail_headers_parse((const char *)record.literal,
                                     record.literal_length, &headers, NULL);
     if (result == AMG_OK)
@@ -532,15 +557,44 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
             &preview, T(MSG_SUBJECT, "Subject: "), amg_mail_header_get(&headers, "Subject"));
     if (result == AMG_OK)
         result = amg_buffer_append_char(&preview, '\n');
-    if (result == AMG_OK)
-        result = amg_mime_extract_text((const char *)record.literal,
-                                       record.literal_length, &body, error);
-    if (result == AMG_OK)
-        result = amg_buffer_append(&preview, body.data, body.length);
+    if (result == AMG_OK) {
+        int body_result = gui_message_text(gui, &record, &body, error);
+        if (body_result == AMG_OK || body_result == AMG_ERR_LIMIT) {
+            /* The display ceiling may fall inside a UTF-8 scalar. Do not
+             * emit a partial multibyte character at the truncated tail. */
+            if (body_result == AMG_ERR_LIMIT && body.length) {
+                size_t start = body.length - 1U;
+                size_t needed = 1U;
+                unsigned char lead;
+                while (start && (body.data[start] & 0xc0U) == 0x80U) --start;
+                lead = body.data[start];
+                if (lead >= 0xc2U && lead <= 0xdfU) needed = 2U;
+                else if (lead >= 0xe0U && lead <= 0xefU) needed = 3U;
+                else if (lead >= 0xf0U && lead <= 0xf4U) needed = 4U;
+                if (body.length - start < needed) body.length = start;
+                body.data[body.length] = 0;
+            }
+            result = amg_buffer_append(&preview, body.data, body.length);
+            if (result == AMG_OK && body_result == AMG_ERR_LIMIT)
+                result = amg_buffer_append_cstr(&preview,
+                    T(MSG_PREVIEW_SIZE_LIMIT,
+                      "\n\n[Preview shortened or omitted (size limit). "
+                      "Message and attachments are unchanged.]\n"));
+        } else if (body_result == AMG_ERR_UNSUPPORTED || body_result == AMG_ERR_PARSE) {
+            /* Non-text or unknown-charset messages may still have perfectly
+             * valid attachments. Keep their attachment sections available. */
+            result = amg_buffer_append_cstr(&preview,
+                T(MSG_PREVIEW_TEXT_UNAVAILABLE,
+                  "[No supported text body. Attachments can still be saved.]\n"));
+        } else result = body_result;
+    }
     if (result == AMG_OK &&
-        amg_mime_attachment_grouped_summary(
-            (const char *)record.literal, record.literal_length,
-            &attachments, NULL, &embedded_graphics, NULL, NULL) == AMG_OK) {
+        (gui->current_mail_file
+            ? amg_mailfile_summary(gui->current_mail_file, &attachments,
+                                   &embedded_graphics)
+            : amg_mime_attachment_grouped_summary(
+                (const char *)record.literal, record.literal_length,
+                &attachments, NULL, &embedded_graphics, NULL, NULL)) == AMG_OK) {
         if (attachments.length) {
             result = amg_buffer_append_cstr(
                 &preview, T(MSG_ATTACHMENTS_791D, "\n\nAttachments:\n"));
@@ -557,7 +611,8 @@ int display_message_payload(AmgGui *gui, const unsigned char *payload,
                                            embedded_graphics.length);
         }
     }
-    if (result == AMG_OK && amg_buffer_terminate(&preview) == AMG_OK) {
+    if (result == AMG_OK) result = amg_buffer_terminate(&preview);
+    if (result == AMG_OK) {
         set_preview_utf8(gui, preview.data, preview.length);
         amg_error_set(error, AMG_OK, "");
     } else if (result != AMG_OK) {
@@ -589,6 +644,8 @@ static void set_attachment_button_enabled(AmgGui *gui, int enabled)
 static void release_current_message_payload(AmgGui *gui)
 {
     if (!gui) return;
+    amg_mailfile_close(gui->current_mail_file);
+    gui->current_mail_file = NULL;
     free(gui->current_message_payload);
     gui->current_message_payload = NULL;
     gui->current_message_payload_length = 0U;
@@ -633,13 +690,21 @@ static int copy_first_message_literal(const unsigned char *payload,
 }
 
 void retain_current_message_payload(AmgGui *gui,
-                                           const AmgNetworkEvent *event)
+                                           AmgNetworkEvent *event)
 {
     unsigned char *message = NULL;
     size_t message_length = 0U;
     size_t count = 0U;
     int result;
     if (!gui || !event) return;
+    if (event->mail_file) {
+        release_current_message_payload(gui);
+        gui->current_mail_file = event->mail_file;
+        event->mail_file = NULL; /* transfer exclusive ownership */
+        gui->current_attachment_count = gui->current_mail_file->attachment_count;
+        set_attachment_button_enabled(gui, gui->current_attachment_count > 0U);
+        return;
+    }
 
     /* Nicht den NetworkEvent-Payload stehlen: Derselbe Event wird beim
      * Antworten unmittelbar danach noch von prepare_reply_payload()
@@ -708,100 +773,30 @@ int build_unique_attachment_path(const char *drawer,
     }
 }
 
-void save_current_attachments(AmgGui *gui)
+int gui_prepare_attachment_file(AmgGui *gui, AmgError *error)
 {
-    struct FileRequester *request;
-    char drawer[COMPOSE_PATH_MAX];
-    size_t i, saved = 0U;
-    if (!gui || !gui->current_message_payload ||
-        !gui->current_attachment_count) {
-        status_local(gui, T(MSG_THIS_MESSAGE_HAS_NO_SAVABLE_ATTACHMENTS, "This message has no savable attachments."));
-        return;
-    }
-    request = (struct FileRequester *)AllocAslRequestTags(
-        ASL_FileRequest,
-        ASLFR_TitleText, (ULONG)(uintptr_t)T(MSG_SAVE_ATTACHMENTS, "Save attachments"),
-        ASLFR_Window, (ULONG)(uintptr_t)gui->window,
-        ASLFR_SleepWindow, TRUE,
-        ASLFR_DrawersOnly, TRUE,
-        ASLFR_RejectIcons, TRUE,
-        TAG_DONE);
-    if (!request) {
-        status_local(gui, T(MSG_DESTINATION_FOLDER_COULD_NOT_BE_SELECTED, "Destination folder could not be selected."));
-        return;
-    }
-    if (!AslRequest(request, NULL)) {
-        FreeAslRequest(request);
-        return;
-    }
-    strncpy(drawer, request->rf_Dir ? (const char *)request->rf_Dir : "",
-            sizeof(drawer) - 1U);
-    drawer[sizeof(drawer) - 1U] = 0;
-    FreeAslRequest(request);
-    if (!drawer[0]) {
-        status_local(gui, T(MSG_NO_DESTINATION_FOLDER_SELECTED, "No destination folder selected."));
-        return;
-    }
-
-    for (i = 0U; i < gui->current_attachment_count; ++i) {
-        AmgBuffer name_utf8, data;
-        AmgError attachment_error;
-        char name_local[COMPOSE_NAME_MAX];
-        char path[COMPOSE_PATH_MAX];
-        FILE *file;
-        int result;
-        amg_buffer_init(&name_utf8);
-        amg_buffer_init(&data);
-        memset(&attachment_error, 0, sizeof(attachment_error));
-        result = amg_mime_extract_attachment(
-            (const char *)gui->current_message_payload,
-            gui->current_message_payload_length, i,
-            &name_utf8, &data, &attachment_error);
-        if (result != AMG_OK) {
-            amg_buffer_free(&name_utf8);
-            amg_buffer_free(&data);
-            status_utf8(gui, attachment_error.message[0]
-                                 ? attachment_error.message
-                                 : T(MSG_ATTACHMENT_COULD_NOT_BE_SAVED, "Attachment could not be saved."));
-            return;
-        }
-        sanitize_attachment_name((const char *)name_utf8.data,
-                                 name_local, sizeof(name_local));
-        result = build_unique_attachment_path(
-            drawer, name_local, path, sizeof(path));
-        if (result != AMG_OK) {
-            amg_buffer_free(&name_utf8);
-            amg_buffer_free(&data);
-            status_local(gui, T(MSG_ATTACHMENT_PATH_IS_TOO_LONG, "Attachment path is too long."));
-            return;
-        }
-        file = fopen(path, "wb");
-        if (!file) {
-            amg_buffer_free(&name_utf8);
-            amg_buffer_free(&data);
-            status_local(gui, T(MSG_ATTACHMENT_COULD_NOT_BE_WRITTEN_TO_DISK, "Attachment could not be written to disk."));
-            return;
-        }
-        {
-            int write_failed = data.length &&
-                fwrite(data.data, 1U, data.length, file) != data.length;
-            int close_failed = fclose(file) != 0;
-            if (write_failed || close_failed) {
-                amg_buffer_free(&name_utf8);
-                amg_buffer_free(&data);
-                status_local(gui, T(MSG_ATTACHMENT_COULD_NOT_BE_WRITTEN_TO_DISK, "Attachment could not be written to disk."));
-                return;
-            }
-        }
-        ++saved;
-        amg_buffer_free(&name_utf8);
-        amg_buffer_free(&data);
-    }
-    {
-        char message[128];
-        amg_tr_snprintf(message, sizeof(message), MSG_VALUE_ATTACHMENT_S_SAVED, "%lu attachment(s) saved.", (unsigned long)saved);
-        status_local(gui, message);
-    }
+    char directory[AMG_SPOOL_PATH_MAX], path[AMG_SPOOL_PATH_MAX];
+    FILE *file = NULL;
+    int result;
+    if (!gui) return AMG_ERR_ARGUMENT;
+    if (gui->current_mail_file) return AMG_OK;
+    if (!gui->current_message_payload) return AMG_ERR_ARGUMENT;
+    result = amg_spool_directory(directory, error);
+    if (result == AMG_OK) result = amg_spool_create(directory, path, &file, error);
+    if (result != AMG_OK) return result;
+    if (fwrite(gui->current_message_payload, 1U,
+               gui->current_message_payload_length, file) !=
+        gui->current_message_payload_length) result = AMG_ERR_IO;
+    if (fclose(file) != 0) result = AMG_ERR_IO;
+    if (result == AMG_OK)
+        result = amg_mailfile_open(path, 1, NULL, &gui->current_mail_file, error);
+    if (result != AMG_OK) { amg_spool_remove(path); return result; }
+    free(gui->current_message_payload);
+    gui->current_message_payload = NULL;
+    gui->current_message_payload_length = 0U;
+    gui->current_mail_file->uid = gui->active_message_uid;
+    gui->current_attachment_count = gui->current_mail_file->attachment_count;
+    return AMG_OK;
 }
 
 #endif /* AMIGMAIL_AMIGA */

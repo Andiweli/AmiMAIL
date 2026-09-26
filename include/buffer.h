@@ -7,10 +7,14 @@ typedef struct AmgBuffer {
     unsigned char *data;
     size_t length;
     size_t capacity;
+    /* Optional payload ceiling (excluding the NUL); zero means unlimited. */
+    size_t limit;
+    int limit_hit;
 } AmgBuffer;
 
 void amg_buffer_init(AmgBuffer *buffer);
 void amg_buffer_free(AmgBuffer *buffer);
+int amg_buffer_set_limit(AmgBuffer *buffer, size_t limit);
 int amg_buffer_reserve(AmgBuffer *buffer, size_t capacity);
 int amg_buffer_append(AmgBuffer *buffer, const void *data, size_t length);
 int amg_buffer_append_cstr(AmgBuffer *buffer, const char *text);

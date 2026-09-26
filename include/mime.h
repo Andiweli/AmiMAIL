@@ -33,4 +33,11 @@ int amg_mime_extract_attachment(const char *message, size_t length,
                                 size_t index, AmgBuffer *name_utf8,
                                 AmgBuffer *data, AmgError *error);
 
+/* Shared MIME interpretation for the bounded in-memory and disk readers. */
+int amg_mime_parameter(const char *header, const char *key,
+                        char *value, size_t capacity);
+int amg_mime_describe_attachment(const AmgMailHeaders *headers, int related,
+                                  AmgBuffer *name_utf8, int *embedded);
+int amg_mime_plain_is_css(const char *text, size_t length);
+
 #endif

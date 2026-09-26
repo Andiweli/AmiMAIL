@@ -58,6 +58,11 @@ typedef struct AmgNetMessage {
     size_t attachment_count;
     AmgAccount account_update;
     AmgBuffer payload;
+    AmgMailFile *mail_file;
+    char recovery_path[AMG_SPOOL_PATH_MAX];
+    int recovery_complete;
+    unsigned long progress_uid;
+    char progress_mailbox[512];
     AmgError error;
 } AmgNetMessage;
 
@@ -69,10 +74,112 @@ struct AmgNetwork {
     volatile int worker_ready;
     volatile int connected;
     volatile int stop_requested;
+    volatile int io_cancel_requested;
+    char spool_directory[AMG_SPOOL_PATH_MAX];
+    AmgTransferProgress progress;
     int running;
 };
 
 static AmgNetwork *starting_network;
+
+static void transfer_wake(AmgNetwork *network)
+{
+    if (network->responses)
+        Signal(network->responses->mp_SigTask, 1UL << network->responses->mp_SigBit);
+}
+
+static int transfer_report(void *context, AmgTransferPhase phase,
+                            size_t done, size_t total)
+{
+    AmgNetwork *network = (AmgNetwork *)context;
+    int cancel, changed;
+    size_t step;
+    Forbid();
+    /* Preparation completes the local recovery copy before cancellation is
+     * offered. On shutdown it also finishes this copy before stopping I/O. */
+    cancel = phase != AMG_TRANSFER_PREPARE &&
+        (network->io_cancel_requested || network->stop_requested);
+    /* Folder loading reports counts rather than bytes. A 64-KiB threshold
+     * would suppress every intermediate update for most folders. Wake the
+     * GUI at roughly one-percent intervals, keeping byte transfers unchanged. */
+    step = network->progress.type == AMG_NET_FETCH_INBOX
+        ? total / 100U + (total % 100U != 0U) : 65536U;
+    if (!step) step = 1U;
+    changed = network->progress.phase != phase ||
+        network->progress.total != total || done == total ||
+        done < network->progress.done || done - network->progress.done >= step;
+    if (!cancel && changed) {
+        network->progress.phase = phase;
+        network->progress.done = done; network->progress.total = total;
+        network->progress.cancellable = phase != AMG_TRANSFER_PREPARE &&
+                                        phase != AMG_TRANSFER_COMMIT;
+    }
+    Permit();
+    if (changed) transfer_wake(network);
+    return !cancel;
+}
+
+int amg_network_events_pending(AmgNetwork *network)
+{
+    int pending = 0;
+    if (!network || !network->responses) return 0;
+    Forbid();
+    pending = network->responses->mp_MsgList.lh_Head->ln_Succ != NULL;
+    Permit();
+    return pending;
+}
+
+int amg_network_transfer_progress(AmgNetwork *network, AmgTransferProgress *progress)
+{
+    if (!network || !progress) return 0;
+    Forbid(); *progress = network->progress; Permit();
+    return progress->active;
+}
+
+int amg_network_cancel_transfer(AmgNetwork *network, unsigned long serial)
+{
+    int accepted = 0;
+    if (!network) return 0;
+    Forbid();
+    if (network->progress.active && network->progress.cancellable &&
+        network->progress.serial == serial) {
+        network->io_cancel_requested = 1;
+        network->progress.cancellable = 0;
+        accepted = 1;
+    }
+    Permit();
+    if (accepted) transfer_wake(network);
+    return accepted;
+}
+
+static void transfer_begin(AmgNetwork *network, const AmgNetMessage *message)
+{
+    AmgNetCommandType type = message->type;
+    Forbid();
+    network->io_cancel_requested = network->stop_requested;
+    ++network->progress.serial;
+    network->progress.type = type;
+    network->progress.uid = message->progress_uid;
+    memcpy(network->progress.mailbox, message->progress_mailbox,
+           sizeof(network->progress.mailbox));
+    network->progress.done = network->progress.total = 0U;
+    network->progress.phase = type == AMG_NET_FETCH_MESSAGE || type == AMG_NET_FETCH_INBOX
+        ? AMG_TRANSFER_RECEIVE : AMG_TRANSFER_PREPARE;
+    network->progress.active = type == AMG_NET_FETCH_MESSAGE || type == AMG_NET_FETCH_INBOX ||
+        type == AMG_NET_SEND_MAIL || type == AMG_NET_SEND_REPLY || type == AMG_NET_SAVE_DRAFT;
+    network->progress.cancellable = type == AMG_NET_FETCH_MESSAGE || type == AMG_NET_FETCH_INBOX;
+    Permit();
+    if (network->progress.active) transfer_wake(network);
+}
+
+static void transfer_end(AmgNetwork *network)
+{
+    Forbid();
+    network->progress.active = 0; network->progress.cancellable = 0;
+    Permit();
+    transfer_wake(network);
+}
+
 
 static void copy_text(char *destination, size_t capacity, const char *source)
 {
@@ -113,6 +220,8 @@ static void free_net_message(AmgNetMessage *message)
     if (!message) return;
     amg_account_clear(&message->account_update);
     amg_buffer_free(&message->payload);
+    amg_mailfile_close(message->mail_file);
+    message->mail_file = NULL;
     free(message->attachments);
     message->attachments = NULL;
     message->attachment_count = 0U;
@@ -215,6 +324,16 @@ static void finish_message(AmgNetMessage *message, int result,
 {
     message->result = result;
     if (error) message->error = *error;
+    if (message->recovery_path[0]) {
+        char note[256], combined[256];
+        amg_tr_snprintf(note, sizeof(note),
+            message->recovery_complete ? MSG_LOCAL_COPY_KEPT : MSG_PARTIAL_COPY_KEPT,
+            message->recovery_complete ? "Local recovery copy: %s" :
+                "Incomplete copy; temporary attachments kept: %s",
+            message->recovery_path);
+        snprintf(combined, sizeof(combined), "%.75s %.178s", message->error.message, note);
+        copy_text(message->error.message, sizeof(message->error.message), combined);
+    }
     ReplyMsg((struct Message *)message);
 }
 
@@ -249,93 +368,45 @@ static int ensure_imap_connected(AmgNetwork *network, AmgImapSession *imap,
     return result;
 }
 
-static void cleanup_temp_attachments(AmgNetMessage *message)
+static void cleanup_temp_attachments(AmgNetMessage *message, int result)
 {
     size_t i;
     if (!message) return;
+    if (result != AMG_OK && !message->recovery_complete) return;
     for (i = 0; i < message->attachment_count; ++i) {
         if (message->attachments[i].delete_after_use &&
             message->attachments[i].path[0]) {
+            amg_spool_remove(message->attachments[i].path);
             (void)remove(message->attachments[i].path);
             message->attachments[i].path[0] = 0;
         }
     }
 }
 
-static int add_reply_source_headers_to_draft(const AmgNetMessage *message,
-                                             AmgBuffer *raw,
-                                             AmgError *error)
+static int spool_mail(AmgNetwork *network, AmgNetMessage *message,
+                        const AmgMailDraft *draft, int reply_context,
+                        FILE **file, size_t *length, AmgTransfer *transfer,
+                        AmgError *error)
 {
-    AmgBuffer mailbox_wire;
-    AmgBuffer decorated;
-    char uid_header[80];
-    char uid_validity_header[96];
-    size_t split = 0U;
-    size_t i;
+    FILE *output = NULL;
     int result;
+    *file = NULL;
+    result = amg_spool_create(network->spool_directory, message->recovery_path,
+                              &output, error);
+    if (result != AMG_OK) return result;
+    result = amg_smtp_build_mail_file(draft, 1, reply_context, output,
+                                      length, transfer, error);
+    if (fclose(output) != 0 && result == AMG_OK) result = AMG_ERR_IO;
+    if (result != AMG_OK) return result;
+    message->recovery_complete = 1;
+    *file = fopen(message->recovery_path, "rb");
+    return *file ? AMG_OK : AMG_ERR_IO;
+}
 
-    if (!message || !raw) return AMG_ERR_ARGUMENT;
-    if (!message->reply_source_uid ||
-        !message->reply_source_uid_validity ||
-        !message->reply_source_mailbox[0])
-        return AMG_OK;
-
-    for (i = 0U; i + 3U < raw->length; ++i) {
-        if (raw->data[i] == '\r' && raw->data[i + 1U] == '\n' &&
-            raw->data[i + 2U] == '\r' && raw->data[i + 3U] == '\n') {
-            split = i + 2U;
-            break;
-        }
-    }
-    if (!split) {
-        amg_error_set(error, AMG_ERR_PARSE,
-                      T(MSG_MAIL_DRAFT_COULD_NOT_BE_CREATED,
-                        "Mail draft could not be created."));
-        return AMG_ERR_PARSE;
-    }
-
-    amg_buffer_init(&mailbox_wire);
-    amg_buffer_init(&decorated);
-    result = amg_modified_utf7_encode(message->reply_source_mailbox,
-                                      &mailbox_wire);
-    if (result == AMG_OK)
-        result = amg_buffer_append(&decorated, raw->data, split);
-    if (result == AMG_OK) {
-        snprintf(uid_header, sizeof(uid_header), "%s: %lu\r\n",
-                 AMG_MAIL_REPLY_UID_HEADER, message->reply_source_uid);
-        result = amg_buffer_append_cstr(&decorated, uid_header);
-    }
-    if (result == AMG_OK) {
-        snprintf(uid_validity_header, sizeof(uid_validity_header),
-                 "%s: %lu\r\n", AMG_MAIL_REPLY_UIDVALIDITY_HEADER,
-                 message->reply_source_uid_validity);
-        result = amg_buffer_append_cstr(&decorated, uid_validity_header);
-    }
-    if (result == AMG_OK) {
-        result = amg_buffer_append_cstr(&decorated,
-                                        AMG_MAIL_REPLY_MAILBOX_HEADER ": ");
-    }
-    if (result == AMG_OK)
-        result = amg_buffer_append(&decorated, mailbox_wire.data,
-                                   mailbox_wire.length);
-    if (result == AMG_OK)
-        result = amg_buffer_append_cstr(&decorated, "\r\n");
-    if (result == AMG_OK)
-        result = amg_buffer_append(&decorated, raw->data + split,
-                                   raw->length - split);
-
-    amg_buffer_free(&mailbox_wire);
-    if (result != AMG_OK) {
-        amg_buffer_free(&decorated);
-        amg_error_set(error, result,
-                      T(MSG_MAIL_DRAFT_COULD_NOT_BE_CREATED,
-                        "Mail draft could not be created."));
-        return result;
-    }
-
-    amg_buffer_free(raw);
-    *raw = decorated;
-    return AMG_OK;
+static void spool_mail_remove(AmgNetMessage *message)
+{
+    amg_spool_remove(message->recovery_path);
+    message->recovery_path[0] = 0;
 }
 
 static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
@@ -344,7 +415,10 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
 {
     AmgAttachmentInput *attachments = NULL;
     AmgMailDraft draft;
-    AmgBuffer raw;
+    FILE *spool = NULL;
+    size_t spool_length = 0U;
+    int keep_spool = 0;
+    AmgTransfer transfer = { transfer_report, network };
     AmgError detail_error;
     size_t i;
     int result;
@@ -378,12 +452,19 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
     draft.references = message->references;
     draft.attachments = attachments;
     draft.attachment_count = message->attachment_count;
+    draft.progress_mailbox = message->progress_mailbox;
+    draft.progress_uid = message->progress_uid;
     draft.reply_source_uid = message->reply_source_uid;
     draft.reply_source_uid_validity = message->reply_source_uid_validity;
     draft.reply_source_mailbox = message->reply_source_mailbox;
 
-    result = amg_smtp_send_mail(&network->account, access_token, &draft, error);
+    result = spool_mail(network, message, &draft, 0, &spool,
+                         &spool_length, &transfer, error);
+    if (result == AMG_OK)
+        result = amg_smtp_send_mail_file(&network->account, access_token,
+                                         &draft, spool, spool_length, &transfer, error);
     if (result != AMG_OK) {
+        if (spool) fclose(spool);
         free(attachments);
         return result;
     }
@@ -391,22 +472,20 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
 
     if (amg_account_should_append_sent(&network->account)) {
         memset(&detail_error, 0, sizeof(detail_error));
-        detail_result = ensure_imap_connected(network, imap, access_token,
-                                              &detail_error);
-        amg_buffer_init(&raw);
+        detail_result = amg_transfer_report(&transfer, AMG_TRANSFER_UPLOAD,
+                                             0U, spool_length, &detail_error);
         if (detail_result == AMG_OK)
-            /* Keep Bcc in the private Sent copy. It was intentionally omitted
-             * from the SMTP DATA sent to recipients. */
-            detail_result = amg_smtp_build_mail(&draft, 1, &raw,
-                                                &detail_error);
+            detail_result = ensure_imap_connected(network, imap, access_token,
+                                                   &detail_error);
         if (detail_result == AMG_OK)
-            detail_result = amg_imap_append_sent(
-                imap, raw.data, raw.length, &detail_error);
-        amg_buffer_free(&raw);
+            detail_result = amg_imap_append_sent_file(imap, spool, spool_length,
+                                                      &transfer, &detail_error);
         if (detail_result != AMG_OK) {
-            if (detail_result == AMG_ERR_IO || detail_result == AMG_ERR_TLS) {
+            keep_spool = 1;
+            if (detail_result == AMG_ERR_IO || detail_result == AMG_ERR_TLS ||
+                detail_result == AMG_ERR_CANCELLED || detail_result == AMG_ERR_UNCERTAIN) {
                 network->connected = 0;
-                amg_imap_disconnect(imap);
+                amg_imap_abort(imap);
             }
             append_success_warning(
                 error,
@@ -428,9 +507,10 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
         if (detail_result != AMG_OK) {
             copy_text(message->argument2, sizeof(message->argument2),
                       "draft-kept");
-            if (detail_result == AMG_ERR_IO || detail_result == AMG_ERR_TLS) {
+            if (detail_result == AMG_ERR_IO || detail_result == AMG_ERR_TLS ||
+                detail_result == AMG_ERR_CANCELLED || detail_result == AMG_ERR_UNCERTAIN) {
                 network->connected = 0;
-                amg_imap_disconnect(imap);
+                amg_imap_abort(imap);
             }
             append_success_warning(
                 error,
@@ -457,9 +537,10 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
                 message->reply_source_uid_validity,
                 message->reply_source_mailbox, &detail_error);
         if (detail_result != AMG_OK) {
-            if (detail_result == AMG_ERR_IO || detail_result == AMG_ERR_TLS) {
+            if (detail_result == AMG_ERR_IO || detail_result == AMG_ERR_TLS ||
+                detail_result == AMG_ERR_CANCELLED || detail_result == AMG_ERR_UNCERTAIN) {
                 network->connected = 0;
-                amg_imap_disconnect(imap);
+                amg_imap_abort(imap);
             }
             append_success_warning(
                 error, T(MSG_MAIL_SENT, "Mail sent"), &detail_error);
@@ -467,16 +548,21 @@ static int send_new_mail(AmgNetwork *network, AmgImapSession *imap,
             message->reply_answered_marked = 1;
         }
     }
+    fclose(spool);
+    if (!keep_spool) spool_mail_remove(message);
     free(attachments);
     return AMG_OK;
 }
 
 static int save_mail_draft(AmgNetwork *network, AmgImapSession *imap,
-                           AmgNetMessage *message, AmgError *error)
+                           AmgNetMessage *message, const char *access_token,
+                           AmgError *error)
 {
     AmgAttachmentInput *attachments = NULL;
     AmgMailDraft draft;
-    AmgBuffer raw;
+    FILE *spool = NULL;
+    size_t spool_length = 0U;
+    AmgTransfer transfer = { transfer_report, network };
     AmgError delete_error;
     size_t i;
     int result;
@@ -510,22 +596,27 @@ static int save_mail_draft(AmgNetwork *network, AmgImapSession *imap,
     draft.references = message->references;
     draft.attachments = attachments;
     draft.attachment_count = message->attachment_count;
+    draft.progress_mailbox = message->progress_mailbox;
+    draft.progress_uid = message->progress_uid;
     draft.reply_source_uid = message->reply_source_uid;
     draft.reply_source_uid_validity = message->reply_source_uid_validity;
     draft.reply_source_mailbox = message->reply_source_mailbox;
 
-    amg_buffer_init(&raw);
-    result = amg_smtp_build_mail(&draft, 1, &raw, error);
+    result = spool_mail(network, message, &draft, 1, &spool,
+                         &spool_length, &transfer, error);
     free(attachments);
-    attachments = NULL;
     if (result == AMG_OK)
-        result = add_reply_source_headers_to_draft(message, &raw, error);
+        result = amg_transfer_report(&transfer, AMG_TRANSFER_UPLOAD, 0U,
+                                     spool_length, error);
     if (result == AMG_OK)
-        result = amg_imap_append_draft(
+        result = ensure_imap_connected(network, imap, access_token, error);
+    if (result == AMG_OK)
+        result = amg_imap_append_draft_file(
             imap, message->argument1[0] ? message->argument1 : "\\Drafts",
-            raw.data, raw.length, error);
-    amg_buffer_free(&raw);
+            spool, spool_length, &transfer, error);
+    if (spool) fclose(spool);
     if (result != AMG_OK) return result;
+    spool_mail_remove(message);
 
     /* APPEND completed first, so an update can never destroy the only draft.
      * If removing the former UID fails, keep the new draft and report a
@@ -557,13 +648,39 @@ static int save_mail_draft(AmgNetwork *network, AmgImapSession *imap,
     return AMG_OK;
 }
 
+static int receive_mail_file(AmgNetwork *network, AmgImapSession *imap,
+                              AmgNetMessage *message, AmgError *error)
+{
+    FILE *spool = NULL;
+    char path[AMG_SPOOL_PATH_MAX];
+    size_t offset = 0U, length = 0U;
+    AmgImapFetchRecord record;
+    AmgTransfer transfer = { transfer_report, network };
+    int result = amg_spool_create(network->spool_directory, path, &spool, error);
+    if (result != AMG_OK) return result;
+    result = amg_imap_fetch_message_file(imap, message->uid, spool,
+                                         &offset, &length, &record, &transfer, error);
+    if (fclose(spool) != 0 && result == AMG_OK) result = AMG_ERR_IO;
+    if (result == AMG_OK)
+        result = amg_mailfile_open_range(path, offset, length, 1, &transfer,
+                                         &message->mail_file, error);
+    if (result == AMG_OK)
+        result = amg_mailfile_payload(message->mail_file, &record,
+                                      &message->payload, error);
+    if (result != AMG_OK) {
+        amg_mailfile_close(message->mail_file); message->mail_file = NULL;
+        amg_spool_remove(path);
+    }
+    return result;
+}
+
 static void network_worker(void)
 {
     AmgNetwork *network = starting_network;
-    AmgNetMessage *stop_message = NULL;
+    struct Message *stop_message = NULL;
     AmgImapSession imap;
     AmgOAuthTokens tokens;
-    AmgError error;
+    AmgError error, init_error;
     int tls_ready;
     network->commands->mp_SigTask = FindTask(NULL);
     network->worker_ready = 1;
@@ -574,24 +691,35 @@ static void network_worker(void)
     memset(&tokens, 0, sizeof(tokens));
     memset(&error, 0, sizeof(error));
     tls_ready = amg_tls_global_init(&error) == AMG_OK;
+    init_error = error;
+    if (!tls_ready && init_error.code == AMG_OK)
+        amg_error_set(&init_error, AMG_ERR_TLS,
+            T(MSG_AMISSL_COULD_NOT_BE_INITIALIZED, "AmiSSL could not be initialized."));
     if (tls_ready)
-        amg_tls_set_cancel_flag(&network->stop_requested);
+        amg_tls_set_cancel_flag(&network->io_cancel_requested);
 
     for (;;) {
         AmgNetMessage *message;
         Wait(1UL << network->commands->mp_SigBit);
         while ((message = (AmgNetMessage *)GetMsg(network->commands)) != NULL) {
             int result = AMG_OK;
+            AmgNetCommandType command_type;
             amg_error_set(&error, AMG_OK, "");
-            if (message->type == AMG_NET_STOP) {
-                stop_message = message;
+            /* STOP uses a small allocation-free header. Read only the
+             * common prefix before treating other messages as full jobs. */
+            memcpy(&command_type, (const unsigned char *)message +
+                   offsetof(AmgNetMessage, type), sizeof(command_type));
+            if (command_type == AMG_NET_STOP) {
+                stop_message = (struct Message *)message;
                 goto done;
             }
             if (!tls_ready) {
-                cleanup_temp_attachments(message);
+                error = init_error;
+                cleanup_temp_attachments(message, error.code);
                 finish_message(message, error.code, &error);
                 continue;
             }
+            transfer_begin(network, message);
             switch (message->type) {
                 case AMG_NET_CONNECT:
                     result = connect_network_account(
@@ -643,21 +771,27 @@ static void network_worker(void)
                 }
 
                 case AMG_NET_FETCH_INBOX:
-                    result = amg_imap_select(
-                        &imap,
-                        message->argument1[0] ? message->argument1 : "INBOX",
-                        &error);
+                {
+                    AmgTransfer transfer = { transfer_report, network };
+                    result = ensure_imap_connected(
+                        network, &imap, tokens.access_token, &error);
+                    if (result == AMG_OK)
+                        result = amg_imap_select(
+                            &imap,
+                            message->argument1[0] ? message->argument1 : "INBOX",
+                            &error);
                     if (result == AMG_OK) {
                         snprintf(message->argument2,
                                  sizeof(message->argument2), "%lu",
                                  imap.uid_validity);
-                        result = amg_imap_fetch_recent(
+                        result = amg_imap_fetch_recent_progress(
                             &imap,
                             network->account.fetch_days
                                 ? network->account.fetch_days : 180U,
-                            &message->payload, &error);
+                            &message->payload, &transfer, &error);
                     }
                     break;
+                }
 
                 case AMG_NET_CHECK_INBOX:
                 {
@@ -712,10 +846,13 @@ static void network_worker(void)
                 }
 
                 case AMG_NET_FETCH_MESSAGE:
-                    result = amg_imap_fetch_message(
-                        &imap, message->uid, &message->payload, &error);
+                    result = ensure_imap_connected(network, &imap, tokens.access_token, &error);
+                    if (result == AMG_OK && message->argument2[0] &&
+                        strcmp(message->argument2, imap.selected_mailbox))
+                        result = amg_imap_select(&imap, message->argument2, &error);
                     if (result == AMG_OK)
-                        message->uid_validity = imap.uid_validity;
+                        result = receive_mail_file(network, &imap, message, &error);
+                    if (result == AMG_OK) message->uid_validity = imap.uid_validity;
                     break;
 
                 case AMG_NET_SET_SEEN:
@@ -747,26 +884,11 @@ static void network_worker(void)
                     break;
 
                 case AMG_NET_SAVE_DRAFT:
-                    result = save_mail_draft(network, &imap, message, &error);
+                    result = save_mail_draft(network, &imap, message,
+                                             tokens.access_token, &error);
                     break;
 
                 case AMG_NET_SEND_REPLY:
-                {
-                    AmgReplyDraft draft = {
-                        message->from,
-                        message->to,
-                        message->subject,
-                        message->body,
-                        message->in_reply_to,
-                        message->references,
-                        message->date,
-                        message->message_id
-                    };
-                    result = amg_smtp_send_reply(
-                        &network->account, tokens.access_token, &draft, &error);
-                    break;
-                }
-
                 case AMG_NET_SEND_MAIL:
                     result = send_new_mail(network, &imap, message,
                                            tokens.access_token, &error);
@@ -799,12 +921,18 @@ static void network_worker(void)
                                   T(MSG_UNKNOWN_NETWORK_REQUEST, "Unknown network request."));
                     break;
             }
-            if ((result == AMG_ERR_IO || result == AMG_ERR_TLS) &&
-                message->type >= AMG_NET_CONNECT &&
-                message->type <= AMG_NET_SAVE_DRAFT)
+            if (network->io_cancel_requested && result != AMG_OK && result != AMG_ERR_UNCERTAIN) {
+                result = AMG_ERR_CANCELLED;
+                amg_error_set(&error, result, T(MSG_TRANSFER_CANCELLED, "Transfer cancelled."));
+            }
+            if (result == AMG_ERR_IO || result == AMG_ERR_TLS ||
+                result == AMG_ERR_CANCELLED || result == AMG_ERR_UNCERTAIN) {
+                amg_imap_abort(&imap);
                 network->connected = 0;
+            }
+            transfer_end(network);
             qualify_error(message->type, result, &error);
-            cleanup_temp_attachments(message);
+            cleanup_temp_attachments(message, result);
             finish_message(message, result, &error);
         }
     }
@@ -818,7 +946,7 @@ done:
     network->worker_ready = 0;
     network->connected = 0;
     network->stop_requested = 0;
-    if (stop_message) finish_message(stop_message, AMG_OK, &error);
+    if (stop_message) ReplyMsg(stop_message);
 }
 
 AmgNetwork *amg_network_create(void)
@@ -843,6 +971,9 @@ int amg_network_start(AmgNetwork *network, const AmgAccount *account,
 {
     if (!network || !account) return AMG_ERR_ARGUMENT;
     if (network->running) return AMG_OK;
+    /* Keep normal connections possible even on a read-only program volume;
+     * an operation needing a spool reports its own precise error. */
+    (void)amg_spool_directory(network->spool_directory, NULL);
     if (!network->commands) network->commands = CreateMsgPort();
     if (!network->responses) network->responses = CreateMsgPort();
     if (!network->commands || !network->responses) {
@@ -913,6 +1044,25 @@ int amg_network_request(AmgNetwork *network, AmgNetCommandType type,
     message->uid = uid;
     copy_text(message->argument1, sizeof(message->argument1), argument1);
     copy_text(message->argument2, sizeof(message->argument2), argument2);
+    if (type == AMG_NET_FETCH_MESSAGE) {
+        message->progress_uid = uid;
+        copy_text(message->progress_mailbox, sizeof(message->progress_mailbox),
+                  argument2);
+    } else if (type == AMG_NET_FETCH_INBOX) {
+        /* Despite the historic name this command loads any selected folder.
+         * Keep a private copy: SELECT and later GUI navigation must not change
+         * the origin of an already queued job. */
+        const char *folder = argument1 && *argument1 ? argument1 : "INBOX";
+        if (!text_fits(folder, sizeof(message->progress_mailbox))) {
+            free_net_message(message);
+            amg_error_set(error, AMG_ERR_LIMIT,
+                          T(MSG_A_SYSTEM_FOLDER_NAME_IS_TOO_LONG,
+                            "A system folder name is too long."));
+            return AMG_ERR_LIMIT;
+        }
+        message->progress_uid = 0UL;
+        copy_text(message->progress_mailbox, sizeof(message->progress_mailbox), folder);
+    }
     PutMsg(network->commands, (struct Message *)message);
     return AMG_OK;
 }
@@ -995,7 +1145,9 @@ static int request_mail_message(AmgNetwork *network,
         !text_fits(draft->in_reply_to, 512U) ||
         !text_fits(draft->references, 1024U) ||
         !text_fits(draft->reply_source_mailbox,
-                   sizeof(message->reply_source_mailbox))) {
+                   sizeof(message->reply_source_mailbox)) ||
+        !text_fits(draft->progress_mailbox,
+                   sizeof(message->progress_mailbox))) {
         amg_error_set(error, AMG_ERR_LIMIT, T(MSG_MAIL_DRAFT_IS_TOO_LARGE, "Mail draft is too large."));
         return AMG_ERR_LIMIT;
     }
@@ -1065,6 +1217,9 @@ static int request_mail_message(AmgNetwork *network,
         message->attachments[i].delete_after_use =
             draft->attachments[i].delete_after_use;
     }
+    message->progress_uid = draft->progress_uid;
+    copy_text(message->progress_mailbox, sizeof(message->progress_mailbox),
+              draft->progress_mailbox);
     message->uid = original_draft_uid;
     if (type == AMG_NET_SAVE_DRAFT) {
         copy_text(message->argument1, sizeof(message->argument1), mailbox);
@@ -1149,6 +1304,9 @@ int amg_network_poll(AmgNetwork *network, AmgNetworkEvent *event)
     copy_text(event->argument1, sizeof(event->argument1), message->argument1);
     copy_text(event->argument2, sizeof(event->argument2), message->argument2);
     copy_text(event->message, sizeof(event->message), message->error.message);
+    event->mail_file = message->mail_file;
+    message->mail_file = NULL;
+    copy_text(event->recovery_path, sizeof(event->recovery_path), message->recovery_path);
     event->payload = message->payload.data;
     event->payload_length = message->payload.length;
     message->payload.data = NULL;
@@ -1162,6 +1320,7 @@ void amg_network_event_clear(AmgNetworkEvent *event)
 {
     if (!event) return;
     free(event->payload);
+    amg_mailfile_close(event->mail_file);
     memset(event, 0, sizeof(*event));
 }
 
@@ -1184,27 +1343,53 @@ int amg_network_is_connected(const AmgNetwork *network)
 
 void amg_network_stop(AmgNetwork *network)
 {
-    AmgNetMessage *stop;
+    struct StopHeader {
+        struct Message message;
+        AmgNetCommandType type;
+    } stop;
+    int acknowledged = 0;
     if (!network || !network->running) return;
+    memset(&stop, 0, sizeof(stop));
+    stop.message.mn_ReplyPort = network->responses;
+    stop.message.mn_Length = (UWORD)sizeof(stop);
+    stop.type = AMG_NET_STOP;
     network->stop_requested = 1;
-    stop = new_message(network, AMG_NET_STOP);
-    if (stop) {
-        PutMsg(network->commands, (struct Message *)stop);
-        while (network->running)
-            Wait(1UL << network->responses->mp_SigBit);
-    }
-    while (network->responses) {
-        AmgNetMessage *message =
-            (AmgNetMessage *)GetMsg(network->responses);
-        if (!message) break;
-        free_net_message(message);
+    network->io_cancel_requested = 1;
+    PutMsg(network->commands, &stop.message);
+    /* No malloc during low-memory shutdown, and do not release any GUI or
+     * network memory until the worker has acknowledged its final message. */
+    while (!acknowledged) {
+        struct Message *reply;
+        while ((reply = GetMsg(network->responses)) != NULL) {
+            if (reply == &stop.message) acknowledged = 1;
+            else free_net_message((AmgNetMessage *)reply);
+        }
+        if (!acknowledged) Wait(1UL << network->responses->mp_SigBit);
     }
     network->process = NULL;
     network->connected = 0;
     network->stop_requested = 0;
+    network->io_cancel_requested = 0;
 }
 
 #else
+
+int amg_network_transfer_progress(AmgNetwork *network, AmgTransferProgress *progress)
+{
+    (void)network;
+    if (progress) memset(progress, 0, sizeof(*progress));
+    return 0;
+}
+
+int amg_network_cancel_transfer(AmgNetwork *network, unsigned long serial)
+{
+    (void)network; (void)serial; return 0;
+}
+
+int amg_network_events_pending(AmgNetwork *network)
+{
+    (void)network; return 0;
+}
 
 struct AmgNetwork {
     int running;
@@ -1345,6 +1530,7 @@ void amg_network_event_clear(AmgNetworkEvent *event)
 {
     if (!event) return;
     free(event->payload);
+    amg_mailfile_close(event->mail_file);
     memset(event, 0, sizeof(*event));
 }
 

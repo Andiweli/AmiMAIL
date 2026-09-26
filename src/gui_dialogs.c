@@ -755,19 +755,19 @@ static int account_config_build_tab_nodes(
         label = account->account_name[0] ? account->account_name :
                 (account->email[0] ? account->email : NULL);
         if (label)
-            snprintf(labels[count], sizeof(labels[count]), "%s", label);
+            snprintf(labels[slot], sizeof(labels[slot]), "%s", label);
         else
-            amg_tr_snprintf(labels[count], sizeof(labels[count]),
+            amg_tr_snprintf(labels[slot], sizeof(labels[slot]),
                             MSG_ACCOUNT_VALUE, "Account %lu",
                             (unsigned long)(slot + 1U));
-        if (!labels[count][0])
-            amg_tr_snprintf(labels[count], sizeof(labels[count]),
+        if (!labels[slot][0])
+            amg_tr_snprintf(labels[slot], sizeof(labels[slot]),
                             MSG_ACCOUNT_VALUE, "Account %lu",
                             (unsigned long)(slot + 1U));
         map[count] = slot;
         if (slot == active_slot) selected = count;
         node = AllocClickTabNode(
-            TNA_Text, (ULONG)(uintptr_t)labels[count],
+            TNA_Text, (ULONG)(uintptr_t)labels[slot],
             TNA_Number, (ULONG)count, TAG_DONE);
         if (!node) {
             account_config_free_tab_nodes(list);
@@ -837,6 +837,93 @@ static int account_config_rebuild_tabs(
     return AMG_OK;
 }
 
+/* Reordering is not adding/removing an account. Keep the existing tab
+ * nodes (and the selected node's identity) instead of freeing and recreating
+ * the whole list while clicktab/window.class can still reference those nodes.
+ * Label buffers are slot-indexed, so their addresses remain stable as well.
+ */
+static int account_config_reorder_nodes(
+    struct List *list, const size_t order[AMG_MAX_ACCOUNTS],
+    const int configured[AMG_MAX_ACCOUNTS],
+    size_t map[AMG_MAX_ACCOUNTS], size_t count)
+{
+    struct Node *by_slot[AMG_MAX_ACCOUNTS] = {NULL};
+    struct Node *ordered[AMG_MAX_ACCOUNTS];
+    size_t new_map[AMG_MAX_ACCOUNTS];
+    struct Node *node;
+    size_t position, used = 0U;
+    unsigned seen = 0U;
+    if (!list || !order || !configured || !map || count > AMG_MAX_ACCOUNTS)
+        return 0;
+    node = list->lh_Head;
+    for (position = 0U; position < count; ++position) {
+        size_t slot = map[position];
+        if (!node || !node->ln_Succ || slot >= AMG_MAX_ACCOUNTS ||
+            by_slot[slot])
+            return 0;
+        by_slot[slot] = node;
+        node = node->ln_Succ;
+    }
+    if (!node || node->ln_Succ) return 0;
+    for (position = 0U; position < AMG_MAX_ACCOUNTS; ++position) {
+        size_t slot = order[position];
+        if (slot >= AMG_MAX_ACCOUNTS || (seen & (1U << slot))) return 0;
+        seen |= 1U << slot;
+        if (!configured[slot]) continue;
+        if (used >= count || !by_slot[slot]) return 0;
+        new_map[used] = slot;
+        ordered[used++] = by_slot[slot];
+    }
+    if (used != count) return 0;
+
+    /* All validation precedes the first mutation. Caller detaches the list. */
+    NewList(list);
+    for (position = 0U; position < count; ++position) {
+        AddTail(list, ordered[position]);
+        SetClickTabNodeAttrs(ordered[position],
+                            TNA_Number, (ULONG)position, TAG_DONE);
+        map[position] = new_map[position];
+    }
+    return 1;
+}
+
+static int account_config_move_tabs(
+    Object *dialog, struct Window *window, struct Gadget *tabs_gadget,
+    struct Gadget *add_gadget, struct Gadget *delete_gadget,
+    struct Gadget *move_left_gadget, struct Gadget *move_right_gadget,
+    struct List *list, const AmgAccount drafts[AMG_MAX_ACCOUNTS],
+    const int configured[AMG_MAX_ACCOUNTS],
+    const size_t order[AMG_MAX_ACCOUNTS], size_t map[AMG_MAX_ACCOUNTS],
+    char labels[AMG_MAX_ACCOUNTS][128], size_t active_slot, size_t count)
+{
+    size_t selected, position;
+    int moved;
+    SetAttrs((Object *)tabs_gadget, CLICKTAB_Labels, (ULONG)~0UL, TAG_DONE);
+    moved = account_config_reorder_nodes(list, order, configured, map, count);
+    selected = account_config_visible_for_slot(map, count, active_slot);
+    /* Refresh edited names without replacing nodes or their label pointers. */
+    for (position = 0U; position < count; ++position) {
+        size_t slot = map[position];
+        const char *label = drafts[slot].account_name[0]
+            ? drafts[slot].account_name : drafts[slot].email;
+        if (label[0])
+            snprintf(labels[slot], sizeof(labels[slot]), "%s", label);
+        else
+            amg_tr_snprintf(labels[slot], sizeof(labels[slot]),
+                            MSG_ACCOUNT_VALUE, "Account %lu",
+                            (unsigned long)(slot + 1U));
+    }
+    SetGadgetAttrs(tabs_gadget, window, NULL,
+                   CLICKTAB_Labels, (ULONG)(uintptr_t)list,
+                   CLICKTAB_Current, (ULONG)selected, TAG_DONE);
+    account_config_update_order_buttons(
+        add_gadget, delete_gadget, move_left_gadget, move_right_gadget,
+        window, selected, count);
+    (void)DoMethod(dialog, WM_RETHINK);
+    RefreshGList(tabs_gadget, window, NULL, 1);
+    return moved;
+}
+
 static void account_order_append_configured_slot(
     size_t order[AMG_MAX_ACCOUNTS],
     const int configured[AMG_MAX_ACCOUNTS], size_t new_slot)
@@ -877,6 +964,90 @@ static void account_order_partition_configured_slots(
     }
     if (out == AMG_MAX_ACCOUNTS)
         memcpy(order, new_order, sizeof(new_order));
+}
+
+/* Arrow moves are one-shot actions. Some classic input paths can deliver
+ * more than one GADGETUP around a live tab rebuild. Pair a move with an
+ * explicit GADGETDOWN and consume it before touching the tabs. A held button
+ * or a duplicate release cannot move the same account a second time.
+ */
+typedef struct AccountOrderClick {
+    ULONG gadget_id;
+    size_t slot;
+    int armed;
+} AccountOrderClick;
+
+static void account_order_click_begin(AccountOrderClick *click,
+                                      ULONG gadget_id, size_t slot)
+{
+    click->armed = gadget_id == GID_ACCOUNT_MOVE_LEFT ||
+                   gadget_id == GID_ACCOUNT_MOVE_RIGHT;
+    click->gadget_id = gadget_id;
+    click->slot = slot;
+}
+
+static int account_order_click_take(AccountOrderClick *click,
+                                     ULONG gadget_id, size_t active_slot)
+{
+    int accepted = click->armed && click->gadget_id == gadget_id &&
+                   click->slot == active_slot;
+    click->armed = 0;
+    return accepted;
+}
+
+/* window.class has no WMHI_GADGETDOWN result. Observe the original
+ * IDCMP_GADGETDOWN through its documented input hook; do not query
+ * WINDOW_InputEvent after GADGETUP (it is valid only for WMHI_RAWKEY).
+ * The hook records intent only. All model/layout work stays in the loop.
+ */
+typedef struct AccountOrderHookData {
+    AccountOrderClick *click;
+    const size_t *active_slot;
+    struct Gadget **left_button;
+    struct Gadget **right_button;
+} AccountOrderHookData;
+
+static int account_order_button_contains(const struct Gadget *gadget,
+                                          LONG mouse_x, LONG mouse_y)
+{
+    LONG x, y;
+    if (!gadget || gadget->Width <= 0 || gadget->Height <= 0) return 0;
+    x = mouse_x - (LONG)gadget->LeftEdge;
+    y = mouse_y - (LONG)gadget->TopEdge;
+    return x >= 0L && y >= 0L && x < (LONG)gadget->Width &&
+           y < (LONG)gadget->Height;
+}
+
+static ULONG account_order_idcmp_subentry(struct Hook *hook, APTR object,
+                                           APTR message_pointer)
+{
+    AccountOrderHookData *data =
+        hook ? (AccountOrderHookData *)hook->h_Data : NULL;
+    const struct IntuiMessage *message =
+        (const struct IntuiMessage *)message_pointer;
+    (void)object;
+    if (!data || !data->click || !data->active_slot || !message) return 0UL;
+    if (message->Class == IDCMP_GADGETDOWN) {
+        const struct Gadget *gadget =
+            (const struct Gadget *)message->IAddress;
+        ULONG gadget_id = gadget ? (ULONG)gadget->GadgetID : 0UL;
+        /* A layout may be the IAddress sender rather than its active child.
+         * In that case use the recorded mouse-down position and the two live
+         * button domains. Do not use the later/current mouse position. */
+        if (gadget_id != GID_ACCOUNT_MOVE_LEFT &&
+            gadget_id != GID_ACCOUNT_MOVE_RIGHT) {
+            if (data->left_button && account_order_button_contains(
+                    *data->left_button, message->MouseX, message->MouseY))
+                gadget_id = GID_ACCOUNT_MOVE_LEFT;
+            else if (data->right_button && account_order_button_contains(
+                    *data->right_button, message->MouseX, message->MouseY))
+                gadget_id = GID_ACCOUNT_MOVE_RIGHT;
+        }
+        account_order_click_begin(data->click, gadget_id, *data->active_slot);
+    } else if (message->Class == IDCMP_INACTIVEWINDOW) {
+        data->click->armed = 0;
+    }
+    return 0UL;
 }
 
 static int account_order_move_configured_slot(
@@ -922,6 +1093,9 @@ static int account_order_move_configured_slot(
     struct Window *window;
     struct Gadget *tabs_gadget, *add_account_gadget, *delete_account_gadget;
     struct Gadget *move_left_gadget, *move_right_gadget, *enabled_gadget;
+    AccountOrderClick order_click = {0UL, 0U, 0};
+    AccountOrderHookData order_hook_data;
+    struct Hook order_hook;
     struct Gadget *account_name_gadget, *name_gadget, *email_gadget;
     struct Gadget *imap_host_gadget, *imap_port_gadget;
     struct Gadget *imap_starttls_gadget;
@@ -1056,6 +1230,16 @@ static int account_order_move_configured_slot(
         hint_gap = ((ULONG)gui->screen->Font->ta_YSize + 1UL) / 2UL;
     if (hint_gap < 2UL) hint_gap = 2UL;
 
+    memset(&order_hook, 0, sizeof(order_hook));
+    order_hook_data.click = &order_click;
+    order_hook_data.active_slot = &active_tab;
+    order_hook_data.left_button = &move_left_gadget;
+    order_hook_data.right_button = &move_right_gadget;
+    order_hook.h_Entry = (__typeof__(order_hook.h_Entry))HookEntry;
+    order_hook.h_SubEntry =
+        (__typeof__(order_hook.h_SubEntry))account_order_idcmp_subentry;
+    order_hook.h_Data = &order_hook_data;
+
     dialog = WindowObject,
         WA_Title, T(MSG_AMIMAIL_ACCOUNT_SETTINGS, "AmiMail - Account settings"),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
@@ -1064,7 +1248,10 @@ static int account_order_move_configured_slot(
         WA_Width, account_width,
         WA_MinWidth, 440,
         WA_MaxWidth, 8192,
-        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
+        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETDOWN |
+                      IDCMP_GADGETUP | IDCMP_RAWKEY | IDCMP_INACTIVEWINDOW,
+        WINDOW_IDCMPHook, (ULONG)(uintptr_t)&order_hook,
+        WINDOW_IDCMPHookBits, IDCMP_GADGETDOWN | IDCMP_INACTIVEWINDOW,
         WINDOW_ParentGroup,
             account_layout = VGroupObject,
             LAYOUT_SpaceOuter, TRUE,
@@ -1098,6 +1285,7 @@ static int account_order_move_configured_slot(
                     LAYOUT_AddChild,
                         move_left_gadget = (struct Gadget *)ButtonObject,
                             GA_ID, GID_ACCOUNT_MOVE_LEFT,
+                            GA_Immediate, TRUE,
                             GA_RelVerify, TRUE,
                             GA_Disabled, initial_selected == 0U ? TRUE : FALSE,
                             GA_Text, "<",
@@ -1108,6 +1296,7 @@ static int account_order_move_configured_slot(
                     LAYOUT_AddChild,
                         move_right_gadget = (struct Gadget *)ButtonObject,
                             GA_ID, GID_ACCOUNT_MOVE_RIGHT,
+                            GA_Immediate, TRUE,
                             GA_RelVerify, TRUE,
                             GA_Disabled,
                                 initial_selected + 1U >= account_tab_count
@@ -1665,9 +1854,13 @@ static int account_order_move_configured_slot(
             if (account_outer_width < required_width)
                 account_outer_width = required_width;
         }
+        /* This dialog has no sizing gadget. The main window's larger bottom
+         * border would add a blank strip BELOW Save/Cancel. Keep the measured
+         * layout and ordinary outer spacing; add only this screen's plain
+         * bottom border. The existing pre-open centering uses the new height. */
         account_outer_height = (LONG)account_limits.MinHeight +
             (LONG)gui->window->BorderTop +
-            (LONG)gui->window->BorderBottom;
+            (LONG)gui->screen->WBorBottom;
         if (account_outer_height < 1L) account_outer_height = 1L;
 
         if (account_outer_width > (LONG)gui->screen->Width)
@@ -1733,6 +1926,9 @@ static int account_order_move_configured_slot(
                         result = WMHI_GADGETUP | GID_ACCOUNT_SAVE;
 
                     case WMHI_GADGETUP:
+                        if ((result & WMHI_GADGETMASK) != GID_ACCOUNT_MOVE_LEFT &&
+                            (result & WMHI_GADGETMASK) != GID_ACCOUNT_MOVE_RIGHT)
+                            order_click.armed = 0;
                         if (account_string_id(result & WMHI_GADGETMASK) &&
                             requester_string_accept_code(input_code))
                             result = WMHI_GADGETUP | GID_ACCOUNT_SAVE;
@@ -1928,6 +2124,10 @@ static int account_order_move_configured_slot(
                                     (result & WMHI_GADGETMASK) ==
                                             GID_ACCOUNT_MOVE_LEFT
                                         ? -1 : 1;
+                                if (!account_order_click_take(
+                                        &order_click,
+                                        result & WMHI_GADGETMASK, active_tab))
+                                    break;
                                 if (account_page_collect(
                                         &page, &drafts[active_tab],
                                         sent_mailbox, drafts_mailbox,
@@ -1941,7 +2141,7 @@ static int account_order_move_configured_slot(
                                 if (account_order_move_configured_slot(
                                         draft_order, configured_slots,
                                         active_tab, direction)) {
-                                    if (account_config_rebuild_tabs(
+                                    if (!account_config_move_tabs(
                                             dialog, window, tabs_gadget,
                                             add_account_gadget,
                                             delete_account_gadget,
@@ -1951,11 +2151,16 @@ static int account_order_move_configured_slot(
                                             configured_slots, draft_order,
                                             account_tab_map,
                                             account_tab_labels, active_tab,
-                                            &account_tab_count) != AMG_OK)
+                                            account_tab_count))
+                                    {
+                                        (void)account_order_move_configured_slot(
+                                            draft_order, configured_slots,
+                                            active_tab, -direction);
                                         set_string(
                                             dialog_status, window,
-                                            T(MSG_NOT_ENOUGH_MEMORY,
-                                              "Not enough memory."));
+                                            T(MSG_ACCOUNT_DIALOG_COULD_NOT_BE_CREATED,
+                                              "Account dialog could not be created."));
+                                    }
                                     else
                                         set_string(
                                             dialog_status, window,
