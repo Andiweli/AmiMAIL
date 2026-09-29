@@ -1,4 +1,4 @@
-## version 9
+## version 12
 ## language english
 ## basename AmiMAIL
 ;
@@ -1153,7 +1153,7 @@ MSG_STAR_WAS_SET (442433919//)
 Star was set.
 ;
 MSG_SUBJECT (1230903796//)
-Subject: 
+Subject:\040
 ;
 MSG_SUBJECT_5C24 (879953894//)
 Subject
@@ -1638,3 +1638,72 @@ MSG_GRAPHIC_PLACEHOLDER_UTF8 (2100000064//)
 ;
 MSG_GRAPHIC_PLACEHOLDER_LOCAL (2100000065//)
 [Graphic]
+;
+MSG_HERALD_NOTIFICATIONS (2100000066//)
+Herald notifications
+;
+MSG_HERALD_TEST (2100000067//)
+?
+;
+MSG_HERALD_TEST_TEXT (2100000068//)
+Test notification - %s
+;
+MSG_HERALD_ONE_NEW_MESSAGE (2100000069//)
+1 new message - %s
+;
+MSG_HERALD_NEW_MESSAGES (2100000070//)
+%lu new messages - %s
+;
+MSG_HERALD_NOT_RUNNING (2100000071//)
+Herald is not running.
+;
+MSG_HERALD_TEST_QUEUED (2100000072//)
+Herald test queued...
+;
+MSG_HERALD_TEST_SENT (2100000073//)
+Herald accepted the test notification.
+;
+MSG_HERALD_TEST_FAILED (2100000074//)
+Herald could not accept the test notification.
+;
+MSG_HERALD_TEST_TIMEOUT (2100000075//)
+Herald did not reply; delivery is unknown.
+;
+MSG_HERALD_BUSY (2100000076//)
+Herald is still processing a previous request.
+;
+MSG_HERALD_UNAVAILABLE (2100000077//)
+Herald support is unavailable (rexxsyslib/timer).
+;
+MSG_HERALD_SUBJECT_LABEL (2100000078//)
+Subject:\040
+;
+MSG_HERALD_LATEST_SUBJECT_LABEL (2100000079//)
+Latest:\040
+;
+MSG_EMAIL_RETRIEVAL_LABEL (2100000080//)
+Email retrieval:
+;
+MSG_NOTIFICATIONS_LABEL (2100000081//)
+Notifications:
+;
+MSG_EXTERNAL_LABEL (2100000082//)
+External:
+;
+MSG_PERIODIC_FETCH (2100000083//)
+Periodic fetch
+;
+MSG_PERIODIC_INTERVAL_MINUTES (2100000084//)
+%lu min
+;
+MSG_IMAP_SOURCE_MESSAGE_MISSING (2100000085//)
+Message is no longer in the source folder. Reload the folder.
+;
+MSG_IMAP_MOVE_VERIFICATION_FAILED (2100000086//)
+Server accepted the move, but verification failed. Reload before retrying.
+;
+MSG_IMAP_MOVE_DEFERRED (2100000087//)
+Copied to destination; original only marked deleted (server lacks UIDPLUS).
+;
+MSG_IMAP_MOVE_SOURCE_REMAINS (2100000088//)
+Server kept the source message after the move. Reload before retrying.

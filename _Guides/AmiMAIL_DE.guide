@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_DE.guide
-@$VER: AmiMAIL_DE.guide 2.1.0 (26.09.2026)
+@$VER: AmiMAIL_DE.guide 2.2.0 (28.09.2026)
 
-@NODE MAIN "AmiMAIL 2.1.0 - Anleitung"
-AmiMAIL 2.1.0
+@NODE MAIN "AmiMAIL 2.2.0 - Anleitung"
+AmiMAIL 2.2.0
 Nativer IMAP/SMTP-Mailclient für AmigaOS 3.2+
 ReAction, IMAP, SMTP und AmiSSL
 
@@ -109,7 +109,29 @@ Wichtige Felder:
 - SMTP-Server, Port und gegebenenfalls eigene SMTP-Zugangsdaten.
 
 Serverdaten, Zugangsdaten, Systemordner, Abrufeinstellungen und
-Benachrichtigungston werden für jedes Konto getrennt gespeichert.
+Benachrichtigungen werden für jedes Konto getrennt gespeichert.
+
+Mail-Abruf und Benachrichtigungen
+--------------------------------
+Unter "Mail-Abruf:" stehen die Einstellungen für Start und Wiederholung.
+"Mail-Abruf beim Start" steuert nur den ersten Abruf. Die separate Checkbox
+"Periodischer Abruf" aktiviert wiederholte Posteingangsprüfungen des Kontos.
+Im Cycle-/Chooser-Feld rechts stehen 1, 2, 5, 10, 15 und 30 Minuten bereit.
+Es ist nur bei angehakter Checkbox aktiv. Beim Ausschalten bleibt das
+gewählte Intervall erhalten. "Speichern" übernimmt die Änderungen;
+"Abbrechen" lässt die gespeicherten Einstellungen unverändert.
+Bestehende Konfigurationen behalten das bisherige Fünf-Minuten-Intervall.
+
+Jedes aktive Konto verwendet sein eigenes Intervall, unabhängig von der
+Reihenfolge der Reiter. Eine Intervalländerung setzt die unveränderten
+anderen Konten nicht zurück. Eine belegte Verbindung oder ein modaler
+Dialog kann einen Abruf verzögern; verpasste Intervalle erzeugen keine
+Abrufserie. Deaktivierte Konten werden nicht periodisch geprüft. Der
+Abruf beim Start ist vom gewählten Intervall unabhängig.
+
+"Benachrichtigungen:" kennzeichnet die Toneinstellungen; "Extern:" die
+optionale Herald-Anbindung. "?" testet Herald, ohne Einstellungen zu ändern.
+Der Button ist genauso breit wie der "..."-Button für die Tondatei darüber.
 
 AmiMAIL kann SMTP mit denselben Zugangsdaten wie IMAP betreiben. Alternativ
 können getrennte SMTP-Zugangsdaten gespeichert werden.
@@ -198,12 +220,29 @@ Wähle eine Mail aus, um sie im unteren Vorschaubereich zu lesen. AmiMAIL
 unterstützt die üblichen IMAP-Aktionen wie Gelesen/Ungelesen, Verschieben
 und Löschen.
 
-Wenn der Server UID MOVE unterstützt, wird dieses verwendet. Bei älteren
-Servern werden sichere COPY-/DELETE-Varianten genutzt, ohne ein unsicheres
-mailbox-weites EXPUNGE auszuführen.
+Löschen verschiebt die ausgewählten Mails in den zugeordneten Papierkorb
+auf dem Server. Es entfernt sie nicht endgültig. Dafür ist die separate
+Funktion Papierkorb leeren vorgesehen. Verwendet der Anbieter einen anderen
+Ordnernamen, prüfe die Zuordnung der Systemordner.
+
+AmiMAIL fragt die Serverfähigkeiten nach der Anmeldung erneut ab und nutzt
+bevorzugt UID MOVE. Ohne MOVE wird kopiert und das Original als gelöscht
+markiert; mit UIDPLUS folgt ein gezieltes UID EXPUNGE. Vor und nach dem
+Verschieben wird die Quell-UID geprüft, statt jede OK-Antwort bereits als
+Beleg für eine entfernte Mail anzusehen.
+
+Fehlen MOVE und UIDPLUS, bleibt die Kopie im Papierkorb und das Original
+wird nur als gelöscht markiert. Eine Statusmeldung erklärt diese noch nicht
+abgeschlossene Entfernung. Ein mailbox-weites EXPUNGE wird beim Löschen
+einzelner Mails nie verwendet: Es könnte auch Mails entfernen, die ein
+anderer Client markiert hat. Nach einem fehlgeschlagenen oder unbestätigten
+Verschieben den Ordner vor einem erneuten Versuch neu laden.
 
 Antworten, Allen antworten und Weiterleiten stehen über die
-Antwort-Schaltfläche und ihren Auswahlbereich zur Verfügung.
+Antwort-Schaltfläche und ihren Auswahlbereich zur Verfügung. Ein Klick auf
+den Pfeil öffnet oder schließt das Menü erst beim Loslassen der Maustaste.
+Während des Schließklicks bleibt es sichtbar. Escape und ein Klick außerhalb
+schließen es weiterhin.
 
 
 @{"Zurück zum Inhalt" LINK MAIN}
@@ -257,6 +296,15 @@ Art (Anhang oder eingebettete Grafik) und kodierte Größe in der Originalmail.
 Zunächst sind nur normale Anhänge ausgewählt. Möglich sind einzelne Zeilen,
 "Alles auswählen", "Keine", "Nur Anhänge" oder "Nur Grafiken".
 "Auswahl speichern" fragt anschließend nach dem Zielordner.
+
+AmiMAIL merkt sich das letzte Verzeichnis, in dem mindestens ein Anhang
+erfolgreich gespeichert wurde. Es wird für alle Konten erneut angeboten,
+auch nach einem Neustart. Abbrechen vor der ersten gespeicherten Datei
+ändert die Vorgabe nicht. Ist das Verzeichnis nicht mehr verfügbar, wird
+stattdessen die normale Ordnerauswahl verwendet. Die Vorgabe steht in
+ENVARC:AmiMail/attachment-drawer.state. Kann diese Datei nicht geschrieben
+werden, bleibt der neue Ordner zunächst nur für die laufende Sitzung
+gemerkt; ein späterer erfolgreicher Export versucht die Speicherung erneut.
 
 Vorhandene Zieldateien werden niemals überschrieben. Bei Namensgleichheit
 wird eine Nummer angehängt. Jeder Export wird zunächst in eine private
@@ -400,6 +448,54 @@ Der aktuelle Inbox-Zustand wird während der Laufzeit über AmiMAILStatus im
 Environment bereitgestellt.
 
 
+Optionale Herald-Benachrichtigungen
+----------------------------------
+In den Konto-Einstellungen gibt es "Herald-Benachrichtigungen" und "?".
+Die Option wird pro Konto gespeichert und ist standardmäßig ausgeschaltet.
+"?" sendet eine eigene Testkarte mit dem gerade eingetragenen Kontonamen;
+der Test aktiviert die Option nicht und speichert keine Kontoeinstellungen.
+
+Herald muss bereits laufen. AmiMAIL installiert oder startet Herald nicht.
+Die Anbindung nutzt native RexxMsg-Nachrichten und rexxsyslib.library.
+RexxMast, ein ARexx-Skript und C:HeraldSend werden nicht benötigt. Ohne Herald
+werden automatische Meldungen still ausgelassen. Das Testergebnis erscheint
+im Statusfeld des Konfigurationsfensters, nicht in einem Requester.
+
+Aktivierte Konten melden neue Nachrichten-UIDs im Posteingang nach Aufbau
+der Vergleichsbasis. Das gilt auch für Hintergrundkonten und iconifiziertes
+AmiMAIL. Der erste Ungelesen-Bestand, ein UIDVALIDITY-Wechsel, das Öffnen
+einer vorhandenen Mail und das Neuladen anderer Ordner erzeugen keine Karte.
+
+Neumail-Karten zeigen immer einen Betreff. Bei einer neuen Nachricht stehen
+Kontoname und "Betreff:" auf der Karte. Bei mehreren erscheinen die Anzahl
+und unter "Neueste:" der Betreff der zuletzt eingetroffenen Nachricht.
+Dafür gibt es keine zusätzliche Option. Fehlt der Betreff, erscheint
+"(Kein Betreff)".
+
+Maßgeblich ist die höchste neue, nicht gelöschte UID dieses Posteingangs,
+nicht das Datum des Absenders oder die Reihenfolge der Serverantworten.
+AmiMAIL nutzt die bereits abgerufenen Kopfzeilen, ohne weitere Maildownloads.
+Der Betreff wird für die lokale Anzeige dekodiert und von Steuerzeichen
+bereinigt. Lange Kontonamen und Betreffzeilen werden passend zu Heralds
+160-Byte-Textgrenze gekürzt. Betreffzeilen sind damit außerhalb von AmiMAIL
+sichtbar.
+
+Jedes Konto hat eine eigene ID und Gruppe; Umsortieren der Tabs verändert
+die Zuordnung nicht. Eine neuere, noch nicht gesendete Meldung desselben
+Kontos ersetzt die wartende Meldung. Die Zahl ist kein Ungelesen-Gesamtstand.
+
+Herald-Karten verwenden normale Priorität und NOSOUND, auch beim Test.
+Der bisherige AmiMAIL-Hinweiston bleibt unabhängig einstellbar. Anzeigedauer,
+Gruppierung und "Nicht stören" steuert weiterhin Herald. Ein angenommener
+Test bestätigt den Befehl, garantiert aber bei solchen Einstellungen kein
+sichtbares Popup. Ein Klick auf die Karte aktiviert in diesem ersten Stand
+weder AmiMAIL noch ein anderes Konto.
+
+Der bisherige Fortschrittsbalken bleibt unverändert in AmiMAILs Statuszeile.
+Details zu Zeitlimits und zum Sonderfall eines von Herald beim Beenden
+zurückgehaltenen Nachrichtenpakets: docs/FIX_2.1.0_HERALD.md.
+Betreff/Intervalle: docs/FIX_2.1.0_HERALD_SUBJECT_INTERVALS.md.
+
 @{"Zurück zum Inhalt" LINK MAIN}
 @ENDNODE
 
@@ -453,7 +549,7 @@ Serverkonfiguration erleichtern einen Fehlerbericht erheblich.
 @ENDNODE
 
 @NODE ABOUT "Über / Copyright"
-AmiMAIL 2.1.0 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
+AmiMAIL 2.2.0 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 

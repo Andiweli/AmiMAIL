@@ -565,7 +565,8 @@ static int current_mailbox_is_drafts(const AmgGui *gui)
                  gui->labels[3U].server_mailbox_utf8));
 }
 
-static int suppress_next_reply_menu_click = 0;
+static Object *deferred_reply_popup;
+static AmgGui *deferred_reply_popup_owner;
 
 static void set_reply_menu_arrow(AmgGui *gui, int expanded)
 {
@@ -573,6 +574,28 @@ static void set_reply_menu_arrow(AmgGui *gui, int expanded)
     gui_set_reply_arrow_expanded(expanded);
     if (gui->window)
         RefreshGList(gui->reply_menu_gadget, gui->window, NULL, 1);
+}
+
+void gui_reply_popup_close(AmgGui *gui)
+{
+    Object *popup;
+    if (!gui || deferred_reply_popup_owner != gui) return;
+    popup = deferred_reply_popup;
+    deferred_reply_popup = NULL;
+    deferred_reply_popup_owner = NULL;
+    gui_reply_arrow_unwatch_release();
+    if (popup) DisposeObject(popup);
+    set_reply_menu_arrow(gui, 0);
+}
+
+void gui_reply_popup_finish_input(AmgGui *gui)
+{
+    /* Called only AFTER draining the main window's input. A verified arrow
+     * GADGETUP is consumed by handle_main_gadget first; a cancelled drag has
+     * no GADGETUP, but native GM_GOINACTIVE wakes this same GUI signal. */
+    if (deferred_reply_popup_owner == gui &&
+        gui_reply_arrow_was_released())
+        gui_reply_popup_close(gui);
 }
 
 static int main_pointer_over_reply_menu(const AmgGui *gui)
@@ -653,7 +676,7 @@ static void update_reply_button_mode(AmgGui *gui)
                      GA_Disabled, drafts ? TRUE : FALSE,
                      TAG_DONE);
     }
-    suppress_next_reply_menu_click = 0;
+    gui_reply_popup_close(gui);
     set_reply_menu_arrow(gui, 0);
 }
 
@@ -674,13 +697,16 @@ static int reply_action_popup(AmgGui *gui)
 {
     Object *popup;
     struct Window *window;
-    ULONG signal_mask = 0UL;
+    ULONG signal_mask = 0UL, main_signal = 0UL;
     LONG left, top, width, button_height, popup_height;
     int selection = 0;
     int done = 0;
     int inactive = 0;
-    char reply_all_label[96];
-    char forward_label[96];
+    /* The popup may outlive this call while the closing arrow is held.
+     * button.gadget retains GA_Text pointers; do not leave them on the stack.
+     * Only one Reply popup exists, and its labels change only before open. */
+    static char reply_all_label[96];
+    static char forward_label[96];
 
     if (!gui || !gui->window || !gui->reply_gadget ||
         !gui->reply_menu_gadget || current_mailbox_is_drafts(gui))
@@ -766,6 +792,9 @@ static int reply_action_popup(AmgGui *gui)
         return 0;
     }
 
+    GetAttr(WINDOW_SigMask, gui->window_object, &main_signal);
+    gui_reply_arrow_watch_release(FindTask(NULL), main_signal);
+
     while (!done) {
         ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
         if (signals & SIGBREAKF_CTRL_C) done = 1;
@@ -796,22 +825,21 @@ static int reply_action_popup(AmgGui *gui)
         }
     }
 
-    /* Clicking the arrow again first makes this borderless popup inactive.
-     * That click is still queued for the main window after we return. Detect
-     * that exact case and suppress only the queued arrow event, so the menu
-     * closes instead of immediately reopening. */
+    /* Activation of the main-window arrow happens on mouse-down. Transfer
+     * ownership, not visibility: leave the entire popup open until that
+     * button finishes. The normal main-window loop handles its GADGETUP.
+     * Recording GM_GOACTIVE also handles a very fast press/release or a drag
+     * away before this task gets scheduled again. */
     if (inactive && (gui->window->Flags & WFLG_WINDOWACTIVE) &&
-        main_pointer_over_reply_menu(gui))
-        suppress_next_reply_menu_click = 1;
+        (main_pointer_over_reply_menu(gui) || gui_reply_arrow_was_pressed())) {
+        deferred_reply_popup = popup;
+        deferred_reply_popup_owner = gui;
+        return 0;
+    }
 
+    gui_reply_arrow_unwatch_release();
     DisposeObject(popup);
-    /* If the popup was closed by pressing the arrow itself, keep the UP
-     * arrow through the complete pressed state.  The main-window GADGETUP
-     * is still queued and will switch it to DOWN only after the user releases
-     * the mouse button.  Other close paths (selection, Escape, click outside)
-     * can update the persistent state immediately. */
-    if (!suppress_next_reply_menu_click)
-        set_reply_menu_arrow(gui, 0);
+    set_reply_menu_arrow(gui, 0);
 
     /* A temporary activated popup deactivates the main window. Restore the
      * main window after a menu selection/keyboard close. If the popup became
@@ -1279,6 +1307,8 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
     ULONG *uids;
     size_t count, i, source_index;
     const char *source_label, *trash_label;
+    char source_copy[768], trash_copy[768];
+    AmgNetwork *network;
     char status_text[128];
     if (!gui) return;
     uids = selected_message_uids_alloc(gui, &count);
@@ -1294,10 +1324,6 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
     if (!amg_network_is_connected(gui->network)) {
         free(uids);
         status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
-        return;
-    }
-    if (!confirm_delete_dialog(gui)) {
-        free(uids);
         return;
     }
     source_index = label_index_for_mailbox(gui, gui->current_mailbox_utf8);
@@ -1316,10 +1342,17 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
         status_local(gui, T(MSG_THE_MESSAGE_IS_ALREADY_IN_TRASH, "The message is already in Trash."));
         return;
     }
+    snprintf(source_copy, sizeof(source_copy), "%s", source_label);
+    snprintf(trash_copy, sizeof(trash_copy), "%s", trash_label);
+    network = gui->network;
+    if (!confirm_delete_dialog(gui)) {
+        free(uids);
+        return;
+    }
     for (i = 0; i < count; ++i) {
         int result = amg_network_request(
-            gui->network, AMG_NET_DELETE, uids[i],
-            trash_label, source_label, error);
+            network, AMG_NET_DELETE, uids[i],
+            trash_copy, source_copy, error);
         if (result != AMG_OK) {
             free(uids);
             if (error && error->message[0]) status_utf8(gui, error->message);
@@ -1394,8 +1427,11 @@ void handle_network(AmgGui *gui)
             amg_network_event_clear(&event);
             continue;
         }
-        if (event.type == AMG_NET_CHECK_INBOX)
+        if (event.type == AMG_NET_CHECK_INBOX || event.type == AMG_NET_CONNECT ||
+            event.type == AMG_NET_RECONFIGURE) {
             gui->periodic_check_pending = 0;
+            gui->account_runtime[gui->active_account].periodic_check_pending = 0;
+        }
         if (event.type == AMG_NET_RECONFIGURE)
             gui->network_reconfigure_pending = 0;
 
@@ -1502,6 +1538,13 @@ void handle_network(AmgGui *gui)
                                 generation_changed);
                             if (notify_count > 0U)
                                 gui_notify_new_mail(gui);
+                            /* Herald reports genuinely new UIDs, not the
+                             * initial unread snapshot or UIDVALIDITY reset. */
+                            if (had_baseline && !generation_changed &&
+                                notify_count > 0U)
+                                gui_herald_new_mail(gui, gui->active_account,
+                                    (unsigned long)notify_count, event.payload,
+                                    event.payload_length, previous_uid);
                         }
                         if (unseen_parse_error >= 0)
                             gui_state_set_inbox_unseen(
@@ -1608,6 +1651,10 @@ void handle_network(AmgGui *gui)
                         if (notify_count > 0U) {
                             char message[128];
                             gui_notify_new_mail(gui);
+                            if (had_baseline && !generation_changed)
+                                gui_herald_new_mail(gui, gui->active_account,
+                                    (unsigned long)notify_count, event.payload,
+                                    event.payload_length, previous_uid);
                             amg_tr_snprintf(message, sizeof(message), MSG_PERIODIC_FETCH_VALUE_NEW_MAIL_S_IN_INBOX, "Periodic fetch: %lu new mail(s) in Inbox.", (unsigned long)notify_count);
                             status_local(gui, message);
                         } else {
@@ -1745,11 +1792,14 @@ void handle_network(AmgGui *gui)
                             : T(MSG_STAR_WAS_REMOVED, "Star was removed."));
                     break;
                 case AMG_NET_DELETE:
+                    if (!gui_transfer_mailbox_matches(gui, event.argument2))
+                        break;
                     if (!strcmp(gui->current_mailbox_utf8, "INBOX") &&
                         !message_is_seen(gui, event.uid))
                         gui_state_adjust_inbox_unseen(gui, -1L);
                     remove_message_uid(gui, event.uid);
-                    status_local(gui,
+                    if (event.message[0]) status_utf8(gui, event.message);
+                    else status_local(gui,
                                  T(MSG_MESSAGE_MOVED_TO_TRASH, "Message moved to Trash."));
                     break;
                 case AMG_NET_EMPTY_TRASH:
@@ -1823,7 +1873,10 @@ void handle_network(AmgGui *gui)
                     size_t target = label_index_for_server_mailbox(
                         gui, event.argument2);
                     const char *target_name = event.argument2;
-                    int was_unseen = !message_is_seen(gui, event.uid);
+                    int was_unseen;
+                    if (!gui_transfer_mailbox_matches(gui, event.argument1))
+                        break;
+                    was_unseen = !message_is_seen(gui, event.uid);
                     if (was_unseen) {
                         if (!strcmp(gui->current_mailbox_utf8, "INBOX"))
                             gui_state_adjust_inbox_unseen(gui, -1L);
@@ -1838,7 +1891,8 @@ void handle_network(AmgGui *gui)
                     amg_tr_snprintf(message, sizeof(message), MSG_MESSAGE_MOVED_TO_VALUE, "Message moved to %s.", target_name && *target_name
                                         ? target_name
                                         : T(MSG_DESTINATION_FOLDER, "destination folder"));
-                    status_local(gui, message);
+                    if (event.message[0]) status_utf8(gui, event.message);
+                    else status_local(gui, message);
                     break;
                 }
                 default:
@@ -1863,6 +1917,8 @@ void gui_process_background_network(AmgGui *gui, size_t account_index)
     runtime = &gui->account_runtime[account_index];
     account = &gui->account_set->accounts[account_index];
     while (amg_network_poll(network, &event) > 0) {
+        if (event.type == AMG_NET_CONNECT || event.type == AMG_NET_RECONFIGURE)
+            runtime->periodic_check_pending = 0;
         if (event.result == AMG_OK &&
             (event.type == AMG_NET_CONNECT ||
              event.type == AMG_NET_RECONFIGURE)) {
@@ -1936,6 +1992,11 @@ void gui_process_background_network(AmgGui *gui, size_t account_index)
                     gui_state_save_account_notification(gui, account_index);
                     if (notify_count > 0U)
                         gui_notify_new_mail_for_account(gui, account);
+                    if (had_baseline && !generation_changed &&
+                        notify_count > 0U)
+                        gui_herald_new_mail(gui, account_index,
+                            (unsigned long)notify_count, event.payload,
+                            event.payload_length, old_uid);
                 }
             }
         }
@@ -1943,7 +2004,7 @@ void gui_process_background_network(AmgGui *gui, size_t account_index)
     }
 }
 
-void periodic_fetch_mail(AmgGui *gui, AmgError *error)
+void periodic_fetch_mail(AmgGui *gui, unsigned long due_accounts, AmgError *error)
 {
     size_t index;
     if (!gui || !gui->account_set) return;
@@ -1953,7 +2014,8 @@ void periodic_fetch_mail(AmgGui *gui, AmgError *error)
         GuiAccountRuntime *runtime = &gui->account_runtime[index];
         int result = AMG_OK;
         char uid_validity[32];
-        if (!account->enabled || !account->periodic_fetch ||
+        if (!(due_accounts & (1UL << index)) ||
+            !account->enabled || !account->periodic_fetch ||
             account_is_locked(account) ||
             (index == gui->active_account
                 ? gui->periodic_check_pending
@@ -1988,11 +2050,10 @@ void periodic_fetch_mail(AmgGui *gui, AmgError *error)
                 uid_validity,
                 index == gui->active_account ? "periodic" : "background",
                 error);
-            if (result == AMG_OK) {
-                runtime->periodic_check_pending = 1;
-                if (index == gui->active_account)
-                    gui->periodic_check_pending = 1;
-            }
+        }
+        if (result == AMG_OK) {
+            runtime->periodic_check_pending = 1;
+            if (index == gui->active_account) gui->periodic_check_pending = 1;
         }
         if (result != AMG_OK && index == gui->active_account &&
             error && error->message[0])
@@ -2053,6 +2114,7 @@ void handle_main_shortcut(AmgGui *gui, char letter, AmgError *error)
 void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
                                AmgError *error)
 {
+    if (gadget_id != GID_REPLY_MENU) gui_reply_popup_close(gui);
     switch (gadget_id) {
         case GID_NEW_MAIL:
             if (focus_open_compose_window(gui)) break;
@@ -2112,14 +2174,9 @@ void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
             break;
         case GID_REPLY_MENU:
             if (focus_open_compose_window(gui)) break;
-            if (suppress_next_reply_menu_click) {
-                suppress_next_reply_menu_click = 0;
-                /* The queued GADGETUP that closes the already-open popup
-                 * lets button.gadget repaint its released state after the
-                 * popup has gone away.  Redraw our custom overlay once more
-                 * here, otherwise that final native repaint can erase the
-                 * down-arrow until the next refresh. */
-                set_reply_menu_arrow(gui, 0);
+            if (deferred_reply_popup_owner == gui) {
+                /* This is the RELEASE of the closing click, not a new open. */
+                gui_reply_popup_close(gui);
                 break;
             }
             if (!current_mailbox_is_drafts(gui)) {

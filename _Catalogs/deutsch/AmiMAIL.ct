@@ -1,4 +1,4 @@
-## version $VER: AmiMAIL.catalog 9.0 (26.09.2026)
+## version $VER: AmiMAIL.catalog 12.0 (28.09.2026)
 ## language deutsch
 ## codeset 0
 ;
@@ -1217,7 +1217,7 @@ MSG_STAR_WAS_SET
 Sternmarkierung wurde gesetzt.
 ;
 MSG_SUBJECT
-Betreff: 
+Betreff:\040
 ;
 MSG_SUBJECT_5C24
 Betreff
@@ -1727,3 +1727,72 @@ MSG_GRAPHIC_PLACEHOLDER_UTF8
 ; Local display path: use the system character encoding, not UTF-8.
 MSG_GRAPHIC_PLACEHOLDER_LOCAL
 [Grafik]
+;
+MSG_HERALD_NOTIFICATIONS
+Herald-Benachrichtigungen
+;
+MSG_HERALD_TEST
+?
+;
+MSG_HERALD_TEST_TEXT
+Testbenachrichtigung - %s
+;
+MSG_HERALD_ONE_NEW_MESSAGE
+1 neue Nachricht - %s
+;
+MSG_HERALD_NEW_MESSAGES
+%lu neue Nachrichten - %s
+;
+MSG_HERALD_NOT_RUNNING
+Herald ist nicht gestartet.
+;
+MSG_HERALD_TEST_QUEUED
+Herald-Test wird gesendet...
+;
+MSG_HERALD_TEST_SENT
+Herald hat die Testbenachrichtigung angenommen.
+;
+MSG_HERALD_TEST_FAILED
+Herald konnte die Testbenachrichtigung nicht annehmen.
+;
+MSG_HERALD_TEST_TIMEOUT
+Herald antwortet nicht; Zustellung unklar.
+;
+MSG_HERALD_BUSY
+Herald bearbeitet noch eine vorherige Anfrage.
+;
+MSG_HERALD_UNAVAILABLE
+Herald-Anbindung nicht verf\374gbar (rexxsyslib/timer).
+;
+MSG_HERALD_SUBJECT_LABEL
+Betreff:\040
+;
+MSG_HERALD_LATEST_SUBJECT_LABEL
+Neueste:\040
+;
+MSG_EMAIL_RETRIEVAL_LABEL
+Mail-Abruf:
+;
+MSG_NOTIFICATIONS_LABEL
+Benachrichtigungen:
+;
+MSG_EXTERNAL_LABEL
+Extern:
+;
+MSG_PERIODIC_FETCH
+Periodischer Abruf
+;
+MSG_PERIODIC_INTERVAL_MINUTES
+%lu Min
+;
+MSG_IMAP_SOURCE_MESSAGE_MISSING
+Nachricht ist nicht mehr im Quellordner. Ordner neu laden.
+;
+MSG_IMAP_MOVE_VERIFICATION_FAILED
+Server hat das Verschieben angenommen, aber die Kontrolle schlug fehl. Vor erneutem Versuch neu laden.
+;
+MSG_IMAP_MOVE_DEFERRED
+In Zielordner kopiert; Original nur als gel\303\266scht markiert (Server ohne UIDPLUS).
+;
+MSG_IMAP_MOVE_SOURCE_REMAINS
+Server hat die Quellnachricht nach dem Verschieben behalten. Vor erneutem Versuch neu laden.

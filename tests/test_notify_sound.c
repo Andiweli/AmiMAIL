@@ -240,7 +240,7 @@ Object *test_NewDTObjectA(APTR path, const struct TagItem *tags)
     sound_object.live = 1;
     return &sound_object;
 }
-struct DTMethod *test_GetDTTriggerMethods(Object *object)
+struct DTMethods *test_GetDTTriggerMethods(Object *object)
 {
     static struct DTMethod playable[] = {
         {"Play", "PLAY", STM_PLAY}, {NULL, NULL, 0UL}
@@ -248,8 +248,9 @@ struct DTMethod *test_GetDTTriggerMethods(Object *object)
     static struct DTMethod empty[] = {{NULL, NULL, 0UL}};
     assert(current_task == &child_task && object == &sound_object);
     if (fail_step == FAIL_METHODS_NULL) return NULL;
-    if (fail_step == FAIL_NOT_PLAYABLE) return empty;
-    return playable;
+    if (fail_step == FAIL_NOT_PLAYABLE)
+        return (struct DTMethods *)empty;
+    return (struct DTMethods *)playable;
 }
 ULONG test_DoDTMethodA(Object *obj, void *window, void *requester, Msg msg)
 {

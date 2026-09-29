@@ -1,4 +1,5 @@
 #include "gui_internal.h"
+#include "gui_icons.h"
 #include "contacts.h"
 #include "i18n.h"
 
@@ -11,12 +12,14 @@
 #include <clib/alib_protos.h>
 #include <classes/window.h>
 #include <dos/dos.h>
+#include <devices/inputevent.h>
 #include <exec/lists.h>
 #include <gadgets/button.h>
 #include <gadgets/layout.h>
 #include <gadgets/listbrowser.h>
 #include <gadgets/string.h>
 #include <intuition/classes.h>
+#include <intuition/gadgetclass.h>
 #include <intuition/intuition.h>
 #include <libraries/asl.h>
 #include <proto/asl.h>
@@ -28,6 +31,7 @@
 #include <proto/layout.h>
 #include <proto/listbrowser.h>
 #include <proto/string.h>
+#include <proto/utility.h>
 #include <proto/window.h>
 #include <reaction/reaction.h>
 #include <reaction/reaction_macros.h>
@@ -86,28 +90,308 @@ static int local_to_utf8_contact(const char *local, char *utf8,
     return AMG_OK;
 }
 
+enum ContactColumn {
+    CONTACT_COLUMN_FIRST = 0,
+    CONTACT_COLUMN_LAST = 1,
+    CONTACT_COLUMN_EMAIL = 2,
+    CONTACT_COLUMN_COUNT = 3,
+    CONTACT_SORT_COLUMN_COUNT = 2
+};
+
+/* Private release codes of our contact-list subclass. Ordinary ListBrowser
+ * releases are normalized to zero; the application uses SelectedNode and
+ * RelEvent, not the native row number in IntuiMessage.Code. This keeps each
+ * completed title click in its own IDCMP message, even during rapid clicks. */
+#define CONTACT_SORT_FIRST_CODE 0x7f10U
+#define CONTACT_SORT_LAST_CODE  0x7f11U
+
+typedef struct ContactListView ContactListView;
+
+typedef struct ContactColumnRender {
+    ContactListView *view;
+    ULONG column;
+} ContactColumnRender;
+
+struct ContactListView {
+    Class *list_class;
+    struct Window *window;
+    struct Gadget *gadget;
+    struct ColumnInfo *columns;
+    struct List *list;
+    ULONG sort_column;
+    ULONG sort_direction;
+    LONG cell_left[CONTACT_COLUMN_COUNT];
+    LONG cell_right[CONTACT_COLUMN_COUNT];
+    LONG body_top;
+    ULONG bounds_valid;
+    UWORD font_height;
+    WORD geometry_left, geometry_top, geometry_width, geometry_height;
+    int header_active;
+    int native_active;
+    LONG pressed_column;
+    ContactColumnRender render_data[CONTACT_COLUMN_COUNT];
+};
+
+static void init_contact_list_view(ContactListView *view)
+{
+    memset(view, 0, sizeof(*view));
+    view->sort_column = CONTACT_COLUMN_FIRST;
+    view->sort_direction = LBMSORT_FORWARD;
+    view->pressed_column = -1L;
+}
+
 static struct ColumnInfo *contacts_columns(void)
 {
-    return AllocLBColumnInfo(
-        3,
-        LBCIA_Column, 0,
-        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_FIRST_NAME, "First name"),
-        LBCIA_Weight, 30,
-        LBCIA_AutoSort, TRUE,
-        LBCIA_SortArrow, TRUE,
-        LBCIA_DraggableSeparator, TRUE,
-        LBCIA_Column, 1,
-        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_LAST_NAME, "Last name"),
-        LBCIA_Weight, 30,
-        LBCIA_AutoSort, TRUE,
-        LBCIA_SortArrow, TRUE,
-        LBCIA_SortDirection, LBMSORT_FORWARD,
-        LBCIA_DraggableSeparator, TRUE,
-        LBCIA_Column, 2,
-        LBCIA_Title, (ULONG)(uintptr_t)T(MSG_EMAIL_ADDRESS, "Email address"),
-        LBCIA_Weight, 40,
-        LBCIA_DraggableSeparator, TRUE,
-        TAG_DONE);
+    /* There is deliberately NO native sortable column. Merely keeping
+     * SortArrow/AutoSort off while enabling Sortable still allowed a native
+     * first-column triangle on the reported classic ListBrowser. Title
+     * presses are handled by the small subclass below, independently of
+     * this flag. All text, frames, fonts and separators remain native.
+     * Use real TagItems instead of adding another varargs/macro dependency. */
+    struct TagItem tags[] = {
+        { LBCIA_Column, CONTACT_COLUMN_FIRST },
+        { LBCIA_Title, (ULONG)(uintptr_t)T(MSG_FIRST_NAME, "First name") },
+        { LBCIA_Weight, 30UL },
+        { LBCIA_Sortable, FALSE },
+        { LBCIA_AutoSort, FALSE },
+        { LBCIA_SortArrow, FALSE },
+        { LBCIA_DraggableSeparator, TRUE },
+        { LBCIA_Column, CONTACT_COLUMN_LAST },
+        { LBCIA_Title, (ULONG)(uintptr_t)T(MSG_LAST_NAME, "Last name") },
+        { LBCIA_Weight, 30UL },
+        { LBCIA_Sortable, FALSE },
+        { LBCIA_AutoSort, FALSE },
+        { LBCIA_SortArrow, FALSE },
+        { LBCIA_DraggableSeparator, TRUE },
+        { LBCIA_Column, CONTACT_COLUMN_EMAIL },
+        { LBCIA_Title, (ULONG)(uintptr_t)T(MSG_EMAIL_ADDRESS, "Email address") },
+        { LBCIA_Weight, 40UL },
+        { LBCIA_Sortable, FALSE },
+        { LBCIA_AutoSort, FALSE },
+        { LBCIA_SortArrow, FALSE },
+        { LBCIA_DraggableSeparator, TRUE },
+        { TAG_DONE, 0UL }
+    };
+    return AllocLBColumnInfoA(CONTACT_COLUMN_COUNT, tags);
+}
+
+static void reset_contact_bounds(ContactListView *view,
+                                  const struct Gadget *gadget)
+{
+    view->bounds_valid = 0UL;
+    view->body_top = 0x7fffffffL;
+    view->geometry_left = gadget->LeftEdge;
+    view->geometry_top = gadget->TopEdge;
+    view->geometry_width = gadget->Width;
+    view->geometry_height = gadget->Height;
+}
+
+static int contact_geometry_matches(const ContactListView *view,
+                                     const struct Gadget *gadget)
+{
+    return view->geometry_left == gadget->LeftEdge &&
+           view->geometry_top == gadget->TopEdge &&
+           view->geometry_width == gadget->Width &&
+           view->geometry_height == gadget->Height;
+}
+
+/* A cell's bounds come from the original native row render callback. They
+ * include the real column widths after separator dragging, not estimated
+ * percentages. Keep the separator hit area itself with ListBrowser. */
+static LONG contact_header_column(const ContactListView *view,
+                                   const struct Gadget *gadget,
+                                   LONG mouse_x, LONG mouse_y)
+{
+    LONG x, y;
+    ULONG column;
+    if (!view || !gadget || (gadget->Flags & GFLG_DISABLED) ||
+        !view->bounds_valid || !contact_geometry_matches(view, gadget))
+        return -1L;
+    x = (LONG)gadget->LeftEdge + mouse_x;
+    y = (LONG)gadget->TopEdge + mouse_y;
+    if (mouse_x < 1L || mouse_x >= (LONG)gadget->Width - 1L ||
+        mouse_y < 1L || !view->font_height ||
+        mouse_y > (LONG)view->font_height + 3L || y >= view->body_top)
+        return -1L;
+    for (column = 0UL; column < CONTACT_COLUMN_COUNT; ++column) {
+        if (!(view->bounds_valid & (1UL << column))) continue;
+        /* The native content rectangle is inset from the separator. Leave
+         * its last two pixels alone as well, to favour native resizing. */
+        if (x >= view->cell_left[column] &&
+            x <= view->cell_right[column] - 2L)
+            return (LONG)column;
+    }
+    return -1L;
+}
+
+static void draw_contact_sort_icon(const ContactListView *view,
+                                    struct Gadget *gadget,
+                                    struct RastPort *rp,
+                                    const struct DrawInfo *draw_info)
+{
+    ULONG column;
+    LONG left, right, top, pen;
+    if (!view || !gadget || !rp || !contact_geometry_matches(view, gadget))
+        return;
+    column = view->sort_column;
+    if (column >= CONTACT_SORT_COLUMN_COUNT || view->font_height < 4U ||
+        !(view->bounds_valid & (1UL << column)))
+        return;
+    left = view->cell_left[column];
+    right = view->cell_right[column];
+    if (left < (LONG)gadget->LeftEdge + 1L ||
+        right >= (LONG)gadget->LeftEdge + (LONG)gadget->Width - 1L ||
+        right - left + 1L < 12L)
+        return;
+    top = (LONG)gadget->TopEdge + 2L +
+          ((LONG)view->font_height - 4L) / 2L;
+    if (top + 3L >= view->body_top) return;
+    pen = draw_info ? (LONG)draw_info->dri_Pens[TEXTPEN]
+                    : (LONG)rp->FgPen;
+    /* Only the existing 5x4 mask is drawn. Never repaint any title text,
+     * background, bevel or separator, and never change the RastPort font. */
+    gui_draw_sort_icon(rp, right - 8L, top,
+                       view->sort_direction == LBMSORT_REVERSE, pen);
+}
+
+static void contact_icon_after_input(ContactListView *view, Object *object,
+                                      struct GadgetInfo *ginfo)
+{
+    struct RastPort *rp;
+    if (!ginfo) return;
+    rp = ObtainGIRPort(ginfo);
+    if (!rp) return;
+    draw_contact_sort_icon(view, (struct Gadget *)object, rp,
+                           ginfo->gi_DrInfo);
+    ReleaseGIRPort(rp);
+}
+
+/* Keep the original ListBrowser implementation for rendering, layout,
+ * scrolling, selection and separator dragging. Only mouse activation within
+ * the two name headings is ours. In particular, disabling CIF_SORTABLE must
+ * NOT again make the headings unclickable: GM_HITTEST/GOACTIVE/HANDLEINPUT
+ * implement those clicks without asking the native sorter to do anything.
+ * No sorting, allocation, waiting or window operations occur in this hook. */
+static ULONG contact_list_dispatcher(struct Hook *hook, APTR object_ptr,
+                                      APTR message_ptr)
+{
+    Class *cl = hook ? (Class *)hook->h_Data : NULL;
+    ContactListView *view = cl
+        ? (ContactListView *)(uintptr_t)cl->cl_UserData : NULL;
+    Object *object = (Object *)object_ptr;
+    Msg message = (Msg)message_ptr;
+    ULONG result;
+    if (!cl || !view || !message) return 0UL;
+
+    if (message->MethodID == GM_HITTEST) {
+        struct gpHitTest *hit = (struct gpHitTest *)message_ptr;
+        LONG column = contact_header_column(view, (struct Gadget *)object,
+                                             hit->gpht_Mouse.X,
+                                             hit->gpht_Mouse.Y);
+        if (column >= 0L && column < CONTACT_SORT_COLUMN_COUNT)
+            return GMR_GADGETHIT;
+    } else if (message->MethodID == GM_GOACTIVE ||
+               message->MethodID == GM_HANDLEINPUT) {
+        struct gpInput *input = (struct gpInput *)message_ptr;
+        struct InputEvent *event = input->gpi_IEvent;
+        if (!view->header_active && event &&
+            event->ie_Class == IECLASS_RAWMOUSE &&
+            event->ie_Code == SELECTDOWN) {
+            LONG column = contact_header_column(view,
+                (struct Gadget *)object, input->gpi_Mouse.X,
+                input->gpi_Mouse.Y);
+            if (column >= 0L && column < CONTACT_SORT_COLUMN_COUNT) {
+                if (message->MethodID == GM_HANDLEINPUT &&
+                    view->native_active) {
+                    struct gpGoInactive inactive;
+                    memset(&inactive, 0, sizeof(inactive));
+                    inactive.MethodID = GM_GOINACTIVE;
+                    inactive.gpgi_GInfo = input->gpi_GInfo;
+                    (void)DoSuperMethodA(cl, object, (Msg)&inactive);
+                    view->native_active = 0;
+                }
+                view->header_active = 1;
+                view->pressed_column = column;
+                return GMR_MEACTIVE;
+            }
+            if (column == CONTACT_COLUMN_EMAIL)
+                return GMR_NOREUSE;
+        }
+        if (view->header_active) {
+            if (event && event->ie_Class == IECLASS_RAWMOUSE) {
+                if (event->ie_Code == SELECTUP) {
+                    LONG column = contact_header_column(view,
+                        (struct Gadget *)object, input->gpi_Mouse.X,
+                        input->gpi_Mouse.Y);
+                    if (column == view->pressed_column && column >= 0L &&
+                        column < CONTACT_SORT_COLUMN_COUNT &&
+                        input->gpi_Termination) {
+                        *input->gpi_Termination = column == CONTACT_COLUMN_FIRST
+                            ? CONTACT_SORT_FIRST_CODE : CONTACT_SORT_LAST_CODE;
+                        return GMR_NOREUSE | GMR_VERIFY;
+                    }
+                    return GMR_NOREUSE;
+                }
+                if (event->ie_Code == MENUDOWN)
+                    return GMR_REUSE;
+            } else if (event && event->ie_Class == IECLASS_RAWKEY &&
+                       event->ie_Code == 0x45U) {
+                return GMR_NOREUSE; /* Escape cancels a held title click. */
+            }
+            return GMR_MEACTIVE;
+        }
+        result = DoSuperMethodA(cl, object, message);
+        view->native_active = (result == GMR_MEACTIVE);
+        if ((result & GMR_VERIFY) && input->gpi_Termination)
+            *input->gpi_Termination = 0L;
+        contact_icon_after_input(view, object, input->gpi_GInfo);
+        return result;
+    } else if (message->MethodID == GM_GOINACTIVE) {
+        if (view->header_active) {
+            view->header_active = 0;
+            view->pressed_column = -1L;
+            return 0UL; /* Superclass was not activated for this title press. */
+        }
+        view->native_active = 0;
+        result = DoSuperMethodA(cl, object, message);
+        contact_icon_after_input(view, object,
+            ((struct gpGoInactive *)message_ptr)->gpgi_GInfo);
+        return result;
+    } else if (message->MethodID == GM_RENDER) {
+        struct gpRender *render = (struct gpRender *)message_ptr;
+        struct Gadget *gadget = (struct Gadget *)object;
+        view->gadget = gadget;
+        if (render->gpr_Redraw == GREDRAW_REDRAW ||
+            !contact_geometry_matches(view, gadget))
+            reset_contact_bounds(view, gadget);
+        result = DoSuperMethodA(cl, object, message);
+        draw_contact_sort_icon(view, gadget, render->gpr_RPort,
+            render->gpr_GInfo ? render->gpr_GInfo->gi_DrInfo : NULL);
+        return result;
+    }
+    return DoSuperMethodA(cl, object, message);
+}
+
+static int open_contact_list_class(ContactListView *view)
+{
+    Class *cl = MakeClass(NULL, NULL, LISTBROWSER_GetClass(), 0UL, 0UL);
+    if (!cl) return 0;
+    cl->cl_Dispatcher.h_Entry =
+        (__typeof__(cl->cl_Dispatcher.h_Entry))HookEntry;
+    cl->cl_Dispatcher.h_SubEntry =
+        (__typeof__(cl->cl_Dispatcher.h_SubEntry))contact_list_dispatcher;
+    cl->cl_Dispatcher.h_Data = cl;
+    cl->cl_UserData = (ULONG)(uintptr_t)view;
+    view->list_class = cl;
+    return 1;
+}
+
+static void close_contact_list_class(ContactListView *view)
+{
+    if (view->list_class) {
+        (void)FreeClass(view->list_class);
+        view->list_class = NULL;
+    }
 }
 
 static ULONG contact_text_render_subentry(struct Hook *hook,
@@ -126,7 +410,22 @@ static ULONG contact_text_render_subentry(struct Hook *hook,
     rp = draw->lbdm_RastPort;
     if (!rp) return LBCB_OK;
 
-    column = (ULONG)(uintptr_t)hook->h_Data;
+    {
+        ContactColumnRender *context = (ContactColumnRender *)hook->h_Data;
+        ContactListView *view;
+        if (!context || context->column >= CONTACT_COLUMN_COUNT)
+            return LBCB_UNKNOWN;
+        column = context->column;
+        view = context->view;
+        if (view) {
+            view->cell_left[column] = draw->lbdm_Bounds.MinX;
+            view->cell_right[column] = draw->lbdm_Bounds.MaxX;
+            view->bounds_valid |= 1UL << column;
+            view->font_height = rp->TxHeight;
+            if ((LONG)draw->lbdm_Bounds.MinY < view->body_top)
+                view->body_top = draw->lbdm_Bounds.MinY;
+        }
+    }
     GetListBrowserNodeAttrs(
         node,
         LBNA_Column, column,
@@ -154,17 +453,150 @@ static ULONG contact_text_render_subentry(struct Hook *hook,
     return LBCB_OK;
 }
 
-static void init_contact_render_hooks(struct Hook hooks[3])
+static void init_contact_render_hooks(struct Hook hooks[3],
+                                       ContactListView *view)
 {
     ULONG i;
-    if (!hooks) return;
+    if (!hooks || !view) return;
     for (i = 0UL; i < 3UL; ++i) {
         memset(&hooks[i], 0, sizeof(hooks[i]));
         hooks[i].h_Entry = (__typeof__(hooks[i].h_Entry))HookEntry;
         hooks[i].h_SubEntry =
             (__typeof__(hooks[i].h_SubEntry))contact_text_render_subentry;
-        hooks[i].h_Data = (APTR)(uintptr_t)i;
+        view->render_data[i].view = view;
+        view->render_data[i].column = i;
+        hooks[i].h_Data = &view->render_data[i];
     }
+}
+
+static LONG compare_contact_nodes(struct Node *left, struct Node *right,
+                                   ULONG column, ULONG direction)
+{
+    STRPTR left_text = NULL, right_text = NULL;
+    LONG comparison;
+    /* Match ListBrowser's priority-first, case-insensitive text ordering.
+     * Do not compare email addresses as a hidden secondary sort key. */
+    if (left->ln_Pri != right->ln_Pri)
+        return left->ln_Pri > right->ln_Pri ? -1L : 1L;
+    GetListBrowserNodeAttrs(left,
+        LBNA_Column, column,
+        LBNCA_Text, (ULONG)(uintptr_t)&left_text,
+        TAG_DONE);
+    GetListBrowserNodeAttrs(right,
+        LBNA_Column, column,
+        LBNCA_Text, (ULONG)(uintptr_t)&right_text,
+        TAG_DONE);
+    comparison = Stricmp((CONST_STRPTR)(left_text ? left_text : (STRPTR)""),
+                          (CONST_STRPTR)(right_text ? right_text : (STRPTR)""));
+    /* Normalize before reversing, so LONG_MIN cannot overflow. */
+    comparison = comparison < 0L ? -1L : (comparison > 0L ? 1L : 0L);
+    return direction == LBMSORT_REVERSE ? -comparison : comparison;
+}
+
+static void sort_contact_nodes(struct List *list, ULONG column,
+                                ULONG direction)
+{
+    size_t run_length = 1U;
+    if (!list || column >= CONTACT_SORT_COLUMN_COUNT) return;
+
+    /* Stable, iterative merge sort: no allocation, no recursion and no
+     * quadratic scan on large address books. Only relink existing nodes;
+     * their IDs, text, render hooks and multi-selection flags stay intact.
+     * The caller MUST detach the list from its gadget first. */
+    for (;;) {
+        struct List sorted;
+        struct Node *left, *right, *node;
+        size_t merges = 0U;
+        NewList(&sorted);
+        left = list->lh_Head;
+        while (left && left->ln_Succ) {
+            size_t left_count = 0U, right_count = run_length;
+            ++merges;
+            right = left;
+            while (left_count < run_length && right && right->ln_Succ) {
+                ++left_count;
+                right = right->ln_Succ;
+            }
+            while (left_count || (right_count && right && right->ln_Succ)) {
+                if (!left_count) {
+                    node = right;
+                    right = right->ln_Succ;
+                    --right_count;
+                } else if (!right_count || !right || !right->ln_Succ ||
+                           compare_contact_nodes(left, right, column,
+                                                 direction) <= 0L) {
+                    node = left;
+                    left = left->ln_Succ;
+                    --left_count;
+                } else {
+                    node = right;
+                    right = right->ln_Succ;
+                    --right_count;
+                }
+                Remove(node);
+                AddTail(&sorted, node);
+            }
+            left = right;
+        }
+        while ((node = RemHead(&sorted)) != NULL)
+            AddTail(list, node);
+        if (merges <= 1U) return;
+        run_length *= 2U;
+    }
+}
+
+static void sort_contact_column(ContactListView *view, ULONG column)
+{
+    ULONG top = 0UL, cursor_value = 0UL, cursor_index = (ULONG)~0UL;
+    ULONG index = 0UL;
+    struct Node *node;
+    if (!view || !view->window || !view->gadget || !view->list ||
+        column >= CONTACT_SORT_COLUMN_COUNT)
+        return;
+
+    /* Repeat on the active heading: toggle A-Z/Z-A. Any change of heading
+     * starts at A-Z, never at the direction that column had previously. */
+    if (view->sort_column == column)
+        view->sort_direction = view->sort_direction == LBMSORT_REVERSE
+            ? LBMSORT_FORWARD : LBMSORT_REVERSE;
+    else
+        view->sort_direction = LBMSORT_FORWARD;
+    view->sort_column = column;
+    GetAttr(LISTBROWSER_Top, (Object *)view->gadget, &top);
+    GetAttr(LISTBROWSER_CursorNode, (Object *)view->gadget, &cursor_value);
+    SetGadgetAttrs(view->gadget, view->window, NULL,
+                   LISTBROWSER_Labels, (ULONG)~0UL, TAG_DONE);
+    sort_contact_nodes(view->list, column, view->sort_direction);
+    for (node = view->list->lh_Head; node && node->ln_Succ;
+         node = node->ln_Succ, ++index) {
+        if (node == (struct Node *)(uintptr_t)cursor_value)
+            cursor_index = index;
+    }
+    SetGadgetAttrs(view->gadget, view->window, NULL,
+                   LISTBROWSER_ColumnInfo, (ULONG)(uintptr_t)view->columns,
+                   LISTBROWSER_Labels, (ULONG)(uintptr_t)view->list,
+                   cursor_index != (ULONG)~0UL
+                       ? LISTBROWSER_CursorSelect : TAG_IGNORE, cursor_index,
+                   LISTBROWSER_Top, top,
+                   TAG_DONE);
+    RefreshGList(view->gadget, view->window, NULL, 1);
+}
+
+static int handle_contact_sort_event(ContactListView *view, UWORD code)
+{
+    ULONG release_event = LBRE_NORMAL;
+    if (code == CONTACT_SORT_FIRST_CODE || code == CONTACT_SORT_LAST_CODE) {
+        sort_contact_column(view, code == CONTACT_SORT_FIRST_CODE
+            ? CONTACT_COLUMN_FIRST : CONTACT_COLUMN_LAST);
+        return 1;
+    }
+    GetAttr(LISTBROWSER_RelEvent, (Object *)view->gadget, &release_event);
+    if (release_event == LBRE_COLUMNADJUST) {
+        RefreshGList(view->gadget, view->window, NULL, 1);
+        return 1;
+    }
+    /* Never treat a stray native title event as a contact double-click. */
+    return release_event == LBRE_TITLECLICK;
 }
 
 static struct Node *contact_node(const AmgContact *contact,
@@ -207,7 +639,8 @@ static void rebuild_contact_list(struct Gadget *gadget, struct Window *window,
                                  struct List *list,
                                  const AmgContactBook *book,
                                  int email_only,
-                                 struct Hook hooks[3], UWORD row_height)
+                                 struct Hook hooks[3], UWORD row_height,
+                                 ContactListView *view)
 {
     size_t i;
     struct Node *node;
@@ -232,15 +665,26 @@ static void rebuild_contact_list(struct Gadget *gadget, struct Window *window,
                 : T(MSG_NO_CONTACTS_AVAILABLE, "No contacts available.")),
             LBNCA_RenderHook, hooks ? (ULONG)(uintptr_t)&hooks[0] : 0UL,
             LBNCA_HookHeight, row_height ? row_height : 10U,
+            LBNA_Column, CONTACT_COLUMN_LAST,
+            LBNCA_Text, (ULONG)(uintptr_t)"",
+            LBNCA_RenderHook, hooks ? (ULONG)(uintptr_t)&hooks[1] : 0UL,
+            LBNCA_HookHeight, row_height ? row_height : 10U,
+            LBNA_Column, CONTACT_COLUMN_EMAIL,
+            LBNCA_Text, (ULONG)(uintptr_t)"",
+            LBNCA_RenderHook, hooks ? (ULONG)(uintptr_t)&hooks[2] : 0UL,
+            LBNCA_HookHeight, row_height ? row_height : 10U,
             TAG_DONE);
         if (node) AddTail(list, node);
     }
+    view->list = list;
+    sort_contact_nodes(list, view->sort_column, view->sort_direction);
     SetGadgetAttrs(gadget, window, NULL,
+                   LISTBROWSER_ColumnInfo, (ULONG)(uintptr_t)view->columns,
                    LISTBROWSER_Labels, (ULONG)(uintptr_t)list,
                    LISTBROWSER_Selected, (ULONG)~0UL,
                    LISTBROWSER_Top, 0,
-                   LISTBROWSER_SortColumn, 1,
                    TAG_DONE);
+    RefreshGList(gadget, window, NULL, 1);
 }
 
 static int selected_contact_id(struct Gadget *gadget, unsigned long *id)
@@ -637,7 +1081,8 @@ static void import_contacts(AmgGui *gui, struct Window *window,
                             struct Gadget *list_gadget, struct List *list,
                             struct Gadget *status_gadget,
                             AmgContactBook *book, AmgError *error,
-                            struct Hook hooks[3], UWORD row_height)
+                            struct Hook hooks[3], UWORD row_height,
+                             ContactListView *view)
 {
     char path[768];
     char message[256];
@@ -653,7 +1098,7 @@ static void import_contacts(AmgGui *gui, struct Window *window,
         amg_contacts_init(book);
         amg_contacts_load(AMG_CONTACTS_DEFAULT_PATH, book, NULL);
         rebuild_contact_list(list_gadget, window, list, book, 0,
-                             hooks, row_height);
+                             hooks, row_height, view);
         set_contact_status(status_gadget, window,
             T(MSG_CONTACTS_COULD_NOT_BE_IMPORTED, "Contacts could not be imported."));
         return;
@@ -664,13 +1109,13 @@ static void import_contacts(AmgGui *gui, struct Window *window,
         amg_contacts_init(book);
         amg_contacts_load(AMG_CONTACTS_DEFAULT_PATH, book, NULL);
         rebuild_contact_list(list_gadget, window, list, book, 0,
-                             hooks, row_height);
+                             hooks, row_height, view);
         set_contact_status(status_gadget, window,
             T(MSG_IMPORTED_CONTACTS_COULD_NOT_BE_SAVED, "Imported contacts could not be saved."));
         return;
     }
     rebuild_contact_list(list_gadget, window, list, book, 0,
-                             hooks, row_height);
+                             hooks, row_height, view);
     amg_tr_snprintf(message, sizeof(message), MSG_VALUE_IMPORTED_VALUE_DUPLICATES_VALUE_SKIPPED, "%lu imported, %lu duplicates, %lu skipped.", (unsigned long)imported.imported, (unsigned long)imported.duplicates, (unsigned long)imported.skipped);
     set_contact_status(status_gadget, window, message);
     (void)gui;
@@ -684,13 +1129,15 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
     struct ColumnInfo *columns;
     struct List list;
     struct Hook render_hooks[3];
+    ContactListView view;
     UWORD row_height;
     AmgContactBook book;
     ULONG signal_mask = 0UL;
     int done = 0;
 
     if (!gui || !gui->screen) return;
-    init_contact_render_hooks(render_hooks);
+    init_contact_list_view(&view);
+    init_contact_render_hooks(render_hooks, &view);
     row_height = gui->list_row_hook_height
         ? gui->list_row_hook_height
         : (gui->screen->RastPort.TxHeight
@@ -704,6 +1151,13 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
     NewList(&list);
     columns = contacts_columns();
     if (!columns) {
+        amg_contacts_free(&book);
+        return;
+    }
+    view.columns = columns;
+    view.list = &list;
+    if (!open_contact_list_class(&view)) {
+        FreeLBColumnInfo(columns);
         amg_contacts_free(&book);
         return;
     }
@@ -746,7 +1200,8 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
             EndObject,
             CHILD_WeightedHeight, 0,
             LAYOUT_AddChild,
-                list_gadget = (struct Gadget *)ListBrowserObject,
+                list_gadget = (struct Gadget *)NewObject(
+                    view.list_class, NULL,
                     GA_ID, GID_CONTACTS_LIST,
                     GA_RelVerify, TRUE,
                     LISTBROWSER_Labels, (ULONG)(uintptr_t)&list,
@@ -756,8 +1211,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                     LISTBROWSER_MultiSelect, TRUE,
                     LISTBROWSER_ShowSelected, TRUE,
                     LISTBROWSER_Spacing, 1,
-                    LISTBROWSER_SortColumn, 1,
-                EndObject,
+                    TAG_DONE),
             LAYOUT_AddChild,
                 status_gadget = (struct Gadget *)StringObject,
                     GA_ReadOnly, TRUE,
@@ -774,6 +1228,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
         EndObject,
     EndWindow;
     if (!dialog) {
+        close_contact_list_class(&view);
         FreeLBColumnInfo(columns);
         amg_contacts_free(&book);
         return;
@@ -781,21 +1236,25 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
     window = RA_OpenWindow(dialog);
     if (!window) {
         DisposeObject(dialog);
+        close_contact_list_class(&view);
         FreeLBColumnInfo(columns);
         amg_contacts_free(&book);
         return;
     }
+    view.window = window;
+    view.gadget = list_gadget;
     WindowToFront(window);
     ActivateWindow(window);
     rebuild_contact_list(list_gadget, window, &list, &book, 0,
-                         render_hooks, row_height);
+                         render_hooks, row_height, &view);
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
     while (!done) {
         ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
         if (signals & SIGBREAKF_CTRL_C) done = 1;
         if (signals & signal_mask) {
             ULONG input;
-            while ((input = RA_HandleInput(dialog, NULL)) != WMHI_LASTMSG) {
+            UWORD input_code = 0U;
+            while ((input = RA_HandleInput(dialog, &input_code)) != WMHI_LASTMSG) {
                 ULONG gid = input & WMHI_GADGETMASK;
                 switch (input & WMHI_CLASSMASK) {
                     case WMHI_CLOSEWINDOW:
@@ -811,7 +1270,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                             if (contact_editor(gui, &book, 0UL, error)) {
                                 rebuild_contact_list(list_gadget, window,
                                                      &list, &book, 0,
-                                                     render_hooks, row_height);
+                                                     render_hooks, row_height, &view);
                                 set_contact_status(status_gadget, window,
                                     T(MSG_CONTACT_SAVED, "Contact saved."));
                             }
@@ -820,6 +1279,8 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                             ULONG rel_event = LBRE_NORMAL;
                             unsigned long id = 0UL;
                             if (gid == GID_CONTACTS_LIST) {
+                                if (handle_contact_sort_event(&view, input_code))
+                                    break;
                                 GetAttr(LISTBROWSER_RelEvent,
                                         (Object *)list_gadget, &rel_event);
                                 if (rel_event == LBRE_TITLECLICK) break;
@@ -833,7 +1294,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                             if (contact_editor(gui, &book, id, error)) {
                                 rebuild_contact_list(list_gadget, window,
                                                      &list, &book, 0,
-                                                     render_hooks, row_height);
+                                                     render_hooks, row_height, &view);
                                 set_contact_status(status_gadget, window,
                                     T(MSG_CONTACT_SAVED, "Contact saved."));
                             }
@@ -883,7 +1344,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                                                       &book, error) == AMG_OK) {
                                     rebuild_contact_list(list_gadget, window,
                                                          &list, &book, 0,
-                                                         render_hooks, row_height);
+                                                         render_hooks, row_height, &view);
                                     if (selected_count == 1U) {
                                         snprintf(status_text,
                                                  sizeof(status_text), "%s",
@@ -902,7 +1363,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                                                       &book, NULL);
                                     rebuild_contact_list(list_gadget, window,
                                                          &list, &book, 0,
-                                                         render_hooks, row_height);
+                                                         render_hooks, row_height, &view);
                                     set_contact_status(status_gadget, window,
                                         T(MSG_CONTACTS_COULD_NOT_BE_DELETED, "Contacts could not be deleted."));
                                 }
@@ -911,7 +1372,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                         } else if (gid == GID_CONTACTS_IMPORT) {
                             import_contacts(gui, window, list_gadget, &list,
                                             status_gadget, &book, error,
-                                            render_hooks, row_height);
+                                            render_hooks, row_height, &view);
                         }
                         break;
                 }
@@ -921,6 +1382,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
     SetGadgetAttrs(list_gadget, window, NULL,
                    LISTBROWSER_Labels, (ULONG)~0UL, TAG_DONE);
     DisposeObject(dialog);
+    close_contact_list_class(&view);
     FreeListBrowserList(&list);
     FreeLBColumnInfo(columns);
     amg_contacts_free(&book);
@@ -1014,6 +1476,7 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
     struct ColumnInfo *columns;
     struct List list;
     struct Hook render_hooks[3];
+    ContactListView view;
     UWORD row_height;
     AmgContactBook book;
     ULONG signal_mask = 0UL;
@@ -1021,7 +1484,8 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
     char recipients[768];
 
     if (!gui || !parent || !target) return 0;
-    init_contact_render_hooks(render_hooks);
+    init_contact_list_view(&view);
+    init_contact_render_hooks(render_hooks, &view);
     row_height = gui->list_row_hook_height
         ? gui->list_row_hook_height
         : (gui->screen && gui->screen->RastPort.TxHeight
@@ -1032,6 +1496,13 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
     NewList(&list);
     columns = contacts_columns();
     if (!columns) { amg_contacts_free(&book); return 0; }
+    view.columns = columns;
+    view.list = &list;
+    if (!open_contact_list_class(&view)) {
+        FreeLBColumnInfo(columns);
+        amg_contacts_free(&book);
+        return 0;
+    }
     dialog = WindowObject,
         WA_Title, T(MSG_AMIMAIL_SELECT_CONTACTS, "AmiMail - Select contacts"),
         WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
@@ -1047,7 +1518,8 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
             LAYOUT_SpaceOuter, TRUE,
             LAYOUT_SpaceInner, TRUE,
             LAYOUT_AddChild,
-                list_gadget = (struct Gadget *)ListBrowserObject,
+                list_gadget = (struct Gadget *)NewObject(
+                    view.list_class, NULL,
                     GA_ID, GID_CONTACT_SELECT_LIST,
                     GA_RelVerify, TRUE,
                     LISTBROWSER_Labels, (ULONG)(uintptr_t)&list,
@@ -1057,8 +1529,7 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
                     LISTBROWSER_MultiSelect, TRUE,
                     LISTBROWSER_ShowSelected, TRUE,
                     LISTBROWSER_Spacing, 1,
-                    LISTBROWSER_SortColumn, 1,
-                EndObject,
+                    TAG_DONE),
             LAYOUT_AddChild,
                 status_gadget = (struct Gadget *)StringObject,
                     GA_ReadOnly, TRUE,
@@ -1084,24 +1555,29 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
         EndObject,
     EndWindow;
     if (!dialog) {
+        close_contact_list_class(&view);
         FreeLBColumnInfo(columns); amg_contacts_free(&book); return 0;
     }
     window = RA_OpenWindow(dialog);
     if (!window) {
-        DisposeObject(dialog); FreeLBColumnInfo(columns);
+        DisposeObject(dialog);
+        close_contact_list_class(&view); FreeLBColumnInfo(columns);
         amg_contacts_free(&book); return 0;
     }
+    view.window = window;
+    view.gadget = list_gadget;
     WindowToFront(window);
     ActivateWindow(window);
     rebuild_contact_list(list_gadget, window, &list, &book, 1,
-                         render_hooks, row_height);
+                         render_hooks, row_height, &view);
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
     while (!done) {
         ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
         if (signals & SIGBREAKF_CTRL_C) done = 1;
         if (signals & signal_mask) {
             ULONG input;
-            while ((input = RA_HandleInput(dialog, NULL)) != WMHI_LASTMSG) {
+            UWORD input_code = 0U;
+            while ((input = RA_HandleInput(dialog, &input_code)) != WMHI_LASTMSG) {
                 ULONG gid = input & WMHI_GADGETMASK;
                 switch (input & WMHI_CLASSMASK) {
                     case WMHI_CLOSEWINDOW:
@@ -1114,6 +1590,10 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
                         /* fall through */
                     case WMHI_GADGETUP:
                         gid = input & WMHI_GADGETMASK;
+                        if (gid == GID_CONTACT_SELECT_LIST) {
+                            (void)handle_contact_sort_event(&view, input_code);
+                            break;
+                        }
                         if (gid == GID_CONTACT_SELECT_CANCEL) {
                             done = 1;
                         } else if (gid == GID_CONTACT_SELECT_ACCEPT) {
@@ -1167,6 +1647,7 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
     SetGadgetAttrs(list_gadget, window, NULL,
                    LISTBROWSER_Labels, (ULONG)~0UL, TAG_DONE);
     DisposeObject(dialog);
+    close_contact_list_class(&view);
     FreeListBrowserList(&list);
     FreeLBColumnInfo(columns);
     amg_contacts_free(&book);

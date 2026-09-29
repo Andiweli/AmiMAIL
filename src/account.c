@@ -7,6 +7,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* A single mapping is shared by storage, the chooser and the scheduler. */
+static const unsigned int periodic_intervals[AMG_PERIODIC_INTERVAL_COUNT] = {
+    1U, 2U, 5U, 10U, 15U, 30U
+};
+
+unsigned int amg_periodic_interval_minutes(size_t selection)
+{
+    return selection < AMG_PERIODIC_INTERVAL_COUNT
+        ? periodic_intervals[selection] : AMG_PERIODIC_DEFAULT_MINUTES;
+}
+
+size_t amg_periodic_interval_index(unsigned int minutes)
+{
+    size_t i;
+    for (i = 0U; i < AMG_PERIODIC_INTERVAL_COUNT; ++i)
+        if (periodic_intervals[i] == minutes) return i;
+    return 2U; /* Legacy five-minute interval; never round to one minute. */
+}
+
 void amg_account_init(AmgAccount *account)
 {
     if (!account) return;
@@ -20,8 +39,10 @@ void amg_account_init(AmgAccount *account)
     account->save_sent_copy = 1;
     account->fetch_on_start = 0;
     account->periodic_fetch = 0;
+    account->periodic_fetch_minutes = AMG_PERIODIC_DEFAULT_MINUTES;
     account->fetch_days = 180U;
     account->notification_sound = 0;
+    account->herald_notifications = 0;
     account->notification_sound_path[0] = 0;
     account->auth_mode = AMG_AUTH_PASSWORD;
 }
@@ -240,6 +261,8 @@ static void normalize_google_app_password(char **secret)
 void amg_account_normalize(AmgAccount *account)
 {
     if (!account) return;
+    account->periodic_fetch_minutes = amg_periodic_interval_minutes(
+        amg_periodic_interval_index(account->periodic_fetch_minutes));
     trim_ascii(account->account_name);
     trim_ascii(account->display_name);
     trim_ascii(account->email);

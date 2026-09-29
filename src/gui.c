@@ -40,6 +40,7 @@
 #include <libraries/gadtools.h>
 #include <proto/asl.h>
 #include <proto/button.h>
+#include <proto/checkbox.h>
 #include <proto/clicktab.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
@@ -66,7 +67,9 @@
 struct Library *WindowBase=NULL;
 struct Library *LayoutBase=NULL;
 struct Library *ButtonBase=NULL;
+struct Library *CheckBoxBase=NULL;
 struct Library *ClickTabBase=NULL;
+struct Library *ChooserBase=NULL;
 struct Library *ListBrowserBase=NULL;
 struct Library *ScrollerBase=NULL;
 struct Library *StringBase=NULL;
@@ -137,7 +140,9 @@ static int open_classes(void)
     WindowBase = OpenLibrary((CONST_STRPTR)"window.class", 44);
     LayoutBase = OpenLibrary((CONST_STRPTR)"gadgets/layout.gadget", 44);
     ButtonBase = OpenLibrary((CONST_STRPTR)"gadgets/button.gadget", 44);
+    CheckBoxBase = OpenLibrary((CONST_STRPTR)"gadgets/checkbox.gadget", 44);
     ClickTabBase = OpenLibrary((CONST_STRPTR)"gadgets/clicktab.gadget", 47);
+    ChooserBase = OpenLibrary((CONST_STRPTR)"gadgets/chooser.gadget", 45);
     ListBrowserBase =
         OpenLibrary((CONST_STRPTR)"gadgets/listbrowser.gadget", 44);
     ScrollerBase = OpenLibrary((CONST_STRPTR)"gadgets/scroller.gadget", 44);
@@ -154,8 +159,10 @@ static int open_classes(void)
     IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 39);
     GfxBase = (struct GfxBase *)
         OpenLibrary((CONST_STRPTR)"graphics.library", 39);
-    return WindowBase && LayoutBase && ButtonBase && ClickTabBase && ListBrowserBase &&
-           ScrollerBase && StringBase && TextEditorBase && AslBase && GfxBase;
+    return WindowBase && LayoutBase && ButtonBase && CheckBoxBase &&
+           ClickTabBase &&
+           ChooserBase && ListBrowserBase && ScrollerBase && StringBase &&
+           TextEditorBase && AslBase && GfxBase;
 }
 
 static void close_classes(void)
@@ -168,8 +175,10 @@ static void close_classes(void)
     if (StringBase) CloseLibrary(StringBase);
     if (ScrollerBase) CloseLibrary(ScrollerBase);
     if (ListBrowserBase) CloseLibrary(ListBrowserBase);
+    if (CheckBoxBase) CloseLibrary(CheckBoxBase);
     if (ButtonBase) CloseLibrary(ButtonBase);
     if (ClickTabBase) CloseLibrary(ClickTabBase);
+    if (ChooserBase) CloseLibrary(ChooserBase);
     if (LayoutBase) CloseLibrary(LayoutBase);
     if (WindowBase) CloseLibrary(WindowBase);
     if (GfxBase) CloseLibrary((struct Library *)GfxBase);
@@ -183,7 +192,9 @@ static void close_classes(void)
     ScrollerBase = NULL;
     ListBrowserBase = NULL;
     ButtonBase = NULL;
+    CheckBoxBase = NULL;
     ClickTabBase = NULL;
+    ChooserBase = NULL;
     LayoutBase = NULL;
     WindowBase = NULL;
 }
@@ -881,6 +892,8 @@ void amg_gui_destroy(AmgGui *gui)
 {
     size_t i;
     if (!gui) return;
+    amg_herald_destroy(gui->herald);
+    gui->herald = NULL;
     gui_notify_cleanup();
     periodic_timer_cleanup(gui);
 
@@ -900,6 +913,7 @@ void amg_gui_destroy(AmgGui *gui)
     disconnect_texteditor_scroller(gui->preview_gadget,
                                    gui->preview_scroller,
                                    &gui->preview_scroll_link);
+    gui_reply_popup_close(gui);
     if (gui->window_object) DisposeObject(gui->window_object);
     gui->window_object = NULL;
     if (gui->icon_iconified) FreeDiskObject(gui->icon_iconified);

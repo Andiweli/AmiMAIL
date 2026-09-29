@@ -6,6 +6,7 @@
 #include <intuition/gadgetclass.h>
 #include <intuition/screens.h>
 #include <proto/button.h>
+#include <proto/exec.h>
 #include <proto/graphics.h>
 #include <proto/intuition.h>
 #include <string.h>
@@ -30,6 +31,43 @@ static const UBYTE sort_down_rows[4] = {
 
 static Class *reply_arrow_class;
 static int reply_arrow_expanded;
+/* The dispatcher runs in Intuition's input context. It only records native
+ * activation/completion and signals the application; it never disposes a
+ * window, pumps input, or waits. All object ownership stays in the GUI task. */
+static struct Task *reply_release_task;
+static ULONG reply_release_signal;
+static volatile int reply_release_pressed;
+static volatile int reply_release_finished;
+
+void gui_reply_arrow_watch_release(struct Task *task, ULONG signal_mask)
+{
+    Forbid();
+    reply_release_pressed = 0;
+    reply_release_finished = 0;
+    reply_release_signal = signal_mask;
+    reply_release_task = task;
+    Permit();
+}
+
+void gui_reply_arrow_unwatch_release(void)
+{
+    Forbid();
+    reply_release_task = NULL;
+    reply_release_signal = 0UL;
+    reply_release_pressed = 0;
+    reply_release_finished = 0;
+    Permit();
+}
+
+int gui_reply_arrow_was_pressed(void)
+{
+    return reply_release_pressed != 0;
+}
+
+int gui_reply_arrow_was_released(void)
+{
+    return reply_release_finished != 0;
+}
 
 static void draw_mask_rows(struct RastPort *rp, LONG left, LONG top,
                            const UBYTE *rows, WORD width, WORD height,
@@ -113,6 +151,10 @@ static ULONG reply_arrow_dispatcher(struct Hook *hook, APTR object_ptr,
     ULONG result;
 
     if (!cl || !object || !message) return 0UL;
+    if (message->MethodID == GM_GOACTIVE && reply_release_task) {
+        reply_release_pressed = 1;
+        reply_release_finished = 0;
+    }
     result = DoSuperMethodA(cl, object, message);
 
     if (message->MethodID == GM_RENDER) {
@@ -143,6 +185,11 @@ static ULONG reply_arrow_dispatcher(struct Hook *hook, APTR object_ptr,
          * popup and update reply_arrow_expanded normally. */
         redraw_reply_arrow_after_input((struct Gadget *)object_ptr,
                                        inactive->gpgi_GInfo);
+        if (reply_release_task && reply_release_pressed) {
+            reply_release_finished = 1;
+            if (reply_release_signal)
+                Signal(reply_release_task, reply_release_signal);
+        }
     }
 
     return result;
@@ -167,6 +214,7 @@ int gui_icons_init(void)
 
 void gui_icons_cleanup(void)
 {
+    gui_reply_arrow_unwatch_release();
     if (reply_arrow_class) {
         FreeClass(reply_arrow_class);
         reply_arrow_class = NULL;

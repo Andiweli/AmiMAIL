@@ -1,6 +1,35 @@
 # Changelog
 
+## AmiMAIL 2.2.0 - 2026-09-28
+- Replace nine checkmark buttons with native ReAction checkbox gadgets.
+- Preserve account settings and checkbox-dependent field activation.
+- Promote the tested Herald/subject/per-account retrieval build to 2.2.0.
+- Keep the Reply popup visible until the closing arrow click is released.
+- Clean up cancelled arrow drags without reopening or leaking the popup.
+- Refresh IMAP capabilities after login to detect MOVE and UIDPLUS correctly.
+- Wait for complete fragmented IMAP greetings before sending commands.
+- Verify source UIDs before and after server-side message moves/deletions.
+- Report deferred deletion on servers without safe targeted expunge.
+- Do not remove same-UID mail from another folder on a late move/delete reply.
+- Preserve case-sensitive mailbox identities; recognize IMAP4rev2 moves.
+- Keep bin/AmiMAIL, read-only preview and progress/status layout unchanged.
+- Build the matching German V12 catalog with server verification messages.
+
 ## AmiMAIL 2.1.0 - 2026-09-26
+- Always include the latest new message's subject in Herald notifications.
+- Decode and safely shorten subjects within Herald's 160-byte text limit.
+- Use "?" for the Herald test button, matching the sound browse button width.
+- Add aligned retrieval, notification and external-service settings labels.
+- Choose per-account retrieval intervals of 1, 2, 5, 10, 15 or 30 minutes.
+- Keep interval selection disabled until periodic retrieval is enabled.
+- Preserve the five-minute interval for existing account configurations.
+- Schedule accounts independently without accumulating missed checks.
+- Add optional, per-account Herald notifications with a separate test button.
+- Send silent, account-scoped new-mail cards without RexxMast or HeraldSend.
+- Keep the GUI responsive with asynchronous replies and bounded queues.
+- Preserve notification identity when accounts are reordered.
+- Add Herald protocol, timeout, queue and settings-migration regression tests.
+- Remember the last successful attachment export directory across restarts.
 - Play notification/preview sounds in a worker-owned native DataType process.
 - Remove the external C:SoundPlayer dependency and shell path interpretation.
 - Stop and join the sound worker before shutdown; bound completion waits.
@@ -17,7 +46,7 @@
 - Offer inline cancellation only for the matching, cancellable operation.
 - Keep local recovery copies on failure or an uncertain server response.
 - Preserve existing files and remove incomplete attachment exports safely.
-- Build and verify the German V9 catalog automatically, including new texts.
+- Build and verify the German V11 catalog automatically, including new texts.
 - Localize window/arrow errors and HTML/emoji graphic markers consistently.
 - Audit registered lookup IDs and the corrected source literals during build.
 - Keep the original read-only preview and the existing message-list view.

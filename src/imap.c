@@ -45,6 +45,13 @@ static int ascii_ci_equal(const char *left, const char *right)
     return !*left && !*right;
 }
 
+static int mailbox_equal(const char *left, const char *right)
+{
+    if (!left || !right) return 0;
+    return !strcmp(left, right) ||
+        (ascii_ci_equal(left, "INBOX") && ascii_ci_equal(right, "INBOX"));
+}
+
 static void set_parser_error(AmgError *error, int result,
                              const AmgImapParser *parser)
 {
@@ -297,6 +304,16 @@ static int read_greeting(AmgImapSession *session, int *preauthenticated, AmgErro
                           T(MSG_IMAP_GREETING_IS_TOO_LONG, "IMAP greeting is too long."));
             break;
         }
+        /* A TCP/TLS read may end immediately after "* OK". Consume the
+         * complete greeting line before starting CAPABILITY, otherwise the
+         * remainder is parsed as if it belonged to the command response. */
+        if (greeting.length > AMIGMAIL_MAX_LINE) {
+            amg_error_set(error, AMG_ERR_LIMIT,
+                          T(MSG_IMAP_GREETING_IS_TOO_LONG, "IMAP greeting is too long."));
+            result = AMG_ERR_LIMIT;
+            break;
+        }
+        if (!memchr(greeting.data, '\n', greeting.length)) continue;
         if (amg_imap_greeting_status(greeting.data, greeting.length) > 0) {
             if (preauthenticated)
                 *preauthenticated = amg_imap_greeting_is_preauth(
@@ -318,12 +335,10 @@ static int read_greeting(AmgImapSession *session, int *preauthenticated, AmgErro
             result = AMG_ERR_PROTOCOL;
             break;
         }
-        if (greeting.length > AMIGMAIL_MAX_LINE) {
-            amg_error_set(error, AMG_ERR_PROTOCOL,
-                          T(MSG_THE_IMAP_SERVER_DID_NOT_SEND_A_VALID, "The IMAP server did not send a valid greeting."));
-            result = AMG_ERR_PROTOCOL;
-            break;
-        }
+        amg_error_set(error, AMG_ERR_PROTOCOL,
+                      T(MSG_THE_IMAP_SERVER_DID_NOT_SEND_A_VALID, "The IMAP server did not send a valid greeting."));
+        result = AMG_ERR_PROTOCOL;
+        break;
     }
     amg_buffer_free(&greeting);
     return result;
@@ -346,19 +361,55 @@ static int append_imap_quoted(const char *value, AmgBuffer *output)
     return amg_buffer_append_char(output, '"');
 }
 
+static int capability_atom(const AmgBuffer *response, const char *wanted)
+{
+    size_t pos = 0U, n = strlen(wanted);
+    if (!response || !response->data) return 0;
+    while (pos < response->length) {
+        size_t end = pos, first, stop, i;
+        while (end < response->length && response->data[end] != '\n') ++end;
+        first = pos;
+        /* Inspect only untagged CAPABILITY lines, not human-readable text
+         * in a tagged OK. This also avoids MOVEFOO/AUTH=PLAIN-PLUS matches. */
+        if (end - first >= 13U && response->data[first] == '*' &&
+            response->data[first + 1U] == ' ') {
+            first += 2U;
+            for (i = 0U; i < 10U; ++i)
+                if (toupper(response->data[first + i]) != "CAPABILITY"[i]) break;
+            if (i == 10U && isspace(response->data[first + 10U])) {
+                first += 11U;
+                while (first < end) {
+                    while (first < end && isspace(response->data[first])) ++first;
+                    stop = first;
+                    while (stop < end && !isspace(response->data[stop])) ++stop;
+                    if (stop - first == n) {
+                        for (i = 0U; i < n; ++i)
+                            if (toupper(response->data[first + i]) !=
+                                toupper((unsigned char)wanted[i])) break;
+                        if (i == n) return 1;
+                    }
+                    first = stop;
+                }
+            }
+        }
+        pos = end < response->length ? end + 1U : end;
+    }
+    return 0;
+}
+
 static void update_capabilities(AmgImapSession *session,
                                 const AmgBuffer *response)
 {
-    const char *text;
+    int rev2;
     if (!session || !response) return;
-    text = response->data ? (const char *)response->data : "";
-    session->capability_move = ascii_ci_contains(text, " MOVE");
-    session->capability_uidplus = ascii_ci_contains(text, " UIDPLUS");
-    session->capability_special_use = ascii_ci_contains(text, " SPECIAL-USE");
-    session->capability_starttls = ascii_ci_contains(text, " STARTTLS");
-    session->capability_auth_plain = ascii_ci_contains(text, " AUTH=PLAIN");
-    session->capability_sasl_ir = ascii_ci_contains(text, " SASL-IR");
-    session->capability_login_disabled = ascii_ci_contains(text, " LOGINDISABLED");
+    rev2 = capability_atom(response, "IMAP4REV2");
+    session->capability_move = rev2 || capability_atom(response, "MOVE");
+    session->capability_uidplus = rev2 || capability_atom(response, "UIDPLUS");
+    session->capability_special_use = rev2 || capability_atom(response, "SPECIAL-USE");
+    session->capability_starttls = capability_atom(response, "STARTTLS");
+    session->capability_auth_plain = capability_atom(response, "AUTH=PLAIN");
+    session->capability_sasl_ir = rev2 || capability_atom(response, "SASL-IR");
+    session->capability_login_disabled = capability_atom(response, "LOGINDISABLED");
 }
 
 static int build_plain_response(const AmgAccount *account,
@@ -765,8 +816,19 @@ int amg_imap_connect(AmgImapSession *session, const AmgAccount *account,
         }
     }
 
-    if (result == AMG_OK && !preauthenticated)
+    if (result == AMG_OK && !preauthenticated) {
         result = imap_authenticate(session, account, access_token, error);
+        if (result == AMG_OK) {
+            /* Servers may expose mailbox extensions only AFTER LOGIN/SASL.
+             * Using the pre-login capabilities here incorrectly selected
+             * COPY + Deleted without UID EXPUNGE even on capable servers.
+             * The authentication parser does not retain CAPABILITY response
+             * codes, so explicitly request the authoritative list again. */
+            response.length = 0U;
+            result = imap_command(session, "CAPABILITY", &response, error);
+            if (result == AMG_OK) update_capabilities(session, &response);
+        }
+    }
     amg_buffer_free(&response);
     if (result == AMG_OK) {
         session->authenticated = 1;
@@ -951,10 +1013,15 @@ static int quote_mailbox(const char *utf8, AmgBuffer *output)
 int amg_imap_select(AmgImapSession *session, const char *mailbox_utf8, AmgError *error)
 {
     const char *resolved_mailbox;
+    char mailbox_copy[sizeof(session->selected_mailbox)];
     AmgBuffer command,response;unsigned long exists=0,uid_validity=0;int result;
     if (!session || !mailbox_utf8 || !*mailbox_utf8)
         return AMG_ERR_ARGUMENT;
-    resolved_mailbox=resolve_special_mailbox(session,mailbox_utf8);amg_buffer_init(&command);amg_buffer_init(&response);amg_buffer_append_cstr(&command,"SELECT ");
+    resolved_mailbox = resolve_special_mailbox(session, mailbox_utf8);
+    if (strlen(resolved_mailbox) >= sizeof(mailbox_copy)) return AMG_ERR_LIMIT;
+    memcpy(mailbox_copy, resolved_mailbox, strlen(resolved_mailbox) + 1U);
+    resolved_mailbox = mailbox_copy;
+    amg_buffer_init(&command);amg_buffer_init(&response);amg_buffer_append_cstr(&command,"SELECT ");
     result=quote_mailbox(resolved_mailbox,&command);if(result==AMG_OK){amg_buffer_terminate(&command);result=imap_command(session,(char*)command.data,&response,error);}
     if(result==AMG_OK){amg_buffer_terminate(&response);if(!amg_imap_parse_exists(response.data,response.length,&exists)){result=AMG_ERR_PROTOCOL;amg_error_set(error,result,T(MSG_THE_IMAP_SERVER_DID_NOT_PROVIDE_A_MESSAGE, "The IMAP server did not provide a message count for the folder."));}}
     if(result==AMG_OK){
@@ -1376,14 +1443,14 @@ int amg_imap_set_answered(AmgImapSession *session, unsigned long uid,
 
     previous_mailbox[0] = 0;
     if (session->selected_mailbox[0] &&
-        !ascii_ci_equal(session->selected_mailbox, mailbox)) {
+        !mailbox_equal(session->selected_mailbox, mailbox)) {
         strncpy(previous_mailbox, session->selected_mailbox,
                 sizeof(previous_mailbox) - 1U);
         previous_mailbox[sizeof(previous_mailbox) - 1U] = 0;
         restore_previous = 1;
     }
 
-    if (!ascii_ci_equal(session->selected_mailbox, mailbox)) {
+    if (!mailbox_equal(session->selected_mailbox, mailbox)) {
         result = amg_imap_select(session, mailbox, error);
         if (result != AMG_OK) return result;
     }
@@ -1421,6 +1488,36 @@ int amg_imap_set_answered(AmgImapSession *session, unsigned long uid,
             if (error) *error = restore_error;
         }
     }
+    return result;
+}
+
+static int imap_uid_state(AmgImapSession *session, unsigned long uid,
+                           int *exists, int *deleted, AmgError *error)
+{
+    AmgBuffer response;
+    char command[80];
+    size_t pos = 0U;
+    int result;
+    *exists = 0;
+    *deleted = 0;
+    snprintf(command, sizeof(command), "UID FETCH %lu (UID FLAGS)", uid);
+    amg_buffer_init(&response);
+    result = imap_command(session, command, &response, error);
+    if (result == AMG_OK) {
+        while (pos < response.length) {
+            size_t end = pos;
+            AmgImapFetchRecord record;
+            while (end < response.length && response.data[end] != '\n') ++end;
+            if (file_fetch_prefix(response.data + pos, end - pos) &&
+                amg_imap_fetch_metadata(response.data + pos, end - pos,
+                                         &record) == AMG_OK && record.uid == uid) {
+                *exists = 1;
+                *deleted = record.deleted;
+            }
+            pos = end < response.length ? end + 1U : end;
+        }
+    }
+    amg_buffer_free(&response);
     return result;
 }
 
@@ -1494,7 +1591,7 @@ int amg_imap_move_label(AmgImapSession *session, unsigned long uid,
 {
     const char *source_mailbox;
     const char *destination_mailbox;
-    int result;
+    int result, exists, deleted;
     if (!session || !uid || !destination_label || !*destination_label)
         return AMG_ERR_ARGUMENT;
 
@@ -1506,12 +1603,22 @@ int amg_imap_move_label(AmgImapSession *session, unsigned long uid,
     if (!source_mailbox || !*source_mailbox ||
         !destination_mailbox || !*destination_mailbox)
         return AMG_ERR_ARGUMENT;
-    if (ascii_ci_equal(source_mailbox, destination_mailbox))
+    if (mailbox_equal(source_mailbox, destination_mailbox))
         return AMG_ERR_ARGUMENT;
 
-    if (!ascii_ci_equal(session->selected_mailbox, source_mailbox)) {
+    if (!mailbox_equal(session->selected_mailbox, source_mailbox)) {
         result = amg_imap_select(session, source_mailbox, error);
         if (result != AMG_OK) return result;
+    }
+
+    amg_error_set(error, AMG_OK, "");
+    result = imap_uid_state(session, uid, &exists, &deleted, error);
+    if (result != AMG_OK) return result;
+    if (!exists) {
+        amg_error_set(error, AMG_ERR_PROTOCOL,
+            T(MSG_IMAP_SOURCE_MESSAGE_MISSING,
+              "Message is no longer in the source folder. Reload the folder."));
+        return AMG_ERR_PROTOCOL;
     }
 
     if (session->capability_move)
@@ -1519,13 +1626,36 @@ int amg_imap_move_label(AmgImapSession *session, unsigned long uid,
     else
         result = move_with_copy_delete(session, uid, destination_mailbox,
                                        error);
-    /* MOVE and UID EXPUNGE really remove one message from the selected
-     * mailbox.  The safe no-UIDPLUS fallback only marks it \Deleted, so the
-     * server's EXISTS count must remain untouched in that case. */
-    if (result == AMG_OK && session->selected_exists &&
-        (session->capability_move || session->capability_uidplus))
-        --session->selected_exists;
-    return result;
+    if (result != AMG_OK) return result;
+
+    /* The server accepted the mutation. Verify the source UID rather than
+     * treating a tagged OK (which may be a no-op) as proof of removal. Never
+     * retry COPY/MOVE automatically after an uncertain completion. */
+    result = imap_uid_state(session, uid, &exists, &deleted, error);
+    if (result != AMG_OK) {
+        amg_error_set(error, AMG_ERR_UNCERTAIN,
+            T(MSG_IMAP_MOVE_VERIFICATION_FAILED,
+              "Server accepted the move, but verification failed. Reload before retrying."));
+        return AMG_ERR_UNCERTAIN;
+    }
+    if (!exists) {
+        if (session->selected_exists) --session->selected_exists;
+        amg_error_set(error, AMG_OK, "");
+        return AMG_OK;
+    }
+    if (!session->capability_move && !session->capability_uidplus && deleted) {
+        /* Preserve the safe legacy behavior, but make the deferred server
+         * deletion explicit. A global EXPUNGE could destroy OTHER clients'
+         * deleted mail; never do that for an individual move/delete. */
+        amg_error_set(error, AMG_OK,
+            T(MSG_IMAP_MOVE_DEFERRED,
+              "Copied to destination; original only marked deleted (server lacks UIDPLUS)."));
+        return AMG_OK;
+    }
+    amg_error_set(error, AMG_ERR_PROTOCOL,
+        T(MSG_IMAP_MOVE_SOURCE_REMAINS,
+          "Server kept the source message after the move. Reload before retrying."));
+    return AMG_ERR_PROTOCOL;
 }
 
 int amg_imap_move_to_trash(AmgImapSession *session, unsigned long uid,
@@ -1551,14 +1681,14 @@ int amg_imap_delete_uid(AmgImapSession *session, unsigned long uid,
 
     previous_mailbox[0] = 0;
     if (session->selected_mailbox[0] &&
-        !ascii_ci_equal(session->selected_mailbox, mailbox)) {
+        !mailbox_equal(session->selected_mailbox, mailbox)) {
         strncpy(previous_mailbox, session->selected_mailbox,
                 sizeof(previous_mailbox) - 1U);
         previous_mailbox[sizeof(previous_mailbox) - 1U] = 0;
         restore_previous = 1;
     }
 
-    if (!ascii_ci_equal(session->selected_mailbox, mailbox)) {
+    if (!mailbox_equal(session->selected_mailbox, mailbox)) {
         result = amg_imap_select(session, mailbox, error);
         if (result != AMG_OK) return result;
     }
@@ -1827,7 +1957,7 @@ int amg_imap_empty_mailbox(AmgImapSession *session, const char *mailbox_utf8,
 
     previous_mailbox[0] = 0;
     if (session->selected_mailbox[0] &&
-        !ascii_ci_equal(session->selected_mailbox, mailbox)) {
+        !mailbox_equal(session->selected_mailbox, mailbox)) {
         strncpy(previous_mailbox, session->selected_mailbox,
                 sizeof(previous_mailbox) - 1U);
         previous_mailbox[sizeof(previous_mailbox) - 1U] = 0;

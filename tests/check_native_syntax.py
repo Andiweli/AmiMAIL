@@ -37,7 +37,8 @@ struct List { struct Node *lh_Head, *lh_Tail, *lh_TailPred; UBYTE lh_Type, l_pad
 struct Task { int unused; };
 struct MsgPort { UBYTE mp_SigBit; struct Task *mp_SigTask; struct List mp_MsgList; };
 struct Message { struct Node mn_Node; struct MsgPort *mn_ReplyPort; UWORD mn_Length; };
-struct Process { struct Task pr_Task; };
+struct Process { struct Task pr_Task; APTR pr_WindowPtr; };
+struct FileInfoBlock { LONG fib_DirEntryType; };
 struct Hook { void *h_Entry, *h_SubEntry, *h_Data; };
 struct Image { int unused; };
 struct Gadget { WORD LeftEdge, TopEdge, Width, Height; };
@@ -55,6 +56,7 @@ struct FileRequester { STRPTR rf_Dir, rf_File; };
 #define FALSE 0
 #define TAG_DONE 0UL
 #define ACCESS_READ (-2L)
+#define DOS_FIB 2UL
 #define SIGBREAKF_CTRL_C (1UL << 12)
 #define WMHI_CLASSMASK 0xffff0000UL
 #define WMHI_GADGETMASK 0xffffUL
@@ -82,7 +84,7 @@ enum {
  FUELGAUGE_Orientation,
  FUELGAUGE_Ticks, FUELGAUGE_ShortTicks, BUTTON_DomainString,
  BUTTON_Justification, BCJ_CENTER, BUTTON_TextPadding,
- CHILD_MinWidth=1000, CHILD_MinHeight, CHILD_MaxHeight, LAYOUT_ModifyChild, CHILD_WeightedHeight, CHILD_WeightedWidth, CHILD_NoDispose,
+ CHILD_MinWidth=1000, CHILD_MaxWidth, CHILD_MinHeight, CHILD_MaxHeight, LAYOUT_ModifyChild, CHILD_WeightedHeight, CHILD_WeightedWidth, CHILD_NoDispose,
  GA_Disabled, GA_ID, GA_ReadOnly, GA_RelVerify, GA_Text,
  IDCMP_CLOSEWINDOW, IDCMP_GADGETUP, IDCMP_RAWKEY,
  LAYOUT_AddChild, LAYOUT_Orientation, LAYOUT_SpaceInner, LAYOUT_SpaceOuter,
@@ -90,7 +92,7 @@ enum {
  WA_Left, WA_PubScreen, WA_Title, WA_Top, WA_Width,
  WFLG_ACTIVATE, WFLG_CLOSEGADGET, WFLG_DEPTHGADGET, WFLG_DRAGBAR,
  WINDOW_Layout, WINDOW_SigMask, ASLFR_DrawersOnly, ASLFR_RejectIcons,
- ASLFR_SleepWindow, ASLFR_TitleText, ASLFR_Window, ASL_FileRequest,
+ ASLFR_SleepWindow, ASLFR_TitleText, ASLFR_Window, ASLFR_InitialDrawer, ASL_FileRequest,
  LBCIA_Column, LBCIA_Title, LBCIA_Weight, LBNA_Column, LBNA_Selected,
  LBNA_UserData, LBNCA_CopyText, LBNCA_Text, LISTBROWSER_AutoWheel,
  LISTBROWSER_ColumnInfo, LISTBROWSER_ColumnTitles, LISTBROWSER_Labels,
@@ -134,6 +136,9 @@ void *AllocAslRequestTags(ULONG kind, ...); BOOL AslRequest(void *requester, str
 void FreeAslRequest(void *requester);
 BPTR CreateDir(CONST_STRPTR name); BPTR Lock(CONST_STRPTR name, LONG access);
 void UnLock(BPTR lock); BOOL NameFromLock(BPTR lock, STRPTR buffer, LONG size);
+APTR AllocDosObject(ULONG type, const struct TagItem *tags);
+void FreeDosObject(ULONG type, APTR object);
+BOOL Examine(BPTR lock, struct FileInfoBlock *info);
 BOOL DeleteFile(CONST_STRPTR path); BOOL Rename(CONST_STRPTR from, CONST_STRPTR to);
 LONG IoErr(void); LONG GetVar(CONST_STRPTR name, STRPTR buffer, LONG size, ULONG flags);
 #endif

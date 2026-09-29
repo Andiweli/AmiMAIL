@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 /* This test double always uses its English printf format verbatim. */
 int amg_tr_snprintf(char *output, size_t capacity, long id,
@@ -49,6 +51,7 @@ struct Object {
     int borrowed[8];
     size_t count, current_child;
     ULONG min_height[8], max_height[8];
+    ULONG min_width[8], max_width[8], weight_width[8];
     ULONG id, top, disabled, level, percent;
     char label[16];
     struct List *list;
@@ -70,6 +73,20 @@ static int cancel_slot = -1;
 static unsigned long cancel_serial;
 static unsigned gauge_updates, resize_calls;
 static ULONG status_test_height = 14UL;
+static struct Gadget *test_preview_scroller;
+static UWORD test_preview_width = 16U;
+static unsigned preview_domain_queries;
+/* Real bounded preference-file IO; explicit DOS directory/rename doubles. */
+static struct Process drawer_process;
+static const char *asl_drawer = "RAM:test";
+static char last_initial_drawer[COMPOSE_PATH_MAX];
+static char unavailable_drawer[COMPOSE_PATH_MAX], file_not_drawer[COMPOSE_PATH_MAX];
+static int fail_asl, cancel_asl, fail_fib, fail_examine, fail_name, fail_pref_dir;
+static int fail_replace, replace_calls, live_locks, live_fibs;
+static unsigned export_fail_mask;
+static int export_cancel_index = -1;
+struct DrawerLock { char path[COMPOSE_PATH_MAX]; };
+
 
 Class *FUELGAUGE_GetClass(void) { return &gauge_class; }
 Class *WINDOW_GetClass(void) { return &window_class; }
@@ -97,6 +114,12 @@ static void apply_tag(Object *o, ULONG key, ULONG value)
         assert(o->count > 0U); o->min_height[o->current_child] = value;
     } else if (key == CHILD_MaxHeight) {
         assert(o->count > 0U); o->max_height[o->current_child] = value;
+    } else if (key == CHILD_MinWidth) {
+        assert(o->count > 0U); o->min_width[o->current_child] = value;
+    } else if (key == CHILD_MaxWidth) {
+        assert(o->count > 0U); o->max_width[o->current_child] = value;
+    } else if (key == CHILD_WeightedWidth) {
+        assert(o->count > 0U); o->weight_width[o->current_child] = value;
     } else if (key == GA_ID) o->id = value;
     else if (key == LISTBROWSER_Labels) o->list = (struct List *)(uintptr_t)value;
     else if (key == GA_Disabled) o->disabled = value;
@@ -176,6 +199,12 @@ void LayoutLimits(struct Gadget *g, struct LayoutLimits *limits,
 {
     Object *object = (Object *)g;
     (void)f; (void)s;
+    if (g == test_preview_scroller) {
+        ++preview_domain_queries;
+        limits->MinWidth = test_preview_width;
+        limits->MinHeight = 20U;
+        return;
+    }
     limits->MinWidth = 300U;
     limits->MinHeight = object->cl == &string_class ? (UWORD)status_test_height : 100U;
 }
@@ -299,13 +328,100 @@ void detach_listbrowser(struct Gadget *g, struct Window *w)
 static void *test_asl(ULONG kind, const ULONG *tags)
 {
     struct FileRequester *r;
-    (void)kind; (void)tags;
+    size_t i;
+    (void)kind;
+    assert(drawer_process.pr_WindowPtr == (APTR)(uintptr_t)0x1234U);
+    last_initial_drawer[0] = 0;
+    for (i = 0U; tags[i] != TAG_DONE; i += 2U) {
+        if (tags[i] == ASLFR_InitialDrawer)
+            snprintf(last_initial_drawer, sizeof(last_initial_drawer), "%s",
+                     (const char *)(uintptr_t)tags[i + 1U]);
+    }
+    if (fail_asl) return NULL;
     r = calloc(1U, sizeof(*r)); assert(r);
-    r->rf_Dir = (STRPTR)"RAM:test";
+    r->rf_Dir = (STRPTR)asl_drawer;
     return r;
 }
-BOOL AslRequest(void *r, struct TagItem *t) { (void)r; (void)t; return TRUE; }
+BOOL AslRequest(void *r, struct TagItem *t)
+{ (void)r; (void)t; return !cancel_asl; }
 void FreeAslRequest(void *r) { free(r); }
+
+struct Task *FindTask(CONST_STRPTR name)
+{ assert(!name); return &drawer_process.pr_Task; }
+BPTR Lock(CONST_STRPTR name, LONG access)
+{
+    struct DrawerLock *lock;
+    struct stat info;
+    const char *path = (const char *)name;
+    assert(access == ACCESS_READ);
+    assert(drawer_process.pr_WindowPtr == (APTR)(intptr_t)-1);
+    if (!strcmp(path, unavailable_drawer)) return 0;
+    if (!strcmp(path, ACCOUNT_DRAWER) &&
+        (fail_pref_dir || stat(path, &info) != 0 || !S_ISDIR(info.st_mode))) return 0;
+    lock = calloc(1U, sizeof(*lock)); assert(lock);
+    assert(strlen(path) < sizeof(lock->path)); strcpy(lock->path, path);
+    ++live_locks;
+    return (BPTR)(uintptr_t)lock;
+}
+void UnLock(BPTR value)
+{
+    assert(value && live_locks > 0);
+    --live_locks; free((void *)(uintptr_t)value);
+}
+BPTR CreateDir(CONST_STRPTR name)
+{
+    assert(!strcmp((const char *)name, ACCOUNT_DRAWER));
+    if (fail_pref_dir) return 0;
+    if (mkdir((const char *)name, 0700) != 0 && errno != EEXIST) return 0;
+    return Lock(name, ACCESS_READ);
+}
+APTR AllocDosObject(ULONG type, const struct TagItem *tags)
+{
+    struct FileInfoBlock *info;
+    assert(type == DOS_FIB && !tags);
+    if (fail_fib) return NULL;
+    info = calloc(1U, sizeof(*info)); assert(info); ++live_fibs;
+    return info;
+}
+void FreeDosObject(ULONG type, APTR object)
+{
+    assert(type == DOS_FIB && object && live_fibs > 0);
+    --live_fibs; free(object);
+}
+BOOL Examine(BPTR value, struct FileInfoBlock *info)
+{
+    struct DrawerLock *lock = (struct DrawerLock *)(uintptr_t)value;
+    assert(lock && info);
+    if (fail_examine) return FALSE;
+    info->fib_DirEntryType = !strcmp(lock->path, file_not_drawer) ? -3L : 2L;
+    return TRUE;
+}
+BOOL NameFromLock(BPTR value, STRPTR buffer, LONG size)
+{
+    const char *absolute = "Work:Exports/Relative";
+    assert(value && buffer);
+    if (fail_name || size < 0 || (size_t)size <= strlen(absolute)) return FALSE;
+    strcpy((char *)buffer, absolute);
+    return TRUE;
+}
+BOOL DeleteFile(CONST_STRPTR path)
+{
+    assert(!strcmp((const char *)path, ATTACHMENT_DRAWER_TEMP));
+    return remove((const char *)path) == 0;
+}
+int amg_file_recover(const char *path)
+{
+    assert(!strcmp(path, ATTACHMENT_DRAWER_STATE));
+    return AMG_OK; /* Actual recovery/rollback is covered by fileio-fault-tests. */
+}
+int amg_file_replace(const char *temporary, const char *path)
+{
+    assert(!strcmp(temporary, ATTACHMENT_DRAWER_TEMP));
+    assert(!strcmp(path, ATTACHMENT_DRAWER_STATE));
+    ++replace_calls;
+    if (fail_replace) return AMG_ERR_IO;
+    return rename(temporary, path) == 0 ? AMG_OK : AMG_ERR_IO;
+}
 const char *amg_tr(long id, const char *en) { (void)id; return en; }
 int amg_tr_snprintf(char *out, size_t cap, long id, const char *format, ...)
 {
@@ -332,6 +448,8 @@ int amg_mailfile_save_attachment(const AmgMailFile *mail, size_t i,
     (void)mail; (void)dir; (void)name; (void)dest; (void)error;
     if (transfer && !transfer->report(transfer->context, AMG_TRANSFER_EXPORT, 0U, 100U))
         return AMG_ERR_CANCELLED;
+    if ((int)i == export_cancel_index) return AMG_ERR_CANCELLED;
+    if (export_fail_mask & (1U << i)) return AMG_ERR_IO;
     saved_mask |= 1U << i;
     return AMG_OK;
 }
@@ -355,6 +473,13 @@ static void reset(void)
 {
     assert(live_objects == 0 && live_nodes == 0 && live_columns == 0);
     assert(blocked_count == 0);
+    assert(live_locks == 0 && live_fibs == 0);
+    drawer_process.pr_WindowPtr = (APTR)(uintptr_t)0x1234U;
+    asl_drawer = "RAM:test";
+    last_initial_drawer[0] = unavailable_drawer[0] = file_not_drawer[0] = 0;
+    fail_asl = cancel_asl = fail_fib = fail_examine = fail_name = fail_pref_dir = 0;
+    fail_replace = replace_calls = 0;
+    export_fail_mask = 0U; export_cancel_index = -1;
     constructor_calls = fail_constructor = fail_after_tags = 0;
     node_calls = fail_node = fail_columns = fail_open = fail_request = 0;
     public_lookups = signal_break = 0; manual_mask = -1;
@@ -369,6 +494,8 @@ static void clean(void)
 {
     assert(live_objects == 0 && live_nodes == 0 && live_columns == 0);
     assert(blocked_count == 0 && public_lookups == 0);
+    assert(live_locks == 0 && live_fibs == 0);
+    assert(drawer_process.pr_WindowPtr == (APTR)(uintptr_t)0x1234U);
 }
 static void test_selection(AmgGui *gui)
 {
@@ -424,6 +551,159 @@ static void test_export_and_progress(AmgGui *gui)
     gui_file_progress_item(p, "test.pdf");
     assert(gui_file_progress_callback(p)->report(p, AMG_TRANSFER_EXPORT, 10U, 10U));
     gui_file_progress_close(p); clean();
+}
+
+
+static void drawer_simulate_restart(void)
+{
+    memset(attachment_last_drawer, 0, sizeof(attachment_last_drawer));
+    attachment_drawer_loaded = attachment_drawer_dirty = 0;
+}
+
+static void drawer_clear_state(void)
+{
+    (void)remove(ATTACHMENT_DRAWER_STATE);
+    (void)remove(ATTACHMENT_DRAWER_TEMP);
+    (void)remove(ATTACHMENT_DRAWER_STATE ".bak");
+    drawer_simulate_restart();
+}
+
+static void drawer_assert_stored(const char *path)
+{
+    char contents[COMPOSE_PATH_MAX + sizeof(ATTACHMENT_DRAWER_HEADER)];
+    FILE *file = fopen(ATTACHMENT_DRAWER_STATE, "rb");
+    size_t size;
+    assert(file);
+    size = fread(contents, 1U, sizeof(contents), file);
+    assert(size == sizeof(ATTACHMENT_DRAWER_HEADER) - 1U + strlen(path) + 1U);
+    assert(!memcmp(contents, ATTACHMENT_DRAWER_HEADER,
+                   sizeof(ATTACHMENT_DRAWER_HEADER) - 1U));
+    assert(!memcmp(contents + sizeof(ATTACHMENT_DRAWER_HEADER) - 1U,
+                   path, strlen(path) + 1U));
+    assert(!ferror(file) && fclose(file) == 0);
+}
+
+static void test_remember_attachment_drawer(AmgGui *gui)
+{
+    const char *first = "Work:Downloads/Mail Anh\344nge";
+    const char *second = "Exports:Konto 2";
+    char long_path[COMPOSE_PATH_MAX + 64U];
+    size_t i;
+    FILE *file;
+    reset(); drawer_clear_state();
+    push(ATT_SAVE); asl_drawer = first; save_current_attachments(gui);
+    assert(!last_initial_drawer[0]); assert(saved_mask == 5U);
+    assert(!strcmp(attachment_last_drawer, first));
+    assert(replace_calls == 1 && !attachment_drawer_dirty);
+    drawer_assert_stored(first); clean();
+
+    /* Next dialog, same process: no redundant ENVARC writes. */
+    reset(); push(ATT_SAVE); asl_drawer = first; save_current_attachments(gui);
+    assert(!strcmp(last_initial_drawer, first)); assert(replace_calls == 0); clean();
+
+    /* Fresh process plus another account/folder uses the same last directory. */
+    drawer_simulate_restart(); reset(); gui->active_account = 2U;
+    strcpy(gui->current_mailbox_utf8, "Sent");
+    push(ATT_GRAPHICS); push(ATT_SAVE); asl_drawer = second;
+    save_current_attachments(gui);
+    assert(!strcmp(last_initial_drawer, first) && saved_mask == 2U);
+    drawer_assert_stored(second); clean();
+    gui->active_account = 0U; strcpy(gui->current_mailbox_utf8, "INBOX");
+
+    /* Neither cancelled requester nor a failed/all-cancelled export changes it. */
+    reset(); push(ATT_SAVE); cancel_asl = 1; asl_drawer = first;
+    save_current_attachments(gui); assert(!saved_mask && !replace_calls);
+    drawer_assert_stored(second); clean();
+    reset(); push(ATT_CANCEL); save_current_attachments(gui);
+    assert(!saved_mask && !last_initial_drawer[0] && !replace_calls); clean();
+    reset(); push(ATT_SAVE); fail_asl = 1; save_current_attachments(gui);
+    assert(!saved_mask && !replace_calls); clean();
+    reset(); push(ATT_SAVE); asl_drawer = first; export_fail_mask = 7U;
+    save_current_attachments(gui); assert(!saved_mask && !replace_calls);
+    drawer_assert_stored(second); clean();
+    reset(); push(ATT_SAVE); asl_drawer = first; export_cancel_index = 0;
+    save_current_attachments(gui); assert(!saved_mask && !replace_calls);
+    drawer_assert_stored(second); clean();
+
+    /* One saved attachment counts, even if a later one is cancelled/fails. */
+    reset(); push(ATT_SAVE); asl_drawer = first; export_cancel_index = 2;
+    save_current_attachments(gui); assert(saved_mask == 1U && replace_calls == 1);
+    drawer_assert_stored(first); clean();
+    reset(); push(ATT_SAVE); asl_drawer = second; export_fail_mask = 4U;
+    save_current_attachments(gui); assert(saved_mask == 1U && replace_calls == 1);
+    drawer_assert_stored(second); clean();
+
+    /* Unavailable disks/files fall back silently but do not erase the preference. */
+    reset(); strcpy(unavailable_drawer, second); cancel_asl = 1; push(ATT_SAVE);
+    save_current_attachments(gui); assert(!last_initial_drawer[0]);
+    drawer_assert_stored(second); clean();
+    reset(); cancel_asl = 1; push(ATT_SAVE); save_current_attachments(gui);
+    assert(!strcmp(last_initial_drawer, second)); clean();
+    reset(); strcpy(file_not_drawer, second); cancel_asl = 1; push(ATT_SAVE);
+    save_current_attachments(gui); assert(!last_initial_drawer[0]); clean();
+    reset(); fail_fib = 1; cancel_asl = 1; push(ATT_SAVE);
+    save_current_attachments(gui); assert(!last_initial_drawer[0]); clean();
+    reset(); fail_examine = 1; cancel_asl = 1; push(ATT_SAVE);
+    save_current_attachments(gui); assert(!last_initial_drawer[0]); clean();
+
+    /* An unwritable preference retains the previous disk state and the new
+     * in-session directory, then retries on a later successful export. */
+    reset(); fail_replace = 1; push(ATT_SAVE); asl_drawer = first;
+    save_current_attachments(gui); assert(saved_mask == 5U && attachment_drawer_dirty);
+    assert(!strcmp(attachment_last_drawer, first)); drawer_assert_stored(second);
+    assert(strstr(last_status, "2 saved, 0 failed.")); clean();
+    reset(); push(ATT_SAVE); asl_drawer = first; save_current_attachments(gui);
+    assert(!strcmp(last_initial_drawer, first) && replace_calls == 1);
+    assert(!attachment_drawer_dirty); drawer_assert_stored(first); clean();
+    reset(); fail_pref_dir = 1; push(ATT_SAVE); asl_drawer = second;
+    save_current_attachments(gui); assert(saved_mask == 5U && attachment_drawer_dirty);
+    drawer_assert_stored(first); clean();
+    reset(); push(ATT_SAVE); asl_drawer = second; save_current_attachments(gui);
+    drawer_assert_stored(second); clean();
+
+    /* Reject truncation: do not export to a different, shortened directory. */
+    memset(long_path, 'x', sizeof(long_path)); memcpy(long_path, "Work:", 5U);
+    long_path[sizeof(long_path) - 1U] = 0;
+    reset(); push(ATT_SAVE); asl_drawer = long_path; save_current_attachments(gui);
+    assert(!saved_mask && !replace_calls && strstr(last_status, "File path is too long."));
+    drawer_assert_stored(second); clean();
+
+    /* Exactly the supported path length round-trips, including the final NUL. */
+    long_path[COMPOSE_PATH_MAX - 1U] = 0;
+    reset(); push(ATT_SAVE); asl_drawer = long_path; save_current_attachments(gui);
+    assert(saved_mask == 5U); drawer_assert_stored(long_path); clean();
+    drawer_simulate_restart(); reset(); push(ATT_SAVE); cancel_asl = 1;
+    save_current_attachments(gui); assert(!strcmp(last_initial_drawer, long_path)); clean();
+    memset(long_path, 'x', sizeof(long_path)); memcpy(long_path, "Work:", 5U);
+    long_path[sizeof(long_path) - 1U] = 0;
+
+    /* Explicit native paths preserve assigns; relative selections become absolute. */
+    reset(); push(ATT_SAVE); asl_drawer = "relative"; save_current_attachments(gui);
+    drawer_assert_stored("Work:Exports/Relative"); clean();
+    reset(); push(ATT_SAVE); fail_name = 1; asl_drawer = "relative";
+    save_current_attachments(gui); assert(saved_mask == 5U && !replace_calls); clean();
+    reset(); push(ATT_SAVE); asl_drawer = "RAM:"; save_current_attachments(gui);
+    drawer_assert_stored("RAM:"); clean();
+
+    /* Malformed/truncated/wrong-version/oversized records cannot become defaults. */
+    for (i = 0U; i < 5U; ++i) {
+        reset(); drawer_clear_state();
+        file = fopen(ATTACHMENT_DRAWER_STATE, "wb"); assert(file);
+        if (i != 0U)
+            assert(fwrite(ATTACHMENT_DRAWER_HEADER, 1U,
+                sizeof(ATTACHMENT_DRAWER_HEADER) - 1U, file) ==
+                sizeof(ATTACHMENT_DRAWER_HEADER) - 1U);
+        if (i == 0U) assert(fwrite("wrong\nWork:Mail", 1U, 15U, file) == 15U);
+        if (i == 1U) assert(fwrite("Work:Mail", 1U, 9U, file) == 9U); /* no NUL */
+        if (i == 2U) assert(fwrite("Work:Mail\0junk", 1U, 15U, file) == 15U);
+        if (i == 3U) assert(fwrite(long_path, 1U, sizeof(long_path), file) == sizeof(long_path));
+        if (i == 4U) assert(fwrite("relative", 1U, 9U, file) == 9U);
+        assert(fclose(file) == 0);
+        cancel_asl = 1; push(ATT_SAVE); save_current_attachments(gui);
+        assert(!last_initial_drawer[0] && !attachment_last_drawer[0]); clean();
+    }
+    reset(); drawer_clear_state();
+    puts("Attachment drawer: persistence, account sharing, cancellation, missing disk, write failure and bounds passed.");
 }
 
 static void test_percent_math(void)
@@ -617,6 +897,54 @@ static void test_gauge_construction(AmgGui *gui)
     FuelGaugeBase = &gauge_library;
 }
 
+static void test_cancel_scroller_width(AmgGui *gui)
+{
+    struct Gadget scroller;
+    struct Gadget *saved = gui->preview_scroller;
+    unsigned width, height;
+    int native;
+    Object *row;
+    memset(&scroller, 0, sizeof(scroller));
+    test_preview_scroller = &scroller;
+    gui->preview_scroller = &scroller;
+    preview_domain_queries = 0U;
+    for (native = 0; native <= 1; ++native) {
+        FuelGaugeBase = native ? &gauge_library : NULL;
+        for (width = 10U; width <= 40U; width += 2U) {
+            for (height = 10U; height <= 30U; height += 2U) {
+                reset(); test_preview_width = (UWORD)width;
+                /* A stale/pre-layout width must NOT override MinWidth. */
+                scroller.Width = 99;
+                status_test_height = height;
+                row = gui_transfer_create_status_row(gui);
+                assert(row && row->count == 3U);
+                assert(row->min_width[2] == width);
+                assert(row->max_width[2] == width);
+                assert(row->weight_width[2] == 0UL);
+                assert(row->min_height[2] == height);
+                assert(row->max_height[2] == height);
+                assert(row->min_width[1] == 104UL);
+                assert(scroller.Width == 99);
+                DisposeObject(row); clean();
+            }
+        }
+    }
+    assert(preview_domain_queries == 2U * 16U * 11U);
+    /* Graceful fallback if a class cannot provide a valid minimum. */
+    reset(); test_preview_width = 0U; scroller.Width = 23;
+    row = gui_transfer_create_status_row(gui);
+    assert(row && row->min_width[2] == 23UL && row->max_width[2] == 23UL);
+    DisposeObject(row); clean();
+    reset(); scroller.Width = 0;
+    row = gui_transfer_create_status_row(gui);
+    assert(row && row->min_width[2] == GUI_SCROLLBAR_WIDTH);
+    DisposeObject(row); clean();
+    gui->preview_scroller = saved; test_preview_scroller = NULL;
+    gui->status_gadget = gui->transfer_gadget = gui->transfer_cancel_gadget = NULL;
+    FuelGaugeBase = &gauge_library;
+    puts("Cancel width: 352 native/fallback gauge, scrollbar-width and height combinations passed.");
+}
+
 static void test_status_row(AmgGui *gui)
 {
     Object *row;
@@ -684,6 +1012,8 @@ int main(void)
     test_selection(&gui); test_failures(&gui); test_export_and_progress(&gui);
     test_percent_math(); test_status_progress(&gui); test_gauge_construction(&gui);
     test_status_row(&gui);
+    test_cancel_scroller_width(&gui);
+    test_remember_attachment_drawer(&gui);
     puts("Dialog/export regressions, scoped status progress, cancellation and overflow tests: passed.");
     puts("API doubles only: no real ReAction, m68k ABI or screen rendering tested.");
     return 0;

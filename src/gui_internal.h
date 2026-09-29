@@ -3,6 +3,8 @@
 
 #include "gui.h"
 #include "network_task.h"
+#include "periodic.h"
+#include "herald.h"
 
 #if AMIGMAIL_AMIGA
 
@@ -140,6 +142,7 @@ typedef struct GuiAccountRuntime {
 
 struct AmgGui {
     AmgAccountSet *account_set;
+    AmgHerald *herald; /* GUI-task-owned, lazily created optional client. */
     AmgAccount *account;
     AmgNetwork *network;
     AmgNetwork *networks[AMG_MAX_ACCOUNTS];
@@ -254,6 +257,7 @@ struct AmgGui {
     struct timerequest *periodic_timer_request;
     int periodic_timer_device_open;
     int periodic_timer_pending;
+    AmgPeriodicSchedule periodic_schedule;
     int periodic_check_pending;
     unsigned long inbox_latest_uid;
     unsigned long inbox_uid_validity;
@@ -366,6 +370,12 @@ void gui_iconify(AmgGui *gui);
 int gui_uniconify(AmgGui *gui);
 int gui_notify_preview_sound(AmgGui *gui, const char *path);
 void gui_notify_cleanup(void);
+void gui_herald_new_mail(AmgGui *gui, size_t account_slot,
+                         unsigned long count, const unsigned char *payload,
+                         size_t payload_length, unsigned long previous_uid);
+AmgHeraldResult gui_herald_test(AmgGui *gui, size_t account_slot,
+                                const char *account_name);
+const char *gui_herald_result_text(AmgHeraldResult result);
 void gui_notify_new_mail(AmgGui *gui);
 void gui_notify_new_mail_for_account(AmgGui *gui,
                                      const AmgAccount *account);
@@ -384,11 +394,13 @@ void handle_mailto_requests(AmgGui *gui, AmgMailtoServer *server,
 
 /* GUI controller/action module entry points. Private to src/gui_*.c. */
 void handle_network(AmgGui *gui);
-void periodic_fetch_mail(AmgGui *gui, AmgError *error);
+void periodic_fetch_mail(AmgGui *gui, unsigned long due_accounts, AmgError *error);
 void fetch_mail(AmgGui *gui, AmgError *error);
 void cancel_pending_move(AmgGui *gui);
 void handle_main_gadget(AmgGui *gui, ULONG gadget_id, AmgError *error);
 void handle_main_shortcut(AmgGui *gui, char letter, AmgError *error);
+void gui_reply_popup_close(AmgGui *gui);
+void gui_reply_popup_finish_input(AmgGui *gui);
 #define MENU_ACCOUNT FULLMENUNUM(0, 0, NOSUB)
 #define MENU_CONTACTS FULLMENUNUM(0, 2, NOSUB)
 #define MENU_SIGNATURE FULLMENUNUM(0, 3, NOSUB)

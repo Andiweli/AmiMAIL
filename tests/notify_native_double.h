@@ -58,7 +58,10 @@ struct IORequest *CheckIO(struct IORequest *io); LONG AbortIO(struct IORequest *
 struct Process *CreateNewProcTags(ULONG tag, ...);
 Object *test_NewDTObjectA(APTR path, const struct TagItem *tags);
 ULONG test_DoDTMethodA(Object *obj, void *window, void *requester, Msg msg);
-struct DTMethod *test_GetDTTriggerMethods(Object *object);
+/* Classic NDK prototypes use an opaque plural tag although the table
+ * elements are struct DTMethod in datatypesclass.h. */
+struct DTMethods;
+struct DTMethods *test_GetDTTriggerMethods(Object *object);
 void test_DisposeDTObject(Object *object);
 void test_base(struct Library *base);
 #define NewDTObjectA(path, tags) (test_base(DataTypesBase), test_NewDTObjectA(path, tags))

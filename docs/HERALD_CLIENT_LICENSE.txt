@@ -1,0 +1,84 @@
+Herald -- Licence
+=================
+
+Copyright (C) 2026 Marcus Gerards. All rights reserved.
+
+This licence covers the Herald software -- the Herald notification server
+commodity, its preferences editor HeraldPrefs, the HeraldSend and
+HeraldPipe commands and the client code for other programs -- together
+with their documentation, catalogs, themes, icons, ARexx scripts and other
+supplied files (the "Software").
+
+
+THE EMOJI ARTWORK
+
+The emoji pictures in the Emoji drawer are not part of the Software and
+this licence does not cover them. All emojis designed by OpenMoji - the
+open-source emoji and icon project. License: CC BY-SA 4.0. They were
+converted for the Amiga (see LICENSE-OpenMoji.txt beside them, which says
+what was changed); the converted pictures are licensed CC BY-SA 4.0 as
+well, and anyone may use, share and adapt them under those terms:
+
+  https://openmoji.org/
+  https://creativecommons.org/licenses/by-sa/4.0/
+
+
+PERMITTED USE
+
+You may download, install and use the Software free of charge for your own
+private and personal purposes.
+
+
+NO SALE
+
+The Software may not be sold or otherwise distributed commercially, in
+whole or in part, without the prior written permission of the author.
+
+
+NO BUNDLING
+
+The Software may not be bundled or combined with any other software,
+hardware, magazine, cover disk, collection or product without the prior
+written permission of the author.
+
+
+NO REPUBLISHING
+
+The Software may not otherwise be published, redistributed or mirrored, in
+any form, whether modified or unmodified, without the prior written
+permission of the author.
+
+
+EXCEPTIONS
+
+Two things are allowed without asking first, and NO SALE, NO BUNDLING and
+NO REPUBLISHING do not apply to them:
+
+1. Aminet and cover disks. The unmodified Herald archive, exactly as the
+   author released it, may be distributed through Aminet and its mirrors,
+   on Aminet CD-ROMs, and on the cover disks and cover CDs of magazines.
+
+2. The HeraldSend source. Every file in the archive's Developer/HeraldSend
+   drawer except heraldpipe.c -- the source of the HeraldSend command and
+   the client code it is built from -- may be copied, changed and used in
+   your own programs, and distributed as part of them.
+
+
+PERMISSION REQUESTS
+
+To sell, bundle, publish or otherwise distribute the Software, please
+contact the author first to obtain written permission:
+
+  Marcus Gerards
+  marcus.gerards@googlemail.com
+
+
+NO WARRANTY
+
+The Software is provided "as is", without warranty of any kind, express or
+implied, including but not limited to the warranties of merchantability,
+fitness for a particular purpose and noninfringement. In no event shall the
+author be liable for any claim, damages or other liability arising from, out
+of or in connection with the Software or its use.
+
+All rights not expressly granted above are reserved by the author.

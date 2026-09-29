@@ -2,6 +2,7 @@
 #include "i18n.h"
 
 #include <stdint.h>
+#include <string.h>
 
 #if AMIGMAIL_AMIGA
 
@@ -13,10 +14,18 @@
 #include <proto/exec.h>
 #include <proto/intuition.h>
 #include <proto/window.h>
+#ifndef __NOLIBBASE__
+#define __NOLIBBASE__
+#define AMG_PERIODIC_RESTORE_LIBBASE
+#endif
+#include <proto/timer.h>
+#ifdef AMG_PERIODIC_RESTORE_LIBBASE
+#undef __NOLIBBASE__
+#undef AMG_PERIODIC_RESTORE_LIBBASE
+#endif
 #include <reaction/reaction.h>
 #include <reaction/reaction_macros.h>
 
-#define GUI_PERIODIC_FETCH_SECONDS 300UL
 #define T(id, en) amg_tr((id), (en))
 
 static int any_periodic_account_enabled(const AmgGui *gui)
@@ -49,14 +58,38 @@ static void periodic_timer_disarm(AmgGui *gui)
     periodic_timer_clear_signal(gui);
 }
 
+static uint32_t periodic_clock_seconds(const AmgGui *gui)
+{
+    struct EClockVal ticks;
+    struct Device *TimerBase = gui->periodic_timer_request->tr_node.io_Device;
+    ULONG frequency;
+    (void)TimerBase; /* Used implicitly by the classic GCC timer inline. */
+    frequency = ReadEClock(&ticks);
+    if (!frequency) return 0U;
+    return (uint32_t)((((uint64_t)ticks.ev_hi << 32) | ticks.ev_lo) /
+                      (uint64_t)frequency);
+}
+
 static void periodic_timer_arm(AmgGui *gui)
 {
-    if (!gui || !gui->periodic_timer_request ||
-        !gui->periodic_timer_device_open || gui->periodic_timer_pending ||
-        !any_periodic_account_enabled(gui))
+    uint32_t now;
+    unsigned long wait_seconds;
+    size_t slot;
+    if (!gui || !gui->account_set || !gui->periodic_timer_request ||
+        !gui->periodic_timer_device_open || gui->periodic_timer_pending)
         return;
+    now = periodic_clock_seconds(gui);
+    for (slot = 0U; slot < AMG_MAX_ACCOUNTS; ++slot) {
+        const AmgAccount *account = &gui->account_set->accounts[slot];
+        amg_periodic_configure(&gui->periodic_schedule, slot,
+            account->enabled && account->periodic_fetch &&
+                !account_is_locked(account),
+            account->periodic_fetch_minutes, now);
+    }
+    wait_seconds = amg_periodic_wait(&gui->periodic_schedule, now);
+    if (!wait_seconds) return;
     gui->periodic_timer_request->tr_node.io_Command = TR_ADDREQUEST;
-    gui->periodic_timer_request->tr_time.tv_secs = GUI_PERIODIC_FETCH_SECONDS;
+    gui->periodic_timer_request->tr_time.tv_secs = wait_seconds;
     gui->periodic_timer_request->tr_time.tv_micro = 0UL;
     SendIO((struct IORequest *)gui->periodic_timer_request);
     gui->periodic_timer_pending = 1;
@@ -116,6 +149,7 @@ void periodic_timer_cleanup(AmgGui *gui)
         gui->periodic_timer_port = NULL;
     }
     gui->periodic_timer_pending = 0;
+    memset(&gui->periodic_schedule, 0, sizeof(gui->periodic_schedule));
 }
 
 static ULONG periodic_timer_signal_mask(const AmgGui *gui)
@@ -135,6 +169,7 @@ void gui_iconify(AmgGui *gui)
     ULONG window_value = 0UL;
     if (!gui || !gui->window_object || !gui->window || gui->iconified)
         return;
+    gui_reply_popup_close(gui);
     gui_state_save_window(gui);
     (void)DoMethod(gui->window_object, WM_ICONIFY);
     GetAttr(WINDOW_Window, gui->window_object, &window_value);
@@ -175,7 +210,8 @@ ULONG gui_runtime_signal_mask(AmgGui *gui)
            app_port_signal_mask(gui) |
            network_signals |
            periodic_timer_signal_mask(gui) |
-           gui->preview_url_signal_mask;
+           gui->preview_url_signal_mask |
+           amg_herald_signal_mask(gui->herald);
 }
 
 void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
@@ -187,6 +223,7 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
     ULONG timer_signal;
 
     if (!gui) return;
+    amg_herald_poll(gui->herald);
     app_signal = app_port_signal_mask(gui);
     {
         size_t index;
@@ -219,8 +256,12 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
             WaitIO((struct IORequest *)gui->periodic_timer_request);
             gui->periodic_timer_pending = 0;
             periodic_timer_clear_signal(gui);
-            periodic_timer_arm(gui);
-            periodic_fetch_mail(gui, error);
+            {
+                unsigned long due_accounts = amg_periodic_take_due(
+                    &gui->periodic_schedule, periodic_clock_seconds(gui));
+                periodic_timer_arm(gui);
+                periodic_fetch_mail(gui, due_accounts, error);
+            }
         } else {
             periodic_timer_clear_signal(gui);
         }
@@ -242,6 +283,7 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
 
             switch (result & WMHI_CLASSMASK) {
                 case WMHI_CLOSEWINDOW:
+                    gui_reply_popup_close(gui);
                     gui->running = 0;
                     break;
                 case WMHI_ICONIFY:
@@ -267,6 +309,7 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
                     handle_menu(gui, result & 0xffffUL, error);
                     break;
                 case WMHI_RAWKEY:
+                    if (rawkey_is_cancel(result)) gui_reply_popup_close(gui);
                     if (rawkey_is_rcommand_letter(
                             gui->window_object, result, 'A')) {
                         handle_main_gadget(gui, GID_FETCH, error);
@@ -284,6 +327,7 @@ void gui_runtime_process_signals(AmgGui *gui, ULONG signals,
             }
         }
 
+        gui_reply_popup_finish_input(gui);
         if (redraw_overlays && gui->window)
             draw_window_overlays(gui);
     }

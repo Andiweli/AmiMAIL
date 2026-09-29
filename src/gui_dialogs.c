@@ -10,7 +10,9 @@
 #include <classes/window.h>
 #include <dos/dos.h>
 #include <gadgets/button.h>
+#include <gadgets/checkbox.h>
 #include <gadgets/clicktab.h>
+#include <gadgets/chooser.h>
 #include <gadgets/layout.h>
 #include <gadgets/string.h>
 #include <intuition/classes.h>
@@ -18,7 +20,10 @@
 #include <libraries/asl.h>
 #include <proto/asl.h>
 #include <proto/button.h>
+#include <proto/checkbox.h>
 #include <proto/clicktab.h>
+#include <proto/chooser.h>
+#include <proto/graphics.h>
 #include <proto/dos.h>
 #include <proto/exec.h>
 #include <proto/intuition.h>
@@ -36,16 +41,39 @@
 #endif
 #define ButtonObject NewObject(NULL,(CONST_STRPTR)"button.gadget"
 #define GUI_ACCOUNT_LABEL_WIDTH 150
+#define GUI_ACCOUNT_SMALL_BUTTON_WIDTH 32
 #define GUI_ABOUT_BANNER_WIDTH 170L
 #define GUI_ABOUT_BANNER_HEIGHT 28L
 #define GUI_RAWKEY_NP_ENTER 0x43UL
 #define GUI_RAWKEY_RETURN 0x44UL
 #define GUI_RAWKEY_ESCAPE 0x45UL
 #define T(id, en) amg_tr((id), (en))
-enum AccountGadgetId { GID_ACCOUNT_CONFIG_TABS=100,GID_ACCOUNT_ADD,GID_ACCOUNT_DELETE,GID_ACCOUNT_MOVE_LEFT,GID_ACCOUNT_MOVE_RIGHT,GID_ACCOUNT_ENABLED,GID_ACCOUNT_ACCOUNT_NAME,GID_ACCOUNT_NAME,GID_ACCOUNT_EMAIL,GID_ACCOUNT_IMAP_HOST,GID_ACCOUNT_IMAP_PORT,GID_ACCOUNT_IMAP_STARTTLS,GID_ACCOUNT_IMAP_USERNAME,GID_ACCOUNT_IMAP_PASSWORD,GID_ACCOUNT_SMTP_HOST,GID_ACCOUNT_SMTP_PORT,GID_ACCOUNT_SMTP_STARTTLS,GID_ACCOUNT_SMTP_SAME_CREDENTIALS,GID_ACCOUNT_SMTP_USERNAME,GID_ACCOUNT_SMTP_PASSWORD,GID_ACCOUNT_FOLDER_MAPPING,GID_ACCOUNT_FETCH_DAYS,GID_ACCOUNT_FETCH_ON_START,GID_ACCOUNT_PERIODIC_FETCH,GID_ACCOUNT_NOTIFICATION_SOUND,GID_ACCOUNT_NOTIFICATION_PATH,GID_ACCOUNT_NOTIFICATION_CHOOSE,GID_ACCOUNT_STATUS,GID_ACCOUNT_SAVE,GID_ACCOUNT_CANCEL };
+enum AccountGadgetId { GID_ACCOUNT_CONFIG_TABS=100,GID_ACCOUNT_ADD,GID_ACCOUNT_DELETE,GID_ACCOUNT_MOVE_LEFT,GID_ACCOUNT_MOVE_RIGHT,GID_ACCOUNT_ENABLED,GID_ACCOUNT_ACCOUNT_NAME,GID_ACCOUNT_NAME,GID_ACCOUNT_EMAIL,GID_ACCOUNT_IMAP_HOST,GID_ACCOUNT_IMAP_PORT,GID_ACCOUNT_IMAP_STARTTLS,GID_ACCOUNT_IMAP_USERNAME,GID_ACCOUNT_IMAP_PASSWORD,GID_ACCOUNT_SMTP_HOST,GID_ACCOUNT_SMTP_PORT,GID_ACCOUNT_SMTP_STARTTLS,GID_ACCOUNT_SMTP_SAME_CREDENTIALS,GID_ACCOUNT_SMTP_USERNAME,GID_ACCOUNT_SMTP_PASSWORD,GID_ACCOUNT_FOLDER_MAPPING,GID_ACCOUNT_FETCH_DAYS,GID_ACCOUNT_FETCH_ON_START,GID_ACCOUNT_PERIODIC_FETCH,GID_ACCOUNT_NOTIFICATION_SOUND,GID_ACCOUNT_NOTIFICATION_PATH,GID_ACCOUNT_NOTIFICATION_CHOOSE,GID_ACCOUNT_STATUS,GID_ACCOUNT_SAVE,GID_ACCOUNT_CANCEL,GID_ACCOUNT_HERALD,GID_ACCOUNT_HERALD_TEST,GID_ACCOUNT_PERIODIC_INTERVAL };
 enum FolderMappingGadgetId { GID_FOLDER_SENT=140,GID_FOLDER_DRAFTS,GID_FOLDER_ALL,GID_FOLDER_SPAM,GID_FOLDER_TRASH,GID_FOLDER_SAVE_SENT,GID_FOLDER_OK,GID_FOLDER_CANCEL };
 enum ConfirmGadgetId { GID_CONFIRM_YES=300,GID_CONFIRM_NO };
 enum AboutGadgetId { GID_ABOUT_OK=400 };
+
+/* The labels remain separate layout children to preserve the established
+ * account-dialog columns and spacing. checkbox.gadget owns the checkmark and
+ * selection state. CHECKBOX_Checked aliases GA_Selected in the classic NDK,
+ * so the existing read/write and GADGETUP paths stay unchanged.
+ * Use the opened class directly: no public class-name lookup, button glyph,
+ * custom rendering or manual state toggle is involved. */
+static struct Gadget *native_checkbox(ULONG gadget_id, int selected)
+{
+    Class *checkbox_class;
+    struct TagItem tags[] = {
+        { GA_ID, gadget_id },
+        { GA_RelVerify, TRUE },
+        { CHECKBOX_Checked, selected ? TRUE : FALSE },
+        { TAG_DONE, 0UL }
+    };
+
+    if (!CheckBoxBase) return NULL;
+    checkbox_class = CHECKBOX_GetClass();
+    if (!checkbox_class) return NULL;
+    return (struct Gadget *)NewObjectA(checkbox_class, NULL, tags);
+}
 
 static int requester_rawkey_accept(ULONG key)
 {
@@ -195,7 +223,9 @@ static int account_settings_equal(const AmgAccount *left,
         left->enabled == right->enabled &&
         left->fetch_on_start == right->fetch_on_start &&
         left->periodic_fetch == right->periodic_fetch &&
+        left->periodic_fetch_minutes == right->periodic_fetch_minutes &&
         left->notification_sound == right->notification_sound &&
+        left->herald_notifications == right->herald_notifications &&
         !strcmp(left->notification_sound_path,
                 right->notification_sound_path);
 }
@@ -409,13 +439,8 @@ static int system_folder_mapping_dialog(AmgGui *gui,
                 CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
                 CHILD_WeightedWidth, 0,
                 LAYOUT_AddChild,
-                    save_sent_gadget = (struct Gadget *)ButtonObject,
-                        GA_ID, GID_FOLDER_SAVE_SENT,
-                        GA_RelVerify, TRUE,
-                        GA_Selected, *save_sent_copy ? TRUE : FALSE,
-                        BUTTON_AutoButton, BAG_CHECKBOX,
-                        BUTTON_PushButton, TRUE,
-                    EndObject,
+                    save_sent_gadget = native_checkbox(
+                        GID_FOLDER_SAVE_SENT, *save_sent_copy),
                 CHILD_MinWidth, 24,
                 CHILD_MaxWidth, 24,
                 CHILD_WeightedWidth, 0,
@@ -526,8 +551,10 @@ typedef struct AccountPageGadgets {
     struct Gadget *fetch_days;
     struct Gadget *fetch_on_start;
     struct Gadget *periodic_fetch;
+    struct Gadget *periodic_interval;
     struct Gadget *notification_sound;
     struct Gadget *notification_path;
+    struct Gadget *herald_notifications;
 } AccountPageGadgets;
 
 static int account_page_collect(
@@ -629,8 +656,14 @@ static int account_page_collect(
     candidate->fetch_on_start = selected ? 1 : 0;
     GetAttr(GA_Selected, (Object *)page->periodic_fetch, &selected);
     candidate->periodic_fetch = selected ? 1 : 0;
+    selected = 2UL;
+    GetAttr(CHOOSER_Selected, (Object *)page->periodic_interval, &selected);
+    candidate->periodic_fetch_minutes =
+        amg_periodic_interval_minutes((size_t)selected);
     GetAttr(GA_Selected, (Object *)page->notification_sound, &selected);
     candidate->notification_sound = selected ? 1 : 0;
+    GetAttr(GA_Selected, (Object *)page->herald_notifications, &selected);
+    candidate->herald_notifications = selected ? 1 : 0;
     snprintf(candidate->notification_sound_path,
              sizeof(candidate->notification_sound_path), "%s",
              string_text(page->notification_path));
@@ -695,8 +728,15 @@ static void account_page_show(
                    account->fetch_on_start ? TRUE : FALSE, TAG_DONE);
     SetGadgetAttrs(page->periodic_fetch, window, NULL, GA_Selected,
                    account->periodic_fetch ? TRUE : FALSE, TAG_DONE);
+    SetGadgetAttrs(page->periodic_interval, window, NULL,
+                   CHOOSER_Selected, (ULONG)amg_periodic_interval_index(
+                       account->periodic_fetch_minutes),
+                   GA_Disabled, account->periodic_fetch ? FALSE : TRUE,
+                   TAG_DONE);
     SetGadgetAttrs(page->notification_sound, window, NULL, GA_Selected,
                    account->notification_sound ? TRUE : FALSE, TAG_DONE);
+    SetGadgetAttrs(page->herald_notifications, window, NULL, GA_Selected,
+                   account->herald_notifications ? TRUE : FALSE, TAG_DONE);
     utf8_to_local_copy(account->sent_mailbox, sent_mailbox, 512U);
     utf8_to_local_copy(account->drafts_mailbox, drafts_mailbox, 512U);
     utf8_to_local_copy(account->all_mailbox, all_mailbox, 512U);
@@ -1105,7 +1145,15 @@ static int account_order_move_configured_slot(
     struct Gadget *smtp_username_gadget, *smtp_password_gadget;
     struct Gadget *fetch_days_gadget;
     struct Gadget *fetch_on_start_gadget, *periodic_fetch_gadget;
+    struct Gadget *periodic_interval_gadget = NULL;
+    char interval_text[AMG_PERIODIC_INTERVAL_COUNT][16];
+    STRPTR interval_labels[AMG_PERIODIC_INTERVAL_COUNT + 1U];
+    size_t interval_index;
+    ULONG account_label_width = GUI_ACCOUNT_LABEL_WIDTH;
     struct Gadget *notification_sound_gadget, *notification_sound_path_gadget;
+    struct Gadget *herald_notifications_gadget = NULL;
+    int herald_test_pending = 0;
+    size_t herald_test_account = 0U;
     struct Gadget *dialog_status;
     AccountPageGadgets page;
     AmgAccount drafts[AMG_MAX_ACCOUNTS];
@@ -1134,6 +1182,29 @@ static int account_order_move_configured_slot(
     int done = 0, changed = 0;
     int network_was_running[AMG_MAX_ACCOUNTS];
 
+    for (interval_index = 0U; interval_index < AMG_PERIODIC_INTERVAL_COUNT;
+         ++interval_index) {
+        amg_tr_snprintf(interval_text[interval_index],
+                        sizeof(interval_text[interval_index]),
+                        MSG_PERIODIC_INTERVAL_MINUTES, "%lu min",
+                        (unsigned long)amg_periodic_interval_minutes(interval_index));
+        interval_labels[interval_index] = (STRPTR)interval_text[interval_index];
+    }
+    interval_labels[AMG_PERIODIC_INTERVAL_COUNT] = NULL;
+    if (gui->screen) {
+        const char *labels[] = {
+            T(MSG_EMAIL_RETRIEVAL_LABEL, "Email retrieval:"),
+            T(MSG_NOTIFICATIONS_LABEL, "Notifications:"),
+            T(MSG_EXTERNAL_LABEL, "External:")
+        };
+        size_t i;
+        for (i = 0U; i < sizeof(labels) / sizeof(labels[0]); ++i) {
+            LONG width = TextLength(&gui->screen->RastPort,
+                (CONST_STRPTR)labels[i], (ULONG)strlen(labels[i]));
+            if (width > (LONG)account_label_width)
+                account_label_width = (ULONG)width;
+        }
+    }
     memset(&page, 0, sizeof(page));
     memset(configured_slots, 0, sizeof(configured_slots));
     memset(deleted_slots, 0, sizeof(deleted_slots));
@@ -1347,17 +1418,11 @@ static int account_order_move_configured_slot(
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(
                         T(MSG_ACTIVE_ACCOUNT, "Active account:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
-                        enabled_gadget = (struct Gadget *)ButtonObject,
-                            GA_ID, GID_ACCOUNT_ENABLED,
-                            GA_RelVerify, TRUE,
-                            GA_Selected,
-                                gui->account->enabled ? TRUE : FALSE,
-                            BUTTON_AutoButton, BAG_CHECKBOX,
-                            BUTTON_PushButton, TRUE,
-                        EndObject,
+                        enabled_gadget = native_checkbox(
+                            GID_ACCOUNT_ENABLED, gui->account->enabled),
                     CHILD_MinWidth, 24,
                     CHILD_MaxWidth, 24,
                     CHILD_WeightedWidth, 0,
@@ -1371,7 +1436,7 @@ static int account_order_move_configured_slot(
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(
                         T(MSG_ACCOUNT_NAME, "Account name:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         account_name_gadget = (struct Gadget *)StringObject,
@@ -1388,7 +1453,7 @@ static int account_order_move_configured_slot(
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(
                         T(MSG_SENDER_NAME, "Sender name:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         name_gadget = (struct Gadget *)StringObject,
@@ -1404,7 +1469,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_EMAIL_ADDRESS_F1D2, "Email address:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         email_gadget = (struct Gadget *)StringObject,
@@ -1420,7 +1485,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_IMAP_SERVER_PORT, "IMAP server / port:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild, HGroupObject,
                         LAYOUT_SpaceOuter, FALSE,
@@ -1451,18 +1516,12 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_IMAP_SECURITY, "IMAP security:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
-                        imap_starttls_gadget =
-                            (struct Gadget *)ButtonObject,
-                            GA_ID, GID_ACCOUNT_IMAP_STARTTLS,
-                            GA_RelVerify, TRUE,
-                            GA_Selected,
-                                gui->account->imap_starttls ? TRUE : FALSE,
-                            BUTTON_AutoButton, BAG_CHECKBOX,
-                            BUTTON_PushButton, TRUE,
-                        EndObject,
+                        imap_starttls_gadget = native_checkbox(
+                            GID_ACCOUNT_IMAP_STARTTLS,
+                            gui->account->imap_starttls),
                     CHILD_MinWidth, 24,
                     CHILD_MaxWidth, 24,
                     CHILD_WeightedWidth, 0,
@@ -1474,7 +1533,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_IMAP_USER, "IMAP user:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         imap_username_gadget = (struct Gadget *)StringObject,
@@ -1490,7 +1549,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_IMAP_PASSWORD, "IMAP password:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         imap_password_gadget = (struct Gadget *)StringObject,
@@ -1509,7 +1568,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_SMTP_SERVER_PORT, "SMTP server / port:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild, HGroupObject,
                         LAYOUT_SpaceOuter, FALSE,
@@ -1540,18 +1599,12 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_SMTP_SECURITY, "SMTP security:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
-                        smtp_starttls_gadget =
-                            (struct Gadget *)ButtonObject,
-                            GA_ID, GID_ACCOUNT_SMTP_STARTTLS,
-                            GA_RelVerify, TRUE,
-                            GA_Selected,
-                                gui->account->smtp_starttls ? TRUE : FALSE,
-                            BUTTON_AutoButton, BAG_CHECKBOX,
-                            BUTTON_PushButton, TRUE,
-                        EndObject,
+                        smtp_starttls_gadget = native_checkbox(
+                            GID_ACCOUNT_SMTP_STARTTLS,
+                            gui->account->smtp_starttls),
                     CHILD_MinWidth, 24,
                     CHILD_MaxWidth, 24,
                     CHILD_WeightedWidth, 0,
@@ -1566,18 +1619,12 @@ static int account_order_move_configured_slot(
                         LAYOUT_SpaceOuter, FALSE,
                         LAYOUT_SpaceInner, FALSE,
                     EndObject,
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
-                        smtp_same_credentials_gadget =
-                            (struct Gadget *)ButtonObject,
-                            GA_ID, GID_ACCOUNT_SMTP_SAME_CREDENTIALS,
-                            GA_RelVerify, TRUE,
-                            GA_Selected,
-                                gui->account->smtp_same_credentials ? TRUE : FALSE,
-                            BUTTON_AutoButton, BAG_CHECKBOX,
-                            BUTTON_PushButton, TRUE,
-                        EndObject,
+                        smtp_same_credentials_gadget = native_checkbox(
+                            GID_ACCOUNT_SMTP_SAME_CREDENTIALS,
+                            gui->account->smtp_same_credentials),
                     CHILD_MinWidth, 24,
                     CHILD_MaxWidth, 24,
                     CHILD_WeightedWidth, 0,
@@ -1589,7 +1636,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_SMTP_USER, "SMTP user:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         smtp_username_gadget = (struct Gadget *)StringObject,
@@ -1607,7 +1654,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_SMTP_PASSWORD, "SMTP password:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         smtp_password_gadget = (struct Gadget *)StringObject,
@@ -1628,7 +1675,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_SYSTEM_FOLDERS, "System folders:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild, ButtonObject,
                         GA_ID, GID_ACCOUNT_FOLDER_MAPPING,
@@ -1641,7 +1688,7 @@ static int account_order_move_configured_slot(
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(T(MSG_FETCH_PERIOD_DAYS, "Fetch period (days):")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         fetch_days_gadget = (struct Gadget *)StringObject,
@@ -1656,22 +1703,14 @@ static int account_order_move_configured_slot(
 
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
-                    LAYOUT_AddChild, HGroupObject,
-                        LAYOUT_SpaceOuter, FALSE,
-                        LAYOUT_SpaceInner, FALSE,
-                    EndObject,
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    LAYOUT_AddChild, static_text_label(
+                        T(MSG_EMAIL_RETRIEVAL_LABEL, "Email retrieval:")),
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
-                        fetch_on_start_gadget =
-                            (struct Gadget *)ButtonObject,
-                            GA_ID, GID_ACCOUNT_FETCH_ON_START,
-                            GA_RelVerify, TRUE,
-                            GA_Selected,
-                                gui->account->fetch_on_start ? TRUE : FALSE,
-                            BUTTON_AutoButton, BAG_CHECKBOX,
-                            BUTTON_PushButton, TRUE,
-                        EndObject,
+                        fetch_on_start_gadget = native_checkbox(
+                            GID_ACCOUNT_FETCH_ON_START,
+                            gui->account->fetch_on_start),
                     CHILD_MinWidth, 24,
                     CHILD_MaxWidth, 24,
                     CHILD_WeightedWidth, 0,
@@ -1686,44 +1725,45 @@ static int account_order_move_configured_slot(
                         LAYOUT_SpaceOuter, FALSE,
                         LAYOUT_SpaceInner, FALSE,
                     EndObject,
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
-                        periodic_fetch_gadget =
-                            (struct Gadget *)ButtonObject,
-                            GA_ID, GID_ACCOUNT_PERIODIC_FETCH,
-                            GA_RelVerify, TRUE,
-                            GA_Selected,
-                                gui->account->periodic_fetch ? TRUE : FALSE,
-                            BUTTON_AutoButton, BAG_CHECKBOX,
-                            BUTTON_PushButton, TRUE,
-                        EndObject,
+                        periodic_fetch_gadget = native_checkbox(
+                            GID_ACCOUNT_PERIODIC_FETCH,
+                            gui->account->periodic_fetch),
                     CHILD_MinWidth, 24,
                     CHILD_MaxWidth, 24,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild, static_text_label(
-                        T(MSG_PERIODIC_FETCH_5_MIN, "Periodic fetch (5 min)")),
+                        T(MSG_PERIODIC_FETCH, "Periodic fetch")),
+                    CHILD_WeightedWidth, 100,
+                    LAYOUT_AddChild,
+                        periodic_interval_gadget = (struct Gadget *)NewObject(
+                            CHOOSER_GetClass(), NULL,
+                            GA_ID, GID_ACCOUNT_PERIODIC_INTERVAL,
+                            GA_RelVerify, TRUE,
+                            GA_TabCycle, TRUE,
+                            GA_Disabled, gui->account->periodic_fetch ? FALSE : TRUE,
+                            CHOOSER_PopUp, TRUE,
+                            CHOOSER_LabelArray, (ULONG)(uintptr_t)interval_labels,
+                            CHOOSER_Selected, (ULONG)amg_periodic_interval_index(
+                                gui->account->periodic_fetch_minutes),
+                            CHOOSER_AutoFit, TRUE,
+                            TAG_DONE),
+                    CHILD_WeightedWidth, 0,
                 EndObject,
                 CHILD_WeightedHeight, 0,
 
                 LAYOUT_AddChild, HGroupObject,
                     LAYOUT_SpaceInner, TRUE,
-                    LAYOUT_AddChild, HGroupObject,
-                        LAYOUT_SpaceOuter, FALSE,
-                        LAYOUT_SpaceInner, FALSE,
-                    EndObject,
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    LAYOUT_AddChild, static_text_label(
+                        T(MSG_NOTIFICATIONS_LABEL, "Notifications:")),
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
-                        notification_sound_gadget =
-                            (struct Gadget *)ButtonObject,
-                            GA_ID, GID_ACCOUNT_NOTIFICATION_SOUND,
-                            GA_RelVerify, TRUE,
-                            GA_Selected,
-                                gui->account->notification_sound ? TRUE : FALSE,
-                            BUTTON_AutoButton, BAG_CHECKBOX,
-                            BUTTON_PushButton, TRUE,
-                        EndObject,
+                        notification_sound_gadget = native_checkbox(
+                            GID_ACCOUNT_NOTIFICATION_SOUND,
+                            gui->account->notification_sound),
                     CHILD_MinWidth, 24,
                     CHILD_MaxWidth, 24,
                     CHILD_WeightedWidth, 0,
@@ -1736,7 +1776,7 @@ static int account_order_move_configured_slot(
                     LAYOUT_SpaceInner, TRUE,
                     LAYOUT_AddChild, static_text_label(
                         T(MSG_SOUND_FILE, "Sound file:")),
-                    CHILD_MinWidth, GUI_ACCOUNT_LABEL_WIDTH,
+                    CHILD_MinWidth, account_label_width,
                     CHILD_WeightedWidth, 0,
                     LAYOUT_AddChild,
                         notification_sound_path_gadget =
@@ -1752,8 +1792,34 @@ static int account_order_move_configured_slot(
                         GA_RelVerify, TRUE,
                         GA_Text, "...",
                     EndObject,
-                    CHILD_MinWidth, 32,
-                    CHILD_MaxWidth, 32,
+                    CHILD_MinWidth, GUI_ACCOUNT_SMALL_BUTTON_WIDTH,
+                    CHILD_MaxWidth, GUI_ACCOUNT_SMALL_BUTTON_WIDTH,
+                    CHILD_WeightedWidth, 0,
+                EndObject,
+                CHILD_WeightedHeight, 0,
+
+                LAYOUT_AddChild, HGroupObject,
+                    LAYOUT_SpaceInner, TRUE,
+                    LAYOUT_AddChild, static_text_label(
+                        T(MSG_EXTERNAL_LABEL, "External:")),
+                    CHILD_MinWidth, account_label_width,
+                    CHILD_WeightedWidth, 0,
+                    LAYOUT_AddChild,
+                        herald_notifications_gadget = native_checkbox(
+                            GID_ACCOUNT_HERALD,
+                            gui->account->herald_notifications),
+                    CHILD_MinWidth, 24,
+                    CHILD_MaxWidth, 24,
+                    CHILD_WeightedWidth, 0,
+                    LAYOUT_AddChild, static_text_label(
+                        T(MSG_HERALD_NOTIFICATIONS, "Herald notifications")),
+                    LAYOUT_AddChild, ButtonObject,
+                        GA_ID, GID_ACCOUNT_HERALD_TEST,
+                        GA_RelVerify, TRUE,
+                        GA_Text, T(MSG_HERALD_TEST, "?"),
+                    EndObject,
+                    CHILD_MinWidth, GUI_ACCOUNT_SMALL_BUTTON_WIDTH,
+                    CHILD_MaxWidth, GUI_ACCOUNT_SMALL_BUTTON_WIDTH,
                     CHILD_WeightedWidth, 0,
                 EndObject,
                 CHILD_WeightedHeight, 0,
@@ -1833,8 +1899,10 @@ static int account_order_move_configured_slot(
     page.fetch_days = fetch_days_gadget;
     page.fetch_on_start = fetch_on_start_gadget;
     page.periodic_fetch = periodic_fetch_gadget;
+    page.periodic_interval = periodic_interval_gadget;
     page.notification_sound = notification_sound_gadget;
     page.notification_path = notification_sound_path_gadget;
+    page.herald_notifications = herald_notifications_gadget;
 
     /* Measure the finished account layout before the window becomes visible.
      * The old WPOS_CENTERWINDOW + post-open MoveWindow() sequence caused the
@@ -1903,7 +1971,21 @@ static int account_order_move_configured_slot(
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
 
     while (!done) {
-        ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
+        ULONG herald_mask = amg_herald_signal_mask(gui->herald);
+        ULONG signals = Wait(signal_mask | herald_mask | SIGBREAKF_CTRL_C);
+        if (signals & herald_mask) {
+            amg_herald_poll(gui->herald);
+            if (herald_test_pending) {
+                AmgHeraldResult test_result =
+                    amg_herald_test_result(gui->herald);
+                if (test_result != AMG_HERALD_QUEUED) {
+                    if (herald_test_account == active_tab)
+                        set_string(dialog_status, window,
+                                   gui_herald_result_text(test_result));
+                    herald_test_pending = 0;
+                }
+            }
+        }
         if (signals & SIGBREAKF_CTRL_C) done = 1;
         if (signals & signal_mask) {
             ULONG result;
@@ -2199,6 +2281,32 @@ static int account_order_move_configured_slot(
                                     &save_sent_copy);
                                 break;
 
+                            case GID_ACCOUNT_PERIODIC_FETCH:
+                            {
+                                ULONG checked = FALSE;
+                                GetAttr(GA_Selected,
+                                        (Object *)periodic_fetch_gadget, &checked);
+                                SetGadgetAttrs(periodic_interval_gadget, window, NULL,
+                                    GA_Disabled, checked ? FALSE : TRUE, TAG_DONE);
+                                break;
+                            }
+
+                            case GID_ACCOUNT_HERALD_TEST:
+                            {
+                                AmgHeraldResult test_result = gui_herald_test(
+                                    gui, active_tab,
+                                    string_text(account_name_gadget));
+                                /* A test does not enable/change or save the
+                                 * account setting. It uses a separate card. */
+                                if (test_result == AMG_HERALD_QUEUED) {
+                                    herald_test_account = active_tab;
+                                    herald_test_pending = 1;
+                                }
+                                set_string(dialog_status, window,
+                                           gui_herald_result_text(test_result));
+                                break;
+                            }
+
                             case GID_ACCOUNT_NOTIFICATION_CHOOSE:
                                 choose_notification_sound(
                                     gui, window, notification_sound_path_gadget,
@@ -2383,6 +2491,12 @@ static int account_order_move_configured_slot(
                                      ++account_index) {
                                     amg_network_stop(
                                         gui->networks[account_index]);
+                                    if (!account_settings_equal(
+                                            &drafts[account_index],
+                                            &gui->account_set->accounts[
+                                                account_index]))
+                                        amg_herald_discard_account(
+                                            gui->herald, account_index);
                                     amg_account_clear(
                                         &gui->account_set->accounts[
                                             account_index]);

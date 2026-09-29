@@ -866,13 +866,15 @@ static void network_worker(void)
                     break;
 
                 case AMG_NET_DELETE:
-                    result = amg_imap_move_label(
+                    result = ensure_imap_connected(network, &imap, tokens.access_token, &error);
+                    if (result == AMG_OK) result = amg_imap_move_label(
                         &imap, message->uid, message->argument2,
                         message->argument1, &error);
                     break;
 
                 case AMG_NET_MOVE:
-                    result = amg_imap_move_label(
+                    result = ensure_imap_connected(network, &imap, tokens.access_token, &error);
+                    if (result == AMG_OK) result = amg_imap_move_label(
                         &imap, message->uid, message->argument1,
                         message->argument2, &error);
                     break;

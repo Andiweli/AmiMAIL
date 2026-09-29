@@ -1,5 +1,5 @@
 PROJECT := AmiMAIL
-VERSION := 2.1.0
+VERSION := 2.2.0
 
 ifeq ($(origin CC),default)
 CC := m68k-amigaos-gcc
@@ -61,18 +61,18 @@ AMIGA_LDFLAGS := -m68020 -msoft-float -L"$(AMISSL_OS3_LIB)"
 AMISSL_EXTRA_LIBS ?=
 AMIGA_LIBS := $(AMISSL_EXTRA_LIBS) -Wl,--start-group -lc -lstubs -lamiga -Wl,--end-group
 
-SOURCES := src/main.c src/app.c src/splash.c src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/codec.c \
+SOURCES := src/main.c src/app.c src/splash.c src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/periodic.c src/mail_notice.c src/codec.c \
            src/crypto.c src/imap_parser.c src/mime.c src/mailto.c src/oauth.c src/tls.c src/update.c \
            src/imap.c src/smtp.c src/storage.c src/contacts.c src/contacts_import.c \
            src/network_task.c src/gui.c src/gui_runtime.c src/gui_actions.c src/gui_mailto.c \
-           src/gui_window.c src/gui_icons.c src/gui_update.c src/iconified_data.c src/gui_state.c src/gui_notify.c \
+           src/gui_window.c src/gui_icons.c src/gui_update.c src/iconified_data.c src/gui_state.c src/gui_notify.c src/gui_herald.c src/herald.c \
            src/gui_dialogs.c src/gui_contacts.c src/gui_compose.c src/gui_folders.c \
            src/gui_messages.c src/gui_preview.c src/gui_attachments.c src/gui_transfer.c src/charset.c src/i18n.c src/banner_data.c
 OBJECTS := $(SOURCES:src/%.c=build/%.o)
 
-HOST_SOURCES := src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/codec.c src/crypto.c \
+HOST_SOURCES := src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/periodic.c src/mail_notice.c src/codec.c src/crypto.c \
                 src/imap_parser.c src/mime.c src/mailto.c src/oauth.c src/tls.c src/smtp.c \
-                src/storage.c src/contacts.c src/contacts_import.c src/update.c src/i18n.c src/charset.c
+                src/storage.c src/contacts.c src/contacts_import.c src/update.c src/i18n.c src/charset.c src/herald.c
 HOST_TEST := build/host-tests
 HOST_HEADERS := $(wildcard include/*.h)
 REVIEW_TEST := build/review-tests
@@ -167,7 +167,9 @@ dist: release
 
 	cp $(RELEASE_ICON) dist/$(PROJECT)-$(VERSION)/$(PROJECT).info
 
-	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md dist/$(PROJECT)-$(VERSION)/docs/
+	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md \
+	   docs/FIX_2.1.0_HERALD.md docs/FIX_2.1.0_HERALD_SUBJECT_INTERVALS.md \
+	   docs/HERALD_CLIENT_LICENSE.txt dist/$(PROJECT)-$(VERSION)/docs/
 
 	cp -R config dist/$(PROJECT)-$(VERSION)/
 
@@ -191,7 +193,9 @@ release-lha: release
 
 	cp $(RELEASE_ICON) dist/$(PROJECT)-$(VERSION)/$(PROJECT).info
 
-	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md dist/$(PROJECT)-$(VERSION)/docs/
+	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md \
+	   docs/FIX_2.1.0_HERALD.md docs/FIX_2.1.0_HERALD_SUBJECT_INTERVALS.md \
+	   docs/HERALD_CLIENT_LICENSE.txt dist/$(PROJECT)-$(VERSION)/docs/
 
 	cp -R config dist/$(PROJECT)-$(VERSION)/
 
@@ -272,3 +276,37 @@ notify-order-test:
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_notify_order.py
 
 review-test: notify-order-test
+
+# Native asynchronous Herald client, configuration and notification routing.
+.PHONY: herald-test
+herald-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_herald.py
+
+review-test: herald-test
+
+# Per-account schedules and newest-subject selection/encoding.
+.PHONY: herald-retrieval-test
+herald-retrieval-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_herald_retrieval.py
+
+review-test: herald-retrieval-test
+
+# Source UID verification and safe per-message moves, against a scripted peer.
+.PHONY: imap-mutation-test reply-popup-test
+build/imap-mutation-tests: tests/test_imap_mutations.c tests/transfer_tls_double.h src/imap.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_imap_mutations.c $(HOST_SOURCES) -o $@
+
+imap-mutation-test: build/imap-mutation-tests
+	./build/imap-mutation-tests
+
+reply-popup-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_reply_popup.py
+
+review-test: imap-mutation-test reply-popup-test
+
+# Native checkbox library ownership; UI state tests live in herald-retrieval-test.
+.PHONY: checkbox-lifecycle-test
+checkbox-lifecycle-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_checkbox_lifecycle.py
+
+review-test: checkbox-lifecycle-test

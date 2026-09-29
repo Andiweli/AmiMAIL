@@ -75,7 +75,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_transfer_and_selection_translations(self):
         _, records = TOOL.read_binary(TOOL.build_bytes(self.catalog))
-        self.assertEqual(self.catalog.version, 9)
+        self.assertEqual(self.catalog.version, 12)
         for key in ('MSG_ATTACHMENT_SELECTION', 'MSG_SELECT_REGULAR_ATTACHMENTS',
                     'MSG_SELECT_EMBEDDED_GRAPHICS', 'MSG_TRANSFER_CANCELLED',
                     'MSG_LOCAL_COPY_KEPT', 'MSG_DELIVERY_UNCERTAIN'):
@@ -83,6 +83,37 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(records[self.catalog.ids[key]], self.catalog.translated[key])
         self.assertNotEqual(self.catalog.english['MSG_ATTACHMENT_SELECTION'],
                             self.catalog.translated['MSG_ATTACHMENT_SELECTION'])
+
+    def test_herald_translations_and_local_encoding(self):
+        _, records = TOOL.read_binary(TOOL.build_bytes(self.catalog))
+        herald_keys = [key for key in self.catalog.ids
+                       if key.startswith('MSG_HERALD_')]
+        self.assertEqual(len(herald_keys), 14)
+        for key in herald_keys:
+            self.assertEqual(records[self.catalog.ids[key]],
+                             self.catalog.translated[key])
+        self.assertEqual(records[self.catalog.ids['MSG_HERALD_ONE_NEW_MESSAGE']],
+                         b'1 neue Nachricht - %s')
+        self.assertEqual(records[self.catalog.ids['MSG_HERALD_NEW_MESSAGES']],
+                         b'%lu neue Nachrichten - %s')
+        self.assertIn(b'\xfc', records[self.catalog.ids['MSG_HERALD_UNAVAILABLE']])
+        self.assertNotIn(b'\xc3\xbc', records[self.catalog.ids['MSG_HERALD_UNAVAILABLE']])
+
+    def test_retrieval_and_subject_strings(self):
+        _, records = TOOL.read_binary(TOOL.build_bytes(self.catalog))
+        pairs = {
+            'MSG_HERALD_TEST': (b'?', b'?'),
+            'MSG_HERALD_SUBJECT_LABEL': (b'Subject: ', b'Betreff: '),
+            'MSG_HERALD_LATEST_SUBJECT_LABEL': (b'Latest: ', b'Neueste: '),
+            'MSG_EMAIL_RETRIEVAL_LABEL': (b'Email retrieval:', b'Mail-Abruf:'),
+            'MSG_NOTIFICATIONS_LABEL': (b'Notifications:', b'Benachrichtigungen:'),
+            'MSG_EXTERNAL_LABEL': (b'External:', b'Extern:'),
+            'MSG_PERIODIC_FETCH': (b'Periodic fetch', b'Periodischer Abruf'),
+            'MSG_PERIODIC_INTERVAL_MINUTES': (b'%lu min', b'%lu Min'),
+        }
+        for key, (en, de) in pairs.items():
+            self.assertEqual(self.catalog.english[key], en)
+            self.assertEqual(records[self.catalog.ids[key]], de)
 
     def test_stale_binary_version(self):
         stale = copy.deepcopy(self.catalog)

@@ -4,6 +4,8 @@
 #include "amigmail.h"
 
 #define AMG_MAX_ACCOUNTS 5U
+#define AMG_PERIODIC_INTERVAL_COUNT 6U
+#define AMG_PERIODIC_DEFAULT_MINUTES 5U
 
 typedef struct AmgAccount {
     int enabled;
@@ -28,8 +30,10 @@ typedef struct AmgAccount {
     int save_sent_copy;
     int fetch_on_start;
     int periodic_fetch;
+    unsigned int periodic_fetch_minutes; /* 1, 2, 5, 10, 15 or 30. */
     unsigned int fetch_days;
     int notification_sound;
+    int herald_notifications; /* Optional, independent of sound; default off. */
     char notification_sound_path[512];
     char *imap_password;
     char *smtp_password;
@@ -41,6 +45,9 @@ typedef struct AmgAccountSet {
     size_t order[AMG_MAX_ACCOUNTS];
     size_t current;
 } AmgAccountSet;
+
+unsigned int amg_periodic_interval_minutes(size_t selection);
+size_t amg_periodic_interval_index(unsigned int minutes);
 
 void amg_account_init(AmgAccount *account);
 void amg_account_clear(AmgAccount *account);

@@ -152,7 +152,7 @@ Object *gui_transfer_create_status_row(AmgGui *gui)
 {
     Object *status = NULL, *gauge = NULL, *cancel = NULL, *row = NULL;
     struct LayoutLimits limits;
-    ULONG height;
+    ULONG height, cancel_width = GUI_SCROLLBAR_WIDTH;
     struct TagItem status_tags[] = {
         { GA_ID, GID_STATUS }, { GA_ReadOnly, TRUE },
         { STRINGA_TextVal, (ULONG)(uintptr_t)T(MSG_READY, "Ready") },
@@ -175,6 +175,20 @@ Object *gui_transfer_create_status_row(AmgGui *gui)
     if (!height)
         height = (gui->screen->RastPort.TxHeight
                   ? (ULONG)gui->screen->RastPort.TxHeight : 8UL) + 6UL;
+    /* The preview scroller directly above is a zero-weight layout child:
+     * its natural minimum domain is its displayed width. Use that same
+     * font/theme-dependent width, not a hard-coded 18-pixel X button.
+     * Fix both limits so extra horizontal space goes to the status/gauge.
+     * Query before opening, exactly like the common status-row height. */
+    if (gui->preview_scroller) {
+        memset(&limits, 0, sizeof(limits));
+        LayoutLimits(gui->preview_scroller, &limits,
+                     gui->screen->RastPort.Font, gui->screen);
+        if (limits.MinWidth > 0U)
+            cancel_width = (ULONG)limits.MinWidth;
+        else if (gui->preview_scroller->Width > 0)
+            cancel_width = (ULONG)gui->preview_scroller->Width;
+    }
     gauge = gui_transfer_create_gauge(gui);
     if (!gauge) goto failed;
     cancel = NewObjectA(BUTTON_GetClass(), NULL, cancel_tags);
@@ -196,7 +210,8 @@ Object *gui_transfer_create_status_row(AmgGui *gui)
             { CHILD_NoDispose, TRUE },
             { CHILD_MinHeight, height }, { CHILD_MaxHeight, height },
             { CHILD_WeightedHeight, 0UL },
-            { CHILD_MinWidth, 18UL }, { CHILD_WeightedWidth, 0UL },
+            { CHILD_MinWidth, cancel_width },
+            { CHILD_MaxWidth, cancel_width }, { CHILD_WeightedWidth, 0UL },
             { TAG_DONE, 0UL }
         };
         row = NewObjectA(LAYOUT_GetClass(), NULL, tags);

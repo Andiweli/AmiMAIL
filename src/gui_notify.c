@@ -134,7 +134,10 @@ static void notification_sound_worker(void)
     tags[7].ti_Tag = TAG_DONE; tags[7].ti_Data = 0UL;
     sound = NewDTObjectA((APTR)sound_job.path, tags);
     if (!sound || sound_job.stop_requested) goto done;
-    for (method = GetDTTriggerMethods(sound);
+    /* Classic NDK prototypes declare struct DTMethods * (plural), but
+     * datatypesclass.h defines the returned entries as struct DTMethod.
+     * Adapt that historical declaration without changing the table. */
+    for (method = (struct DTMethod *)GetDTTriggerMethods(sound);
          method && method->dtm_Label; ++method) {
         if (method->dtm_Method == STM_PLAY) {
             can_play = 1;

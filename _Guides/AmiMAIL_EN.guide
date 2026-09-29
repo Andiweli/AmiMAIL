@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_EN.guide
-@$VER: AmiMAIL_EN.guide 2.1.0 (26.09.2026)
+@$VER: AmiMAIL_EN.guide 2.2.0 (28.09.2026)
 
-@NODE MAIN "AmiMAIL 2.1.0 - Guide"
-AmiMAIL 2.1.0
+@NODE MAIN "AmiMAIL 2.2.0 - Guide"
+AmiMAIL 2.2.0
 Native IMAP/SMTP mail client for AmigaOS 3.2+
 ReAction, IMAP, SMTP and AmiSSL
 
@@ -108,7 +108,27 @@ Important fields:
 - SMTP server, port and, if needed, separate SMTP credentials.
 
 Server settings, credentials, system-folder mapping, fetch preferences and
-notification sound are stored separately for each account.
+notifications are stored separately for each account.
+
+Email retrieval and notifications
+---------------------------------
+"Email retrieval:" groups the startup and periodic retrieval settings.
+"Fetch mail at startup" controls only the initial retrieval. The separate
+"Periodic fetch" checkbox enables automatic Inbox checks for this account.
+Choose 1, 2, 5, 10, 15 or 30 minutes in the right-hand cycle/chooser field.
+It is disabled while the periodic checkbox is off; the selected interval
+is retained. Save applies the changes. Cancel leaves saved settings intact.
+Existing configurations keep the previous five-minute interval.
+
+Each active account uses its own interval, independent of the tab order.
+Changing one interval does not reset the timers of unchanged accounts.
+A busy connection or a modal dialog can delay a check; missed intervals
+are not replayed as a burst of requests. Disabling an account stops its
+periodic checks. Startup retrieval is independent of the chosen interval.
+
+"Notifications:" labels the sound settings. "External:" labels the optional
+Herald integration. The "?" button tests Herald without changing settings;
+it has the same width as the sound-file "..." button above it.
 
 AmiMAIL can use the same credentials for SMTP and IMAP, or retain separate
 SMTP credentials.
@@ -189,11 +209,27 @@ to be used.
 Select a message to read it in the lower preview area. AmiMAIL supports the
 usual IMAP actions such as read/unread state, moving and deleting messages.
 
-If the server supports UID MOVE, AmiMAIL uses it. Older servers use safe
-COPY/DELETE variants without performing an unsafe mailbox-wide EXPUNGE.
+Delete moves the selected messages to the server's mapped Trash folder.
+It does not permanently erase them. Empty Trash is the separate permanent
+removal action. Check the system-folder mapping if the provider uses a
+different Trash name.
+
+AmiMAIL refreshes server capabilities after login and prefers UID MOVE.
+Without MOVE, it uses COPY and marks the source deleted, followed by a
+UID-specific EXPUNGE when UIDPLUS is available. It checks the source UID
+before and after the move, rather than treating every server OK as proof
+that a message was removed.
+
+If neither MOVE nor UIDPLUS is available, the copy is kept in Trash and
+the source is only marked deleted. A status message explains this deferred
+removal. AmiMAIL never uses a mailbox-wide EXPUNGE for a single-message
+Delete, since that could remove other messages marked by another client.
+After a failed or unconfirmed move, reload before retrying.
 
 Reply, Reply All and Forward are available from the Reply button and its
-adjacent selection area.
+adjacent selection area. Clicking the arrow opens or closes the popup only
+when the mouse button is released; the popup stays visible while the closing
+click is held. Escape and clicking elsewhere still dismiss it.
 
 
 @{"Back to contents" LINK MAIN}
@@ -244,6 +280,15 @@ name, whether it is an attachment or an embedded graphic, and the encoded
 size in the original mail. Initially only regular attachments are selected.
 Choose individual rows, Select All, None, Attachments only or Graphics only.
 "Save selected" then asks for a destination drawer.
+
+AmiMAIL remembers the last directory in which at least one attachment was
+successfully saved. It is offered again for all accounts, including after
+a restart. Cancelling before any file is saved leaves this default unchanged.
+If the remembered directory is unavailable, the normal drawer selection is
+used instead. The preference is stored in
+ENVARC:AmiMail/attachment-drawer.state. If this cannot be written, the new
+directory is remembered only for the running session until a later save
+can persist it.
 
 Existing destination files are never overwritten. A numeric suffix is added
 on name collisions. Each export is decoded to a private temporary file in
@@ -378,6 +423,52 @@ The current Inbox state is exposed during runtime through the AmiMAILStatus
 environment variable.
 
 
+Optional Herald notifications
+----------------------------
+Account settings contain "Herald notifications" and a "?" test button.
+The option is stored separately for each account and is off by default.
+The "?" button sends a separate test card using the current account name;
+it does not enable the option or save changes to the account.
+
+Herald must already be running. AmiMAIL neither installs nor starts Herald.
+Communication uses native RexxMsg messages and rexxsyslib.library; RexxMast,
+an ARexx script and C:HeraldSend are not required. Automatic notifications
+silently skip an unavailable Herald. Test results appear in the account
+window's status field, not in a requester.
+
+Enabled accounts notify when an Inbox check detects new message UIDs after
+its baseline has been established. This includes background accounts and an
+iconified AmiMAIL. The initial unread snapshot, a UIDVALIDITY reset, opening
+an existing message and reloading another folder do not trigger these cards.
+
+New-mail cards always include a subject. A single new message shows the
+account and "Subject:". Several new messages show their count and "Latest:"
+with the subject of the newest arriving message. There is no separate
+subject-display option. A missing subject is shown as "(No subject)".
+
+Newest means the highest new non-deleted UID within this Inbox, not the
+sender's Date header or the order in which the server returned messages.
+AmiMAIL uses the already fetched headers; no extra message download is
+needed. The subject is decoded for the local display and control characters
+are removed. Long account names and subjects are shortened to fit Herald's
+160-byte text limit. Subject text can therefore be visible outside AmiMAIL.
+
+Account slots have separate IDs and groups; moving account tabs does not
+change their notification identity. A newer unsent batch for the same
+account replaces the pending one. The count is not an unread-mail total.
+
+Herald cards use normal priority and NOSOUND, including tests. AmiMAIL's
+existing notification sound remains independently configurable. Display
+duration, grouping and Do Not Disturb behavior remain Herald preferences.
+An accepted test means Herald accepted the command, not that a popup must
+be visible despite those preferences. Cards do not activate AmiMAIL or
+switch accounts when clicked in this first integration.
+
+The existing status-row progress bar is unchanged and stays inside AmiMAIL.
+See docs/FIX_2.1.0_HERALD.md for timeout behavior and the exceptional shutdown
+case when Herald keeps an outstanding message without replying.
+Subject and retrieval changes: docs/FIX_2.1.0_HERALD_SUBJECT_INTERVALS.md.
+
 @{"Back to contents" LINK MAIN}
 @ENDNODE
 
@@ -430,7 +521,7 @@ in bug reports.
 @ENDNODE
 
 @NODE ABOUT "About / Copyright"
-AmiMAIL 2.1.0 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
+AmiMAIL 2.2.0 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 

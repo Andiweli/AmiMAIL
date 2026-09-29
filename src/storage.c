@@ -550,8 +550,8 @@ static int save_account_internal(
             "imap_starttls=%d\nsmtp_host=%s\nsmtp_port=%u\n"
             "smtp_starttls=%d\nsmtp_same_credentials=%d\n"
             "save_sent_copy=%d\nfetch_on_start=%d\n"
-            "periodic_fetch=%d\nfetch_days=%u\n"
-            "notification_sound=%d\n",
+            "periodic_fetch=%d\nperiodic_fetch_minutes=%u\nfetch_days=%u\n"
+            "notification_sound=%d\nherald_notifications=%d\n",
             account->enabled ? 1 : 0,
             (int)account->auth_mode, account->imap_host,
             (unsigned)account->imap_port, account->imap_starttls,
@@ -561,8 +561,11 @@ static int save_account_internal(
             account->save_sent_copy ? 1 : 0,
             account->fetch_on_start ? 1 : 0,
             account->periodic_fetch ? 1 : 0,
+            amg_periodic_interval_minutes(amg_periodic_interval_index(
+                account->periodic_fetch_minutes)),
             account->fetch_days ? account->fetch_days : 180U,
-            account->notification_sound ? 1 : 0) < 0 ||
+            account->notification_sound ? 1 : 0,
+            account->herald_notifications ? 1 : 0) < 0 ||
         write_hex_line(file, "notification_sound_path",
             (const unsigned char *)account->notification_sound_path,
             strlen(account->notification_sound_path)) != AMG_OK)
@@ -1022,6 +1025,17 @@ static int load_account_internal(const char *path, const char *master_password,
         account->fetch_on_start = atoi(value) ? 1 : 0;
     if (field(data, "periodic_fetch", value, sizeof(value)))
         account->periodic_fetch = atoi(value) ? 1 : 0;
+    /* Missing/invalid values keep the old five-minute schedule. */
+    account->periodic_fetch_minutes = AMG_PERIODIC_DEFAULT_MINUTES;
+    if (field(data, "periodic_fetch_minutes", value, sizeof(value))) {
+        char *end;
+        unsigned long minutes = strtoul(value, &end, 10);
+        if (value[0] >= '0' && value[0] <= '9' && end != value &&
+            *end == 0 && minutes >= 1UL && minutes <= 30UL &&
+            amg_periodic_interval_minutes(amg_periodic_interval_index(
+                (unsigned int)minutes)) == minutes)
+            account->periodic_fetch_minutes = (unsigned int)minutes;
+    }
     if (field(data, "fetch_days", value, sizeof(value))) {
         unsigned long days = strtoul(value, NULL, 10);
         if (days >= 1UL && days <= 3650UL)
@@ -1029,6 +1043,10 @@ static int load_account_internal(const char *path, const char *master_password,
     }
     if (field(data, "notification_sound", value, sizeof(value)))
         account->notification_sound = atoi(value) ? 1 : 0;
+    /* Old files have no Herald setting and must not enable it implicitly. */
+    account->herald_notifications = 0;
+    if (field(data, "herald_notifications", value, sizeof(value)))
+        account->herald_notifications = !strcmp(value, "1");
     decoded.length = 0;
     if (field(data, "notification_sound_path", value, sizeof(value)) &&
         hex_decode(value, &decoded) == AMG_OK) {
