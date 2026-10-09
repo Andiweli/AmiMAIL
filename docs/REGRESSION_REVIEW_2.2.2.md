@@ -120,3 +120,10 @@ der leeren Mailliste an: „Noch nicht verbunden“, „Ordner wird geladen“ o
 Erneut versuchen angeboten werden. Allgemeine Informationen und Fortschritt
 bleiben in der vorhandenen Statusleiste unten. Dieser Vorschlag wurde auf
 ausdrücklichen Wunsch noch nicht implementiert.
+
+## Weitere Geräterückmeldung
+
+Die korrekte Requester-Darstellung und das Ausblenden der Gmail-Wurzel wurden
+inzwischen auf echter Hardware bestätigt. Die anschließende Untersuchung der
+Kontaktaktionen und des GURU 8100 0005 ist im
+[Laufzeit-Nachprüfungsbericht](RUNTIME_REVIEW_2.2.2.md) dokumentiert.

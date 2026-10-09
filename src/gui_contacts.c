@@ -793,6 +793,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
     int editing = contact_id != 0UL;
     int done = 0, saved = 0;
 
+    gui_requester_trace(gui, "contacts.editor.enter", (unsigned long)editing, 0UL);
     memset(&original, 0, sizeof(original));
     if (editing) {
         const AmgContact *existing = amg_contacts_find(book, contact_id);
@@ -948,12 +949,17 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             CHILD_WeightedHeight, 0,
         EndObject,
     EndWindow;
-    if (!dialog) return 0;
+    if (!dialog) {
+        gui_requester_trace(gui, "contacts.editor.failed", 1UL, (unsigned long)IoErr());
+        return 0;
+    }
     window = RA_OpenWindow(dialog);
     if (!window) {
+        gui_requester_trace(gui, "contacts.editor.failed", 2UL, (unsigned long)IoErr());
         DisposeObject(dialog);
         return 0;
     }
+    gui_requester_trace(gui, "contacts.editor.open", (unsigned long)(uintptr_t)window, 0UL);
     WindowToFront(window);
     ActivateWindow(window);
     /* String gadgets that live inside layout.gadget must be activated via
@@ -1040,6 +1046,7 @@ static int contact_editor(AmgGui *gui, AmgContactBook *book,
             }
         }
     }
+    gui_requester_trace(gui, "contacts.editor.close", (unsigned long)saved, 0UL);
     DisposeObject(dialog);
     return saved;
 }
@@ -1136,6 +1143,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
     int done = 0;
 
     if (!gui || !gui->screen) return;
+    gui_requester_trace(gui, "contacts.enter", 0UL, 0UL);
     init_contact_list_view(&view);
     init_contact_render_hooks(render_hooks, &view);
     row_height = gui->list_row_hook_height
@@ -1144,6 +1152,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
             ? (UWORD)(gui->screen->RastPort.TxHeight + 2U) : 10U);
     amg_contacts_init(&book);
     if (amg_contacts_load(AMG_CONTACTS_DEFAULT_PATH, &book, error) != AMG_OK) {
+        gui_requester_trace(gui, "contacts.failed", 1UL, error ? (unsigned long)error->code : 0UL);
         status_local(gui, T(MSG_CONTACT_FILE_COULD_NOT_BE_LOADED, "Contact file could not be loaded."));
         amg_contacts_free(&book);
         return;
@@ -1151,12 +1160,14 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
     NewList(&list);
     columns = contacts_columns();
     if (!columns) {
+        gui_requester_trace(gui, "contacts.failed", 2UL, 0UL);
         amg_contacts_free(&book);
         return;
     }
     view.columns = columns;
     view.list = &list;
     if (!open_contact_list_class(&view)) {
+        gui_requester_trace(gui, "contacts.failed", 3UL, 0UL);
         FreeLBColumnInfo(columns);
         amg_contacts_free(&book);
         return;
@@ -1228,6 +1239,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
         EndObject,
     EndWindow;
     if (!dialog) {
+        gui_requester_trace(gui, "contacts.failed", 4UL, (unsigned long)IoErr());
         close_contact_list_class(&view);
         FreeLBColumnInfo(columns);
         amg_contacts_free(&book);
@@ -1235,12 +1247,14 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
     }
     window = RA_OpenWindow(dialog);
     if (!window) {
+        gui_requester_trace(gui, "contacts.failed", 5UL, (unsigned long)IoErr());
         DisposeObject(dialog);
         close_contact_list_class(&view);
         FreeLBColumnInfo(columns);
         amg_contacts_free(&book);
         return;
     }
+    gui_requester_trace(gui, "contacts.open", (unsigned long)(uintptr_t)window, (unsigned long)book.count);
     view.window = window;
     view.gadget = list_gadget;
     WindowToFront(window);
@@ -1265,8 +1279,10 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                         break;
                     case WMHI_GADGETUP:
                         if (gid == GID_CONTACTS_CLOSE) {
+                            gui_requester_trace(gui, "contacts.action", gid, (unsigned long)input_code);
                             done = 1;
                         } else if (gid == GID_CONTACTS_NEW) {
+                            gui_requester_trace(gui, "contacts.action", gid, (unsigned long)input_code);
                             if (contact_editor(gui, &book, 0UL, error)) {
                                 rebuild_contact_list(list_gadget, window,
                                                      &list, &book, 0,
@@ -1276,6 +1292,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                             }
                         } else if (gid == GID_CONTACTS_EDIT ||
                                    gid == GID_CONTACTS_LIST) {
+                            gui_requester_trace(gui, "contacts.action", gid, (unsigned long)input_code);
                             ULONG rel_event = LBRE_NORMAL;
                             unsigned long id = 0UL;
                             if (gid == GID_CONTACTS_LIST) {
@@ -1299,6 +1316,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
                                     T(MSG_CONTACT_SAVED, "Contact saved."));
                             }
                         } else if (gid == GID_CONTACTS_DELETE) {
+                            gui_requester_trace(gui, "contacts.action", gid, (unsigned long)input_code);
                             size_t selected_count =
                                 selected_contact_ids(&list, NULL, 0U);
                             unsigned long *ids = NULL;
@@ -1379,6 +1397,7 @@ void gui_contacts_dialog(AmgGui *gui, AmgError *error)
             }
         }
     }
+    gui_requester_trace(gui, "contacts.close", 0UL, 0UL);
     SetGadgetAttrs(list_gadget, window, NULL,
                    LISTBROWSER_Labels, (ULONG)~0UL, TAG_DONE);
     DisposeObject(dialog);
