@@ -691,6 +691,51 @@ static void network_worker_finish(AmgNetwork *network, struct Message *stop_mess
     if (stop_message) ReplyMsg(stop_message);
 }
 
+static int network_worker_open_commands(AmgNetwork *network)
+{
+    /* Signal bits belong to the allocating task. Creating this port in the
+     * GUI and only replacing mp_SigTask wastes a GUI bit and leaves the bit
+     * unreserved in the worker (where a timer port may reuse it). */
+    network->commands = CreateMsgPort();
+    /* Clear the shared startup handoff BEFORE waking the parent: it may
+     * immediately start another account worker after this acknowledgement. */
+    starting_network = NULL;
+    if (!network->commands) {
+        /* Failed startup returns straight to DOS. Prevent the GUI from
+         * unloading the executable before this worker's final epilogue. */
+        Forbid();
+        network->worker_ready = -1;
+        Signal(network->responses->mp_SigTask,
+               1UL << network->responses->mp_SigBit);
+        return 0;
+    }
+    network->worker_ready = 1;
+    Signal(network->responses->mp_SigTask,
+           1UL << network->responses->mp_SigBit);
+    return 1;
+}
+
+static void network_worker_close_commands(AmgNetwork *network)
+{
+    if (network->commands) DeleteMsgPort(network->commands);
+    network->commands = NULL;
+}
+
+static int network_wait_for_worker(AmgNetwork *network, AmgError *error)
+{
+    while (!network->worker_ready)
+        Wait(1UL << network->responses->mp_SigBit);
+    if (network->worker_ready < 0) {
+        network->process = NULL;
+        network->worker_ready = 0;
+        amg_error_set(error, AMG_ERR_MEMORY,
+                      T(MSG_MESSAGE_PORTS_COULD_NOT_BE_CREATED, "Message ports could not be created."));
+        return AMG_ERR_MEMORY;
+    }
+    network->running = 1;
+    return AMG_OK;
+}
+
 static void network_worker(void)
 {
     AmgNetwork *network = starting_network;
@@ -699,11 +744,7 @@ static void network_worker(void)
     AmgOAuthTokens tokens;
     AmgError error, init_error;
     int tls_ready;
-    network->commands->mp_SigTask = FindTask(NULL);
-    network->worker_ready = 1;
-    Signal(network->responses->mp_SigTask,
-           1UL << network->responses->mp_SigBit);
-    starting_network = NULL;
+    if (!network_worker_open_commands(network)) return;
     amg_imap_session_init(&imap);
     memset(&tokens, 0, sizeof(tokens));
     memset(&error, 0, sizeof(error));
@@ -961,6 +1002,7 @@ done:
     amg_imap_disconnect(&imap);
     amg_oauth_tokens_clear(&tokens);
     if (tls_ready) amg_tls_global_cleanup();
+    network_worker_close_commands(network);
     network_worker_finish(network, stop_message);
 }
 
@@ -975,7 +1017,6 @@ void amg_network_destroy(AmgNetwork *network)
 {
     if (!network) return;
     amg_network_stop(network);
-    if (network->commands) DeleteMsgPort(network->commands);
     if (network->responses) DeleteMsgPort(network->responses);
     amg_account_clear(&network->account);
     free(network);
@@ -989,9 +1030,8 @@ int amg_network_start(AmgNetwork *network, const AmgAccount *account,
     /* Keep normal connections possible even on a read-only program volume;
      * an operation needing a spool reports its own precise error. */
     (void)amg_spool_directory(network->spool_directory, NULL);
-    if (!network->commands) network->commands = CreateMsgPort();
     if (!network->responses) network->responses = CreateMsgPort();
-    if (!network->commands || !network->responses) {
+    if (!network->responses) {
         amg_error_set(error, AMG_ERR_MEMORY,
                       T(MSG_MESSAGE_PORTS_COULD_NOT_BE_CREATED, "Message ports could not be created."));
         return AMG_ERR_MEMORY;
@@ -1026,10 +1066,7 @@ int amg_network_start(AmgNetwork *network, const AmgAccount *account,
                       T(MSG_NETWORK_PROCESS_COULD_NOT_BE_STARTED, "Network process could not be started."));
         return AMG_ERR_IO;
     }
-    while (!network->worker_ready)
-        Wait(1UL << network->responses->mp_SigBit);
-    network->running = 1;
-    return AMG_OK;
+    return network_wait_for_worker(network, error);
 }
 
 static AmgNetMessage *new_message(AmgNetwork *network,

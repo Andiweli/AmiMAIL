@@ -75,8 +75,8 @@ struct MsgPort *CreateMsgPort(void)
     if (allocation_fails()) return NULL;
     for(i=0;i<8U && ports[i];++i) {}
     CHECK(i<8U);
-    for(bit=1; allocated_signals & (1UL<<bit);++bit) {}
-    CHECK(bit<31U);
+    for(bit=1; bit<31U && (allocated_signals & (1UL<<bit));++bit) {}
+    if(bit==31U) return NULL;
     p=(struct MsgPort *)calloc(1,sizeof(*p)); CHECK(p!=NULL);
     p->mp_Flags=PA_SIGNAL; p->mp_SigBit=(UBYTE)bit;
     p->mp_SigTask=&mock_gui_task;
@@ -577,9 +577,50 @@ static void command_tests(void)
         text[len]=0; quoted_roundtrip(text);
     }
 }
+static void herald_contact_signal_budget_tests(void)
+{
+    /* 16 user signals; 5 other GUI ports/bits (main window, app, mailto,
+     * periodic timer, URL dispatch). The configuration window uses one.
+     * Legacy network ports: 2 GUI bits/account; corrected: 1 GUI bit/account.
+     * Real Herald creation, registration, notification and cleanup are run.
+     * Contact ports model window.class allocation, not actual ReAction. */
+    const ULONG system_bits = 0x7ffe0000UL;
+    unsigned corrected;
+    for(corrected=0U; corrected<2U; ++corrected) {
+        AmgHerald *h;
+        struct MsgPort *contacts, *editor, *confirmation;
+        unsigned occupied = corrected ? 10U : 14U;
+        ULONG baseline = system_bits | ((1UL<<(occupied+1U))-2UL);
+        reset(); allocated_signals = baseline;
+        h=amg_herald_create(); CHECK(h);
+        CHECK(amg_herald_notify(h,0U,"Test",1)==AMG_HERALD_QUEUED);
+        ack_registration(h); ack_notification(h); cooldown(h);
+        CHECK(amg_herald_test_result(h)==AMG_HERALD_ACCEPTED);
+        CHECK(live_ports==2U);
+        FreeSignal((LONG)occupied); /* close the configuration window */
+        contacts=CreateMsgPort(); CHECK(contacts);
+        editor=CreateMsgPort();
+        if(!corrected) {
+            CHECK(!editor); /* reproduces the old loss of nested dialogs */
+            CHECK(!CreateMsgPort()); /* deletion confirmation also cannot open */
+        } else {
+            CHECK(editor); DeleteMsgPort(editor);
+            confirmation=CreateMsgPort(); CHECK(confirmation);
+            DeleteMsgPort(confirmation);
+            editor=CreateMsgPort(); CHECK(editor); /* another edit cycle */
+            DeleteMsgPort(editor);
+        }
+        DeleteMsgPort(contacts);
+        amg_herald_destroy(h);
+        CHECK(allocated_signals==(baseline & ~(1UL<<occupied)));
+        CHECK(!live_ports && !live_ios && !live_devices && !live_msgs);
+        allocated_signals=0UL; reset();
+    }
+}
+
 int main(void)
 {
-    command_tests(); simple_and_failure_tests(); restart_timeout_shutdown_tests(); queue_tests(); gui_tests(); gui_subject_tests();
+    command_tests(); simple_and_failure_tests(); restart_timeout_shutdown_tests(); queue_tests(); gui_tests(); gui_subject_tests(); herald_contact_signal_budget_tests();
     printf("Herald native/API-double + GUI bridge: %u checks passed.\n",checks);
     return 0;
 }

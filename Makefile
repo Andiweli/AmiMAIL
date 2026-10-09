@@ -136,6 +136,12 @@ runtime-lock-test:
 
 review-test: runtime-lock-test
 
+.PHONY: network-ports-test
+network-ports-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_network_ports.py
+
+review-test: network-ports-test
+
 $(HOST_TEST): tests/test_main.c $(HOST_SOURCES) $(HOST_HEADERS) | build
 
 	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_main.c $(HOST_SOURCES) -o $@
