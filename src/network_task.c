@@ -1357,11 +1357,13 @@ void amg_network_stop(AmgNetwork *network)
     stop.message.mn_ReplyPort = network->responses;
     stop.message.mn_Length = (UWORD)sizeof(stop);
     stop.type = AMG_NET_STOP;
+    Forbid();
     network->stop_requested = 1;
     network->io_cancel_requested = 1;
-    PutMsg(network->commands, &stop.message);
     if (network->process)
         Signal((struct Task *)network->process, SIGBREAKF_CTRL_C);
+    PutMsg(network->commands, &stop.message);
+    Permit();
     /* No malloc during low-memory shutdown, and do not release any GUI or
      * network memory until the worker has acknowledged its final message. */
     while (!acknowledged) {

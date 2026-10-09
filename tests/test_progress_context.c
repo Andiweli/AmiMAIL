@@ -11,6 +11,10 @@ static unsigned checks, wake_count;
 static int forbid_depth;
 static struct MsgPort commands, responses;
 static struct Task gui_task;
+static struct Process worker_process;
+static AmgNetwork *stopping_network;
+static int worker_alive;
+static unsigned worker_signals;
 static AmgNetMessage *queued, *response;
 #define CHECK(expr) do { ++checks; if (!(expr)) { \
     fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #expr); abort(); \
@@ -20,6 +24,12 @@ void Forbid(void) { ++forbid_depth; }
 void Permit(void) { CHECK(forbid_depth > 0); --forbid_depth; }
 void Signal(struct Task *task, ULONG mask)
 {
+    if (task == (struct Task *)&worker_process) {
+        CHECK(worker_alive && forbid_depth > 0);
+        CHECK(mask == SIGBREAKF_CTRL_C);
+        ++worker_signals;
+        return;
+    }
     CHECK(forbid_depth == 0);
     CHECK(task == &gui_task);
     CHECK(mask == (1UL << responses.mp_SigBit));
@@ -28,6 +38,15 @@ void Signal(struct Task *task, ULONG mask)
 void PutMsg(struct MsgPort *port, struct Message *message)
 {
     CHECK(port == &commands && queued == NULL);
+    if (((AmgNetMessage *)message)->type == AMG_NET_STOP) {
+        CHECK(forbid_depth > 0 && worker_signals == 1U);
+        CHECK(stopping_network && stopping_network->io_cancel_requested);
+        /* Complete immediately: no later Signal may dereference this task. */
+        worker_alive = 0;
+        stopping_network->running = 0;
+        response = (AmgNetMessage *)message;
+        return;
+    }
     queued = (AmgNetMessage *)message;
 }
 struct Message *GetMsg(struct MsgPort *port)
@@ -37,6 +56,7 @@ struct Message *GetMsg(struct MsgPort *port)
     response = NULL;
     return (struct Message *)message;
 }
+ULONG Wait(ULONG mask) { (void)mask; CHECK(0); return 0UL; }
 const char *amg_tr(long id, const char *english) { (void)id; return english; }
 void amg_mailfile_close(AmgMailFile *file) { CHECK(file == NULL); }
 
@@ -260,6 +280,16 @@ int main(void)
     test_accounts_and_jobs(&network);
     test_outgoing(&network);
     test_folder_queue(&network);
+    network.process = &worker_process;
+    worker_alive = 1;
+    network.progress.active = network.progress.cancellable = 1;
+    CHECK(amg_network_cancel_transfer(&network, network.progress.serial));
+    CHECK(worker_signals == 1U);
+    worker_signals = 0U;
+    stopping_network = &network;
+    amg_network_stop(&network);
+    CHECK(!network.process && !network.running && !worker_alive);
+    CHECK(!network.io_cancel_requested && !network.stop_requested);
     CHECK(forbid_depth == 0 && queued == NULL && response == NULL);
     CHECK(wake_count > 0U);
     printf("Progress queue/context: %u checks passed (API doubles).\n", checks);
