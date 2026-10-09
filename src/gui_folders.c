@@ -525,7 +525,8 @@ static int google_namespace_container_name(const char *mailbox_utf8)
 {
     return mailbox_utf8 &&
         (!strcmp(mailbox_utf8, "[Gmail]") ||
-         !strcmp(mailbox_utf8, "[Google Mail]"));
+         !strcmp(mailbox_utf8, "[Google Mail]") ||
+         !strcmp(mailbox_utf8, "[GoogleMail]"));
 }
 
 static void prune_google_namespace_containers(AmgGui *gui)
@@ -533,21 +534,24 @@ static void prune_google_namespace_containers(AmgGui *gui)
     size_t i;
     int google_account;
 
-    if (!gui || !gui->account) return;
-    google_account = amg_account_is_google_host(gui->account->imap_host) ||
-        amg_account_is_google_host(gui->account->smtp_host);
-    if (!google_account) return;
+    if (!gui) return;
+    google_account = gui->account &&
+        (amg_account_is_google_host(gui->account->imap_host) ||
+         amg_account_is_google_host(gui->account->smtp_host) ||
+         gui->account->auth_mode == AMG_AUTH_OAUTH2_GOOGLE);
 
     i = GUI_SYSTEM_LABEL_COUNT;
     while (i < gui->label_count) {
         GuiLabel *label = &gui->labels[i];
-        if (label->selectable ||
-            !google_namespace_container_name(label->mailbox_utf8)) {
+        if (!google_namespace_container_name(label->mailbox_utf8) ||
+            (!google_account && label->selectable)) {
             ++i;
             continue;
         }
 
-        /* This is a server namespace, not an openable mailbox. Retain its
+        /* Gmail's reserved root is hidden even if LIST omits Noselect.
+         * A nonselectable known root is also safe to hide behind a proxy.
+         * Keep selectable namesakes on other providers. Retain the namespace's
          * children and their exact server paths; tree preparation below
          * promotes them to the first visible level without this container. */
         if (i + 1U < gui->label_count)

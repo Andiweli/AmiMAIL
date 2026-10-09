@@ -90,16 +90,35 @@ static void test_other_accounts(void)
     memset(&gui, 0, sizeof(gui)); gui.account = &account;
     CHECK(update_labels_from_payload(&gui, (const unsigned char *)payload,
                                      sizeof(payload) - 1U) == 2U);
-    CHECK(find_label(&gui, "[Gmail]") && !find_label(&gui, "[Gmail]")->selectable);
-    CHECK(find_label(&gui, "[Gmail]/Important")->generation == 2U);
+    CHECK(!find_label(&gui, "[Gmail]"));
+    CHECK(find_label(&gui, "[Gmail]/Important")->generation == 1U);
     gui.account = NULL;
     CHECK(update_labels_from_payload(&gui, (const unsigned char *)payload,
                                      sizeof(payload) - 1U) == 2U);
-    CHECK(find_label(&gui, "[Gmail]"));
+    CHECK(!find_label(&gui, "[Gmail]"));
+    /* A selectable namesake is still a genuine mailbox on another provider. */
+    gui.account=&account;
+    CHECK(update_labels_from_payload(&gui,(const unsigned char *)selectable,
+                                    sizeof(selectable)-1U)==1U);
+    CHECK(find_label(&gui,"[Gmail]") && find_label(&gui,"[Gmail]")->selectable);
     gui.account = &account; strcpy(account.imap_host, "imap.gmail.com");
     CHECK(update_labels_from_payload(&gui, (const unsigned char *)selectable,
                                      sizeof(selectable) - 1U) == 1U);
-    CHECK(find_label(&gui, "[Gmail]") && find_label(&gui, "[Gmail]")->selectable);
+    CHECK(!find_label(&gui, "[Gmail]"));
+    account.auth_mode=AMG_AUTH_OAUTH2_GOOGLE;strcpy(account.imap_host,"mail.proxy.test");
+    CHECK(update_labels_from_payload(&gui,(const unsigned char *)selectable,
+                                    sizeof(selectable)-1U)==1U);
+    CHECK(!find_label(&gui,"[Gmail]"));
+    {
+        static const char aliases[]="0\t1\t/\t[GoogleMail]\n0\t1\t/\t[Google Mail]\n"
+            "0\t1\t/\t[GoogleMail]/Important\n";
+        CHECK(update_labels_from_payload(&gui,(const unsigned char *)aliases,
+                                        sizeof(aliases)-1U)==3U);
+        CHECK(!find_label(&gui,"[GoogleMail]") && !find_label(&gui,"[Google Mail]"));
+        CHECK(find_label(&gui,"[GoogleMail]/Important")->generation==1U);
+        CHECK(!strcmp(find_label(&gui,"[GoogleMail]/Important")->server_mailbox_utf8,
+                      "[GoogleMail]/Important"));
+    }
     CHECK(update_labels_from_payload(&gui, NULL, 0U) == 0U);
     CHECK(gui.label_count == GUI_SYSTEM_LABEL_COUNT);
 }
@@ -107,7 +126,7 @@ static void test_other_accounts(void)
 int main(void)
 {
     test_google_children(); test_other_accounts();
-    CHECK(rebuilt == 7U && loaded == rebuilt);
+    CHECK(rebuilt == 10U && loaded == rebuilt);
     printf("folder visibility: %u checks passed (native mapping; UI doubles).\n", checks);
     return 0;
 }
