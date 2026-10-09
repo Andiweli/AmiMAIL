@@ -72,21 +72,28 @@ A native AmigaOS 3.2+ mail client with a ReAction interface.
 
 ## 🔐 Account Security
 
-AmiMAIL encrypts stored credentials with **AES-256-GCM** and creates a random
-256-bit key for each account. It stores that key beside the encrypted
-configuration in `ENVARC:AmiMail`, so accounts can log in automatically. There
-is no master-password prompt in the normal account settings.
+### Stored credentials
 
-This protects the configuration from casual reading and detects modified
-encrypted data. It does **not** protect credentials from someone who can read
-both the `.cfg` and matching `.key` files, including from a disk image or backup.
-Protect the account directory and its backups. PBKDF2-HMAC-SHA256 remains
-supported for older master-password configurations; normal saves use random keys.
+AmiMAIL encrypts stored account credentials using **AES-256-GCM**.
+A local encryption key is stored alongside the account configuration
+in `ENVARC:AmiMail`, allowing automatic login without a startup
+master-password prompt.
 
-Fetched messages and outgoing recovery copies can contain unencrypted mail
-and attachments in `PROGDIR:Spool` (or `AmiMAIL_SpoolDir`). Interrupted operations
-may retain recovery files to prevent data loss. Protect this drawer and inspect
-retained files before deleting them while AmiMAIL is stopped.
+Anyone who can read both the configuration and its matching key can
+decrypt the credentials. This includes access through disk images
+or backups. Treat the account directory and its backups as sensitive
+data.
+
+### Temporary mail files
+
+AmiMAIL does not maintain a permanent offline mailbox database.
+Temporary messages, drafts and attachments can nevertheless be
+stored **unencrypted** in `PROGDIR:Spool` or the configured spool
+directory.
+
+Recovery copies may remain after interrupted, failed or uncertain
+transfers to prevent data loss. Inspect these files before deleting
+them, and remove unneeded copies only while AmiMAIL is not running.
 
 ## 🌐 Installation
 
