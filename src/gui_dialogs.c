@@ -2803,6 +2803,7 @@ typedef struct ConfirmationObjects {
     Object *note;
     Object *yes;
     Object *no;
+    Object *gap;
     Object *buttons;
     Object *layout;
     Object *dialog;
@@ -2813,6 +2814,7 @@ static void confirmation_dispose(ConfirmationObjects *objects)
     if (objects->dialog) DisposeObject(objects->dialog);
     else if (objects->layout) DisposeObject(objects->layout);
     if (objects->buttons) DisposeObject(objects->buttons);
+    if (objects->gap) DisposeObject(objects->gap);
     if (objects->no) DisposeObject(objects->no);
     if (objects->yes) DisposeObject(objects->yes);
     if (objects->note) DisposeObject(objects->note);
@@ -2878,13 +2880,14 @@ GuiConfirmationResult confirm_question_result_for_window(
     }
     if (gui->screen->Font && gui->screen->Font->ta_YSize)
         font_height = (LONG)gui->screen->Font->ta_YSize;
-    question_height = font_height;
-    note_height = font_height;
+    question_height = font_height + 4L;
+    note_height = font_height + 2L;
     button_height = font_height + 8L;
 
     /* Never depend on public class-name registration or build several
      * constructors in one variadic expression. The libraries are already
-     * opened for the whole GUI lifetime. All tags retain the accepted layout. */
+     * opened for the whole GUI lifetime. Keep explicit ownership of children
+     * on every construction failure path. */
     failure_stage = 2U;
     button_class = ButtonBase ? BUTTON_GetClass() : NULL;
     layout_class = LayoutBase ? LAYOUT_GetClass() : NULL;
@@ -2913,6 +2916,12 @@ GuiConfirmationResult confirm_question_result_for_window(
     objects.no = confirmation_button(button_class, GID_CONFIRM_NO,
                                      T(MSG_NO, "_No"));
     if (!objects.no) goto failed;
+    /* Preserve a visible blank line before Yes/No using the same read-only,
+     * transparent label class as the text rows. Do not rely on an oversized
+     * window or on spare space from different window borders. */
+    build_step = 5UL;
+    objects.gap = confirmation_label(button_class, "");
+    if (!objects.gap) goto failed;
     {
         struct TagItem tags[] = {
             { LAYOUT_Orientation, LAYOUT_ORIENT_HORIZ },
@@ -2925,7 +2934,7 @@ GuiConfirmationResult confirm_question_result_for_window(
             { CHILD_NoDispose, TRUE },
             { TAG_DONE, 0UL }
         };
-        build_step = 5UL;
+        build_step = 6UL;
         objects.buttons = NewObjectA(layout_class, NULL, tags);
         if (!objects.buttons) goto failed;
     }
@@ -2945,6 +2954,11 @@ GuiConfirmationResult confirm_question_result_for_window(
             { objects.note ? CHILD_MinHeight : TAG_IGNORE, (ULONG)note_height },
             { objects.note ? CHILD_MaxHeight : TAG_IGNORE, (ULONG)note_height },
             { objects.note ? CHILD_WeightedHeight : TAG_IGNORE, 0UL },
+            { LAYOUT_AddChild, (ULONG)(uintptr_t)objects.gap },
+            { CHILD_NoDispose, TRUE },
+            { CHILD_MinHeight, (ULONG)font_height },
+            { CHILD_MaxHeight, (ULONG)font_height },
+            { CHILD_WeightedHeight, 0UL },
             { LAYOUT_AddChild, (ULONG)(uintptr_t)objects.buttons },
             { CHILD_NoDispose, TRUE },
             { CHILD_MinHeight, (ULONG)button_height },
@@ -2952,7 +2966,7 @@ GuiConfirmationResult confirm_question_result_for_window(
             { CHILD_WeightedHeight, 0UL },
             { TAG_DONE, 0UL }
         };
-        build_step = 6UL;
+        build_step = 7UL;
         objects.layout = NewObjectA(layout_class, NULL, tags);
         if (!objects.layout) goto failed;
     }
@@ -2994,7 +3008,7 @@ GuiConfirmationResult confirm_question_result_for_window(
             { TAG_DONE, 0UL }
         };
         failure_stage = 3U;
-        build_step = 7UL;
+        build_step = 8UL;
         objects.dialog = NewObjectA(window_class, NULL, tags);
         if (!objects.dialog) goto failed;
         /* Attach only after OM_NEW succeeds: a failed window constructor
@@ -3005,7 +3019,7 @@ GuiConfirmationResult confirm_question_result_for_window(
     dialog = objects.dialog;
     gui_requester_trace(gui, "requester.object", 1UL, 0UL);
     failure_stage = 4U;
-    build_step = 8UL;
+    build_step = 9UL;
     window = RA_OpenWindow(dialog);
     if (!window) goto failed;
     gui_requester_trace(gui, "requester.position",
@@ -3013,7 +3027,7 @@ GuiConfirmationResult confirm_question_result_for_window(
     gui_requester_trace(gui, "requester.size",
         (unsigned long)window->Width, (unsigned long)window->Height);
     failure_stage = 5U;
-    build_step = 9UL;
+    build_step = 10UL;
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
     if (!signal_mask) goto failed;
     gui_requester_trace(gui, "requester.open",

@@ -67,7 +67,8 @@ def wiring():
     assert 'note && *note' in requester
     assert 'GUI_CONFIRM_NO' in requester and 'GUI_CONFIRM_DISMISSED' in requester
     assert 'return GUI_CONFIRM_FAILED;' in requester
-    assert 'note_height = font_height;' in requester
+    assert 'question_height = font_height + 4L;' in requester
+    assert 'note_height = font_height + 2L;' in requester
     assert 'WA_InnerWidth' in requester and 'WA_InnerHeight' in requester
     assert 'WINDOW_Position, WPOS_CENTERWINDOW' in requester
     assert 'WINDOW_RefWindow' in requester

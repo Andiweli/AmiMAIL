@@ -23,6 +23,7 @@ struct Object { int kind, live; size_t children; Object *child[4]; int keep[4];
     ULONG inner_width, inner_height, width, height, min_height, max_width, max_height;
     LONG left, top;
     ULONG position, lock_width, lock_height;
+    ULONG child_min_height[4], child_max_height[4], child_weight[4];
     struct Window *reference;
 };
 typedef struct TestClass { int kind; } Class;
@@ -131,7 +132,7 @@ static int fail_stage, object_count, disposed_layout, disposed_window, window_op
 static Object test_objects[32];
 static Class test_button_class={TEST_BUTTON}, test_layout_class={TEST_VGROUP}, test_window_class={TEST_WINDOW};
 static int live_objects, allocation_call, fail_allocation;
-static UWORD domain_width, domain_height;
+static UWORD domain_width, domain_height, measured_height;
 static UBYTE actual_border_left, actual_border_right, actual_border_top, actual_border_bottom;
 static ULONG raw_qualifier;
 static struct InputEvent input_event;
@@ -221,6 +222,9 @@ static Object *NewObjectA(Class *cl, CONST_STRPTR name, const struct TagItem *ta
         if(tag==LAYOUT_Orientation && value==LAYOUT_ORIENT_HORIZ) o->kind=TEST_HGROUP;
         if(tag==LAYOUT_AddChild) {CHECK(value && o->children<4);o->child[o->children++]=(Object *)(uintptr_t)value;}
         if(tag==CHILD_NoDispose) {CHECK(o->children);o->keep[o->children-1U]=value!=0;}
+        if(tag==CHILD_MinHeight) {CHECK(o->children);o->child_min_height[o->children-1U]=value;}
+        if(tag==CHILD_MaxHeight) {CHECK(o->children);o->child_max_height[o->children-1U]=value;}
+        if(tag==CHILD_WeightedHeight) {CHECK(o->children);o->child_weight[o->children-1U]=value;}
         if(tag==WA_InnerWidth) o->inner_width=value;
         if(tag==WA_InnerHeight) o->inner_height=value;
         if(tag==WA_Width) o->width=value;
@@ -258,7 +262,16 @@ static int rawkey_is_cancel(ULONG result)
 { return (result&WMHI_KEYMASK)==GUI_RAWKEY_ESCAPE; }
 static void LayoutLimits(struct Gadget *g,struct LayoutLimits *l,
                          struct TextFont *f,struct Screen *s)
-{ CHECK(g && f==&font && s==&screen);l->MinWidth=domain_width;l->MinHeight=domain_height; }
+{
+    Object *layout=(Object *)g;
+    ULONG height=6UL;size_t i;
+    CHECK(g && f==&font && s==&screen);
+    for(i=0;i<layout->children;++i) height+=layout->child_min_height[i];
+    /* Measure the production tags, so removing a blank row changes the
+     * result. This is a geometry double, not native font/theme rendering. */
+    l->MinWidth=domain_width;l->MinHeight=domain_height?domain_height:(UWORD)height;
+    measured_height=l->MinHeight;
+}
 static struct Window *test_OpenWindow(Object *o)
 {
     LONG min_width, min_height;
@@ -266,7 +279,7 @@ static struct Window *test_OpenWindow(Object *o)
     if(fail_stage==4) return NULL;
     CHECK(o->children==1 && o->child[0]->kind==TEST_VGROUP);
     min_width=(LONG)domain_width+actual_border_left+actual_border_right;
-    min_height=(LONG)domain_height+actual_border_top+actual_border_bottom;
+    min_height=(LONG)measured_height+actual_border_top+actual_border_bottom;
     /* The fixed-height child rows also bound the layout's maximum height.
      * Reference borders can cause either a too-small maximum or a too-large
      * minimum. Model those constraints, not the full window.class algorithm. */
@@ -350,7 +363,8 @@ static void reset(void)
     compose_queue_result=AMG_OK;compose_queue_calls=0;
     memset(test_objects,0,sizeof(test_objects));live_objects=allocation_call=fail_allocation=0;
     raw_qualifier=0;
-    domain_width=302;domain_height=40;
+    domain_width=302;domain_height=measured_height=0;
+    text_attr.ta_YSize=8;
     actual_border_left=main_window.BorderLeft;actual_border_right=main_window.BorderRight;
     actual_border_top=main_window.BorderTop;actual_border_bottom=main_window.BorderBottom;
     memset(&confirm_window,0,sizeof(confirm_window));
@@ -452,15 +466,15 @@ static void test_native_sizing(void)
     reset();actual_border_bottom=4;
     events[0]=WMHI_GADGETUP|GID_CONFIRM_YES;
     CHECK(confirm_delete_dialog(&test_gui)==1);
-    CHECK(confirm_window.Height==56 && !test_gui.confirmation_failure);
+    CHECK(confirm_window.Height==68 && !test_gui.confirmation_failure);
     CHECK(!live_objects);
     main_window.BorderBottom=4;
     reset();debug_enabled=1;actual_border_top=28;actual_border_bottom=8;
     actual_border_left=6;actual_border_right=6;
     events[0]=WMHI_GADGETUP|GID_CONFIRM_YES;
     CHECK(confirm_delete_dialog(&test_gui)==1);
-    CHECK(confirm_window.Width==314 && confirm_window.Height==76);
-    CHECK(confirm_window.LeftEdge==203 && confirm_window.TopEdge==207);
+    CHECK(confirm_window.Width==314 && confirm_window.Height==88);
+    CHECK(confirm_window.LeftEdge==203 && confirm_window.TopEdge==201);
     CHECK(strstr(log_data,"requester.inner-size v1=302")!=NULL);
     CHECK(strstr(log_data,"requester.size v1=314")!=NULL);
     CHECK(!live_objects && !test_gui.confirmation_failure);
@@ -473,6 +487,32 @@ static void test_native_sizing(void)
     test_compose_cancel(&test_gui,&done,&submitted);
     CHECK(done && !submitted && !compose_queue_calls);
     CHECK(!test_gui.confirmation_failure && !live_objects);
+}
+
+static void test_text_spacing(void)
+{
+    UWORD heights[]={8U,12U,16U,24U};size_t h;int with_note;
+    for(h=0;h<sizeof(heights)/sizeof(heights[0]);++h) {
+        for(with_note=0;with_note<=1;++with_note) {
+            Object *layout=NULL,*gap;size_t i,gap_index=with_note?2U:1U;
+            reset();text_attr.ta_YSize=heights[h];
+            events[0]=WMHI_GADGETUP|GID_CONFIRM_YES;
+            CHECK(confirm_question_result_for_window(&test_gui,&main_window,"Q",
+                  with_note?"N":NULL,310)==GUI_CONFIRM_YES);
+            /* Test objects retain their recorded tags after disposal. */
+            for(i=0;i<32U;++i) if(test_objects[i].kind==TEST_VGROUP &&
+                test_objects[i].children) layout=&test_objects[i];
+            CHECK(layout && layout->children==(with_note?4U:3U));
+            CHECK(layout->child_min_height[0]==(ULONG)heights[h]+4UL);
+            if(with_note) CHECK(layout->child_min_height[1]==(ULONG)heights[h]+2UL);
+            gap=layout->child[gap_index];
+            CHECK(gap->kind==TEST_BUTTON && !gap->children);
+            CHECK(layout->child_min_height[gap_index]==heights[h]);
+            CHECK(layout->child_max_height[gap_index]==heights[h]);
+            CHECK(layout->child_weight[gap_index]==0UL);
+            CHECK(!live_objects);
+        }
+    }
 }
 
 static void test_delete_safety(void)
@@ -528,7 +568,7 @@ static void test_draft_safety(void)
 static void test_repeat_and_lifecycle(void)
 {
     int i, j;
-    for(i=1;i<=7;++i) {
+    for(i=1;i<=8;++i) {
         reset();fail_allocation=i;
         CHECK(confirm_question_result_for_window(&test_gui,&main_window,"Q","N",310)==GUI_CONFIRM_FAILED);
         CHECK(live_objects==0);
@@ -554,7 +594,7 @@ static void test_repeat_and_lifecycle(void)
 }
 int main(void)
 {
-    test_log();test_failures();test_decisions();test_native_sizing();test_delete_safety();test_draft_safety();test_repeat_and_lifecycle();
+    test_log();test_failures();test_decisions();test_text_spacing();test_native_sizing();test_delete_safety();test_draft_safety();test_repeat_and_lifecycle();
     printf("requester diagnostics: %u checks passed (explicit API doubles).\n",checks);
     return 0;
 }
