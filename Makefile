@@ -54,6 +54,14 @@ CPPFLAGS := -Iinclude -I"$(NDK_INC)" -I"$(REACTION_SDK)" -I"$(AMISSL_SDK)/includ
 COMMON_WARN := -Wall -Wextra -Wshadow -Wpointer-arith -Wstrict-prototypes -Wmissing-prototypes -Wformat=2
 AMIGA_CFLAGS := -m68020 -msoft-float -fomit-frame-pointer -fno-common $(COMMON_WARN)
 AMIGA_LDFLAGS := -m68020 -msoft-float -L"$(AMISSL_OS3_LIB)"
+# Protect the C heap and FILE pool shared by NP_Entry workers. Detect newlib
+# from the selected compiler's headers; older libnix only needs public names.
+AMIGA_RUNTIME_WRAP := malloc calloc realloc free fopen fclose
+AMIGA_CRT_NEWLIB := $(shell $(CC) -dM -E -include stdlib.h -x c /dev/null 2>/dev/null | grep -c '^\#define __NEWLIB__ ')
+ifeq ($(AMIGA_CRT_NEWLIB),1)
+AMIGA_RUNTIME_WRAP += _malloc_r _calloc_r _realloc_r _free_r _fopen_r _fclose_r __sfp __sinit
+endif
+AMIGA_LDFLAGS += $(foreach symbol,$(AMIGA_RUNTIME_WRAP),-Wl,--wrap=$(symbol))
 # AmiSSL and bsdsocket are opened explicitly in src/tls.c.  Therefore the
 # AmiSSL auto-open library must not be linked as well.  AMISSL_EXTRA_LIBS can
 # be set to -lamisslstubs if a future source file passes AmiSSL entry points
@@ -61,7 +69,7 @@ AMIGA_LDFLAGS := -m68020 -msoft-float -L"$(AMISSL_OS3_LIB)"
 AMISSL_EXTRA_LIBS ?=
 AMIGA_LIBS := $(AMISSL_EXTRA_LIBS) -Wl,--start-group -lc -lstubs -lamiga -Wl,--end-group
 
-SOURCES := src/main.c src/app.c src/splash.c src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/periodic.c src/mail_notice.c src/codec.c \
+SOURCES := src/main.c src/app.c src/runtime_lock.c src/splash.c src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/periodic.c src/mail_notice.c src/codec.c \
            src/crypto.c src/imap_parser.c src/mime.c src/mailto.c src/oauth.c src/tls.c src/update.c \
            src/imap.c src/smtp.c src/storage.c src/contacts.c src/contacts_import.c \
            src/network_task.c src/gui.c src/gui_runtime.c src/gui_actions.c src/gui_mailto.c \
@@ -101,7 +109,7 @@ debug: check-env catalogs
 native-build: $(NATIVE_BINARY) | bin
 	cp $(NATIVE_BINARY) bin/$(PROJECT)
 
-$(NATIVE_BINARY): $(OBJECTS)
+$(NATIVE_BINARY): $(OBJECTS) Makefile
 	$(CC) $(AMIGA_LDFLAGS) -o $@ $(OBJECTS) $(AMIGA_LIBS)
 
 $(NATIVE_BUILD_DIR)/%.o: src/%.c | $(NATIVE_BUILD_DIR)
@@ -121,6 +129,12 @@ host-test: $(HOST_TEST)
 host-check: | build
 
 	$(HOST_CC) -std=c99 -O2 $(COMMON_WARN) -Iinclude src/*.c -o build/amimail-host-check
+
+.PHONY: runtime-lock-test
+runtime-lock-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_runtime_lock.py
+
+review-test: runtime-lock-test
 
 $(HOST_TEST): tests/test_main.c $(HOST_SOURCES) $(HOST_HEADERS) | build
 
