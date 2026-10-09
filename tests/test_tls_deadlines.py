@@ -18,7 +18,7 @@ def main():
         ("struct AmgTlsConnection {", "/* libnix errno"),
         ("static void tls_deadline_end(", "int amg_tls_starttls(AmgTlsConnection"),
         ("static long tls_read_internal(", "#else\n\nstruct AmgTlsConnection"),
-        ("int amg_tls_write_all(", "static int decode_chunked("),
+        ("int amg_tls_write_all(", "int amg_https_decode_chunked("),
     ]
     source = "\n".join(text[text.index(a):text.index(b, text.index(a))]
                        for a, b in sections)

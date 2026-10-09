@@ -21,6 +21,9 @@ long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length, AmgEr
 long amg_tls_write(AmgTlsConnection *connection, const void *data, size_t length, AmgError *error);
 int amg_tls_write_all(AmgTlsConnection *connection, const void *data, size_t length, AmgError *error);
 void amg_tls_close(AmgTlsConnection *connection);
+/* Decode a complete HTTP chunked body, including its final trailer section. */
+int amg_https_decode_chunked(const unsigned char *data, size_t length,
+                              AmgBuffer *output);
 int amg_https_post_form(const char *host, const char *path, const char *form,
                         AmgBuffer *response_body, AmgError *error);
 

@@ -7,6 +7,7 @@
 #include "tls.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,13 +32,13 @@ int amg_oauth_generate_pkce(char verifier[129], char challenge[129], char state[
     if (result == AMG_OK && encoded.length < 129U) { memcpy(verifier, encoded.data, encoded.length); verifier[encoded.length] = 0; }
     else result = AMG_ERR_LIMIT;
     amg_buffer_free(&encoded);
-    if (result != AMG_OK) return result;
+    if (result != AMG_OK) { amg_secure_clear(random, sizeof(random)); return result; }
     amg_sha256((const unsigned char *)verifier, strlen(verifier), digest);
     amg_buffer_init(&encoded); result = amg_base64url_encode(digest, sizeof(digest), &encoded);
     if (result == AMG_OK && encoded.length < 129U) { memcpy(challenge, encoded.data, encoded.length); challenge[encoded.length] = 0; }
     else result = AMG_ERR_LIMIT;
     amg_buffer_free(&encoded);
-    if (result != AMG_OK) return result;
+    if (result != AMG_OK) { amg_secure_clear(random, sizeof(random)); return result; }
     amg_buffer_init(&encoded); result = amg_base64url_encode(random + 48U, 16U, &encoded);
     if (result == AMG_OK && encoded.length < 65U) { memcpy(state, encoded.data, encoded.length); state[encoded.length] = 0; }
     else result = AMG_ERR_LIMIT;
@@ -80,7 +81,13 @@ static int json_string(const char *json, const char *key, char **value)
 {
     AmgBuffer needle, decoded; const char *p;
     amg_buffer_init(&needle); amg_buffer_init(&decoded);
-    amg_buffer_append_char(&needle, '"'); amg_buffer_append_cstr(&needle, key); amg_buffer_append_char(&needle, '"'); amg_buffer_terminate(&needle);
+    if (amg_buffer_append_char(&needle, '"') != AMG_OK ||
+        amg_buffer_append_cstr(&needle, key) != AMG_OK ||
+        amg_buffer_append_char(&needle, '"') != AMG_OK ||
+        amg_buffer_terminate(&needle) != AMG_OK) {
+        amg_buffer_free(&needle);
+        return -1;
+    }
     p = strstr(json, (const char *)needle.data); amg_buffer_free(&needle); if (!p) return 0;
     p = strchr(p, ':'); if (!p) return -1; p = skip_ws(p + 1); if (*p++ != '"') return -1;
     while (*p && *p != '"') {
@@ -88,7 +95,11 @@ static int json_string(const char *json, const char *key, char **value)
         if (c == '\\') {
             c = (unsigned char)*p++;
             if (c == 'n') c = '\n'; else if (c == 'r') c = '\r'; else if (c == 't') c = '\t';
+            else if (c == 'b') c = '\b'; else if (c == 'f') c = '\f';
             else if (c != '"' && c != '\\' && c != '/') { amg_buffer_free(&decoded); return -1; }
+        } else if (c < 32U) {
+            amg_buffer_free(&decoded);
+            return -1;
         }
         if (amg_buffer_append_char(&decoded, c) != AMG_OK) { amg_buffer_free(&decoded); return -1; }
     }
@@ -99,9 +110,25 @@ static int json_string(const char *json, const char *key, char **value)
 static int json_ulong(const char *json, const char *key, unsigned long *value)
 {
     AmgBuffer needle; const char *p; char *end;
-    amg_buffer_init(&needle); amg_buffer_append_char(&needle, '"'); amg_buffer_append_cstr(&needle, key); amg_buffer_append_char(&needle, '"'); amg_buffer_terminate(&needle);
+    amg_buffer_init(&needle);
+    if (amg_buffer_append_char(&needle, '"') != AMG_OK ||
+        amg_buffer_append_cstr(&needle, key) != AMG_OK ||
+        amg_buffer_append_char(&needle, '"') != AMG_OK ||
+        amg_buffer_terminate(&needle) != AMG_OK) {
+        amg_buffer_free(&needle);
+        return -1;
+    }
     p = strstr(json, (const char *)needle.data); amg_buffer_free(&needle); if (!p) return 0;
-    p = strchr(p, ':'); if (!p) return -1; p = skip_ws(p + 1); *value = strtoul(p, &end, 10); return end == p ? -1 : 1;
+    p = strchr(p, ':'); if (!p) return -1; p = skip_ws(p + 1);
+    if (!isdigit((unsigned char)*p)) return -1;
+    *value = 0UL;
+    while (isdigit((unsigned char)*p)) {
+        unsigned long digit = (unsigned long)(*p++ - '0');
+        if (*value > (ULONG_MAX - digit) / 10UL) return -1;
+        *value = *value * 10UL + digit;
+    }
+    end = (char *)skip_ws(p);
+    return *end == ',' || *end == '}' ? 1 : -1;
 }
 
 int amg_oauth_parse_token_json(const char *json, AmgOAuthTokens *tokens, AmgError *error)
@@ -125,7 +152,8 @@ static int token_request(const AmgOAuthConfig *config, const char *form, AmgOAut
     AmgBuffer response; int result;
     (void)config; amg_buffer_init(&response);
     result = amg_https_post_form("oauth2.googleapis.com", "/token", form, &response, error);
-    if (result == AMG_OK) { amg_buffer_terminate(&response); result = amg_oauth_parse_token_json((const char *)response.data, tokens, error); }
+    if (result == AMG_OK) result = amg_buffer_terminate(&response);
+    if (result == AMG_OK) result = amg_oauth_parse_token_json((const char *)response.data, tokens, error);
     amg_buffer_free(&response); return result;
 }
 
@@ -141,7 +169,8 @@ int amg_oauth_exchange_code(const AmgOAuthConfig *config, const char *code,
     if (result == AMG_OK) result = add_query(&form, "code_verifier", verifier, '&');
     if (result == AMG_OK) result = add_query(&form, "redirect_uri", config->redirect_uri, '&');
     if (result == AMG_OK) result = add_query(&form, "grant_type", "authorization_code", '&');
-    if (result == AMG_OK) { amg_buffer_terminate(&form); result = token_request(config, (const char *)form.data, tokens, error); }
+    if (result == AMG_OK) result = amg_buffer_terminate(&form);
+    if (result == AMG_OK) result = token_request(config, (const char *)form.data, tokens, error);
     amg_buffer_free(&form); return result;
 }
 
@@ -155,6 +184,7 @@ int amg_oauth_refresh(const AmgOAuthConfig *config, const char *refresh_token,
     if (result == AMG_OK && config->client_secret && *config->client_secret) result = add_query(&form, "client_secret", config->client_secret, '&');
     if (result == AMG_OK) result = add_query(&form, "refresh_token", refresh_token, '&');
     if (result == AMG_OK) result = add_query(&form, "grant_type", "refresh_token", '&');
-    if (result == AMG_OK) { amg_buffer_terminate(&form); result = token_request(config, (const char *)form.data, tokens, error); }
+    if (result == AMG_OK) result = amg_buffer_terminate(&form);
+    if (result == AMG_OK) result = token_request(config, (const char *)form.data, tokens, error);
     amg_buffer_free(&form); return result;
 }

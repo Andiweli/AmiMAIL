@@ -733,9 +733,11 @@ static long tls_read_internal(AmgTlsConnection *connection, void *data, size_t l
                       length > 0x7fffffffU ? 0x7fffffff : (int)length, 0);
         if (result > 0) return result;
         if (result < 0 && socket_would_block(errno)) continue;
-        if (result == 0)
+        if (result == 0) {
             amg_error_set(error, AMG_ERR_IO,
                           T(MSG_THE_SERVER_CLOSED_THE_TCP_CONNECTION, "The server closed the TCP connection."));
+            return 0;
+        }
         else {
             char message[192];
             amg_tr_snprintf(message, sizeof(message), MSG_TCP_READ_ERROR_ERRNO_VALUE, "TCP read error (errno %d).", errno);
@@ -764,9 +766,11 @@ static long tls_read_internal(AmgTlsConnection *connection, void *data, size_t l
                 return AMG_ERR_IO;
             continue;
         }
-        if (ssl_result == SSL_ERROR_ZERO_RETURN)
+        if (ssl_result == SSL_ERROR_ZERO_RETURN) {
             amg_error_set(error, AMG_ERR_IO,
                           T(MSG_THE_SERVER_CLOSED_THE_TLS_CONNECTION, "The server closed the TLS connection."));
+            return 0;
+        }
         else
             ssl_operation_error(error, AMG_ERR_IO,
                                 T(MSG_TLS_READ_ERROR, "TLS read error"),
@@ -914,60 +918,166 @@ int amg_tls_write_all(AmgTlsConnection *connection, const void *data, size_t len
     return result;
 }
 
-static int decode_chunked(const unsigned char *data, size_t length, AmgBuffer *output)
+int amg_https_decode_chunked(const unsigned char *data, size_t length, AmgBuffer *output)
 {
-    size_t position = 0;
+    size_t position = 0U;
+    if ((!data && length) || !output) return AMG_ERR_ARGUMENT;
     while (position < length) {
-        char number[32], *endptr; size_t line_end = position, digits, chunk;
-        while (line_end + 1U < length && !(data[line_end] == '\r' && data[line_end + 1U] == '\n')) ++line_end;
-        if (line_end + 1U >= length) return AMG_ERR_PARSE;
-        digits = line_end - position; if (digits >= sizeof(number)) return AMG_ERR_PARSE;
-        memcpy(number, data + position, digits); number[digits] = 0; chunk = strtoul(number, &endptr, 16);
-        if (endptr == number) return AMG_ERR_PARSE;
-        position = line_end + 2U; if (!chunk) return AMG_OK;
-        if (chunk > length - position || amg_buffer_append(output, data + position, chunk) != AMG_OK) return AMG_ERR_PARSE;
-        position += chunk; if (position + 2U > length || data[position] != '\r' || data[position + 1U] != '\n') return AMG_ERR_PARSE;
+        size_t line_end = position, chunk = 0U, digits = 0U, cursor;
+        int result;
+        while (line_end + 1U < length &&
+               !(data[line_end] == '\r' && data[line_end + 1U] == '\n')) ++line_end;
+        if (line_end + 1U >= length) return AMG_ERR_PROTOCOL;
+        cursor = position;
+        while (cursor < line_end) {
+            unsigned char c = data[cursor];
+            unsigned digit;
+            if (c >= '0' && c <= '9') digit = c - '0';
+            else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10U;
+            else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10U;
+            else break;
+            if (chunk > (SIZE_MAX - digit) / 16U) return AMG_ERR_PROTOCOL;
+            chunk = chunk * 16U + digit;
+            ++digits; ++cursor;
+        }
+        if (!digits || (cursor < line_end && data[cursor] != ';')) return AMG_ERR_PROTOCOL;
+        position = line_end + 2U;
+        if (!chunk) {
+            /* Consume the final empty line, allowing well-formed trailers. */
+            while (position + 1U < length) {
+                line_end = position;
+                while (line_end + 1U < length &&
+                       !(data[line_end] == '\r' && data[line_end + 1U] == '\n')) ++line_end;
+                if (line_end + 1U >= length) return AMG_ERR_PROTOCOL;
+                if (line_end == position)
+                    return line_end + 2U == length ? AMG_OK : AMG_ERR_PROTOCOL;
+                if (!memchr(data + position, ':', line_end - position)) return AMG_ERR_PROTOCOL;
+                position = line_end + 2U;
+            }
+            return AMG_ERR_PROTOCOL;
+        }
+        if (chunk > length - position || length - position - chunk < 2U)
+            return AMG_ERR_PROTOCOL;
+        result = amg_buffer_append(output, data + position, chunk);
+        if (result != AMG_OK) return result;
+        position += chunk;
+        if (data[position] != '\r' || data[position + 1U] != '\n') return AMG_ERR_PROTOCOL;
         position += 2U;
     }
-    return AMG_ERR_PARSE;
+    return AMG_ERR_PROTOCOL;
+}
+
+/* Bounded, case-insensitive header lookup; never search the response body. */
+static int https_header(const unsigned char *data, size_t length,
+                         const char *name, char *value, size_t capacity)
+{
+    size_t position = 0U, name_length = strlen(name);
+    int found = 0;
+    value[0] = 0;
+    while (position + 1U < length) {
+        size_t end = position, i, start, finish;
+        while (end + 1U < length && !(data[end] == '\r' && data[end + 1U] == '\n')) ++end;
+        if (end + 1U >= length) return -1;
+        if (end - position > name_length && data[position + name_length] == ':') {
+            for (i = 0U; i < name_length; ++i) {
+                unsigned char a = data[position + i], b = (unsigned char)name[i];
+                if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+                if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+                if (a != b) break;
+            }
+            if (i == name_length) {
+                if (found) return -1;
+                start = position + name_length + 1U; finish = end;
+                while (start < finish && (data[start] == ' ' || data[start] == '\t')) ++start;
+                while (finish > start && (data[finish - 1U] == ' ' || data[finish - 1U] == '\t')) --finish;
+                if (finish - start >= capacity || memchr(data + start, 0, finish - start)) return -1;
+                memcpy(value, data + start, finish - start); value[finish - start] = 0;
+                found = 1;
+            }
+        }
+        position = end + 2U;
+    }
+    return found;
 }
 
 int amg_https_post_form(const char *host, const char *path, const char *form,
                         AmgBuffer *response_body, AmgError *error)
 {
-    AmgTlsConnection *connection;
-    AmgBuffer request, response;
+    AmgTlsConnection *connection = NULL;
+    AmgBuffer request, response, decoded;
     unsigned char block[2048];
     const unsigned char *header_end;
-    size_t header_length;
-    long count;
-    int status = 0, result = AMG_OK;
-    if (!host || !path || !form || !response_body) return AMG_ERR_ARGUMENT;
-    connection = amg_tls_connect(host, 443, 30, error); if (!connection) return error ? error->code : AMG_ERR_TLS;
-    amg_buffer_init(&request); amg_buffer_init(&response);
-    {
-        char length_text[32]; snprintf(length_text, sizeof(length_text), "%lu", (unsigned long)strlen(form));
-        amg_buffer_append_cstr(&request, "POST "); amg_buffer_append_cstr(&request, path); amg_buffer_append_cstr(&request, " HTTP/1.1\r\nHost: ");
-        amg_buffer_append_cstr(&request, host); amg_buffer_append_cstr(&request, "\r\nUser-Agent: AmiMail/" AMIGMAIL_VERSION
-            "\r\nContent-Type: application/x-www-form-urlencoded\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: ");
-        amg_buffer_append_cstr(&request, length_text); amg_buffer_append_cstr(&request, "\r\n\r\n"); amg_buffer_append_cstr(&request, form);
-    }
+    char length_text[32], encoding[64], content_length[32];
+    size_t header_length, body_length, expected = 0U, i;
+    long count = -1;
+    int status = 0, result = AMG_OK, has_encoding, has_length;
+    if (!host || !path || !form || !response_body || strpbrk(host, "\r\n") ||
+        strpbrk(path, "\r\n")) return AMG_ERR_ARGUMENT;
+    amg_buffer_init(&request); amg_buffer_init(&response); amg_buffer_init(&decoded);
+    amg_buffer_set_limit(&response, 1024U * 1024U);
+    connection = amg_tls_connect(host, 443, 30, error);
+    if (!connection) { result = error && error->code ? error->code : AMG_ERR_TLS; goto done; }
+    snprintf(length_text, sizeof(length_text), "%lu", (unsigned long)strlen(form));
+#define APPEND_REQUEST(text) do { result = amg_buffer_append_cstr(&request, (text)); if (result != AMG_OK) goto done; } while (0)
+    APPEND_REQUEST("POST "); APPEND_REQUEST(path);
+    APPEND_REQUEST(" HTTP/1.1\r\nHost: "); APPEND_REQUEST(host);
+    APPEND_REQUEST("\r\nUser-Agent: AmiMail/" AMIGMAIL_VERSION
+        "\r\nContent-Type: application/x-www-form-urlencoded\r\nAccept: application/json"
+        "\r\nConnection: close\r\nContent-Length: ");
+    APPEND_REQUEST(length_text); APPEND_REQUEST("\r\n\r\n"); APPEND_REQUEST(form);
+#undef APPEND_REQUEST
     result = amg_tls_write_all(connection, request.data, request.length, error);
-    while (result == AMG_OK && response.length <= 1024U * 1024U) {
+    while (result == AMG_OK) {
         count = amg_tls_read(connection, block, sizeof(block), error);
         if (count <= 0) break;
         result = amg_buffer_append(&response, block, (size_t)count);
     }
-    amg_tls_close(connection); amg_buffer_free(&request);
-    if (result != AMG_OK || response.length > 1024U * 1024U) { amg_buffer_free(&response); return result != AMG_OK ? result : AMG_ERR_LIMIT; }
-    amg_buffer_terminate(&response); sscanf((const char *)response.data, "HTTP/%*u.%*u %d", &status);
+    if (result != AMG_OK) goto done;
+    result = amg_buffer_terminate(&response);
+    if (result != AMG_OK) goto done;
     header_end = (const unsigned char *)strstr((const char *)response.data, "\r\n\r\n");
-    if (!header_end) { amg_buffer_free(&response); amg_error_set(error, AMG_ERR_PROTOCOL, T(MSG_INVALID_HTTPS_RESPONSE, "Invalid HTTPS response.")); return AMG_ERR_PROTOCOL; }
+    if (!header_end || sscanf((const char *)response.data, "HTTP/%*u.%*u %d", &status) != 1) {
+        result = AMG_ERR_PROTOCOL; goto done;
+    }
     header_length = (size_t)(header_end - response.data) + 4U;
-    if (strstr((const char *)response.data, "Transfer-Encoding: chunked") || strstr((const char *)response.data, "transfer-encoding: chunked"))
-        result = decode_chunked(response.data + header_length, response.length - header_length, response_body);
-    else result = amg_buffer_append(response_body, response.data + header_length, response.length - header_length);
-    amg_buffer_free(&response);
-    if (status < 200 || status >= 300) { amg_error_set(error, AMG_ERR_AUTH, T(MSG_GOOGLE_REJECTED_THE_OAUTH_REQUEST, "Google rejected the OAuth request.")); return AMG_ERR_AUTH; }
+    body_length = response.length - header_length;
+    has_encoding = https_header(response.data, header_length, "Transfer-Encoding", encoding, sizeof(encoding));
+    has_length = https_header(response.data, header_length, "Content-Length", content_length, sizeof(content_length));
+    if (has_encoding < 0 || has_length < 0 || (has_encoding && has_length)) {
+        result = AMG_ERR_PROTOCOL; goto done;
+    }
+    if (has_encoding) {
+        for (i = 0U; encoding[i]; ++i)
+            if (encoding[i] >= 'A' && encoding[i] <= 'Z') encoding[i] += 'a' - 'A';
+        if (strcmp(encoding, "chunked")) { result = AMG_ERR_PROTOCOL; goto done; }
+        result = amg_https_decode_chunked(response.data + header_length, body_length, &decoded);
+    } else if (has_length) {
+        if (!content_length[0]) { result = AMG_ERR_PROTOCOL; goto done; }
+        for (i = 0U; content_length[i]; ++i) {
+            unsigned digit = (unsigned char)content_length[i] - '0';
+            if (digit > 9U || expected > (SIZE_MAX - digit) / 10U) {
+                result = AMG_ERR_PROTOCOL; goto done;
+            }
+            expected = expected * 10U + digit;
+        }
+        if (expected != body_length) { result = AMG_ERR_PROTOCOL; goto done; }
+        result = amg_buffer_append(&decoded, response.data + header_length, body_length);
+    } else if (count < 0) {
+        result = error && error->code ? error->code : AMG_ERR_IO;
+    } else {
+        result = amg_buffer_append(&decoded, response.data + header_length, body_length);
+    }
+    if (result == AMG_OK && (status < 200 || status >= 300)) {
+        result = AMG_ERR_AUTH;
+        amg_error_set(error, result, T(MSG_GOOGLE_REJECTED_THE_OAUTH_REQUEST, "Google rejected the OAuth request."));
+    }
+    if (result == AMG_OK) result = amg_buffer_append(response_body, decoded.data, decoded.length);
+
+done:
+    amg_tls_close(connection);
+    amg_buffer_free(&request); amg_buffer_free(&response); amg_buffer_free(&decoded);
+    if (result == AMG_OK) amg_error_set(error, AMG_OK, "");
+    else if (!error || error->code == AMG_OK || error->code != result)
+        amg_error_set(error, result, T(MSG_INVALID_HTTPS_RESPONSE, "Invalid HTTPS response."));
     return result;
 }

@@ -226,6 +226,7 @@ static int header_value(const unsigned char *data, size_t header_length,
                         const char *name, char *output, size_t capacity)
 {
     size_t name_length, position = 0U;
+    int found = 0;
     if (!data || !name || !output || !capacity) return 0;
     output[0] = 0;
     name_length = strlen(name);
@@ -250,59 +251,16 @@ static int header_value(const unsigned char *data, size_t header_length,
                     data[value_end - 1U] == '\t'))
                 --value_end;
             copy_length = value_end - value_start;
-            if (copy_length >= capacity) copy_length = capacity - 1U;
+            if (found || copy_length >= capacity ||
+                memchr(data + value_start, 0, copy_length)) return -1;
             memcpy(output, data + value_start, copy_length);
             output[copy_length] = 0;
-            return 1;
+            found = 1;
         }
         if (line_end + 2U > header_length) break;
         position = line_end + 2U;
     }
-    return 0;
-}
-
-static int string_contains_nocase(const char *text, const char *needle)
-{
-    size_t text_length, needle_length, i;
-    if (!text || !needle) return 0;
-    text_length = strlen(text);
-    needle_length = strlen(needle);
-    if (!needle_length || needle_length > text_length) return 0;
-    for (i = 0; i + needle_length <= text_length; ++i) {
-        if (text_equal_nocase_n(text + i, needle, needle_length)) return 1;
-    }
-    return 0;
-}
-
-static int decode_chunked_body(const unsigned char *data, size_t length,
-                               AmgBuffer *output)
-{
-    size_t position = 0U;
-    while (position < length) {
-        char number[32], *endptr;
-        size_t line_end = position, digits, chunk;
-        while (line_end + 1U < length &&
-               !(data[line_end] == '\r' && data[line_end + 1U] == '\n'))
-            ++line_end;
-        if (line_end + 1U >= length) return AMG_ERR_PARSE;
-        digits = line_end - position;
-        if (!digits || digits >= sizeof(number)) return AMG_ERR_PARSE;
-        memcpy(number, data + position, digits);
-        number[digits] = 0;
-        chunk = strtoul(number, &endptr, 16);
-        if (endptr == number) return AMG_ERR_PARSE;
-        position = line_end + 2U;
-        if (!chunk) return AMG_OK;
-        if (chunk > length - position) return AMG_ERR_PARSE;
-        if (amg_buffer_append(output, data + position, chunk) != AMG_OK)
-            return AMG_ERR_MEMORY;
-        position += chunk;
-        if (position + 2U > length || data[position] != '\r' ||
-            data[position + 1U] != '\n')
-            return AMG_ERR_PARSE;
-        position += 2U;
-    }
-    return AMG_ERR_PARSE;
+    return found;
 }
 
 static int parse_https_url(const char *url,
@@ -311,7 +269,7 @@ static int parse_https_url(const char *url,
 {
     const char *start, *slash;
     size_t host_length;
-    if (!url || strncmp(url, "https://", 8U) != 0 ||
+    if (!url || strpbrk(url, "\r\n\t ") || strncmp(url, "https://", 8U) != 0 ||
         !host || !host_capacity || !path || path_capacity < 2U)
         return 0;
     start = url + 8U;
@@ -363,10 +321,10 @@ static int https_get_once(const char *url, size_t max_body,
     unsigned char block[4096];
     const unsigned char *body_start;
     size_t header_length, raw_body_length;
-    long count;
-    int result = AMG_OK;
+    long count = 0;
+    int result = AMG_OK, has_encoding, has_length;
 
-    if (!parse_https_url(url, host, sizeof(host), path, sizeof(path))) {
+    if (!body || !status || !parse_https_url(url, host, sizeof(host), path, sizeof(path))) {
         amg_error_set(error, AMG_ERR_ARGUMENT,
                       T(MSG_INVALID_HTTPS_ADDRESS, "Invalid HTTPS address."));
         return AMG_ERR_ARGUMENT;
@@ -430,9 +388,11 @@ static int https_get_once(const char *url, size_t max_body,
         goto done;
     }
     header_length = (size_t)(body_start - response.data);
-    if (location && location_capacity)
-        (void)header_value(response.data, header_length,
-                           "Location", location, location_capacity);
+    if (location && location_capacity && header_value(response.data, header_length,
+                           "Location", location, location_capacity) < 0) {
+        result = AMG_ERR_PROTOCOL;
+        goto done;
+    }
     if (status && (*status == 301 || *status == 302 || *status == 303 ||
                    *status == 307 || *status == 308)) {
         result = AMG_OK;
@@ -448,21 +408,31 @@ static int https_get_once(const char *url, size_t max_body,
     raw_body_length = response.length - header_length;
     transfer_encoding[0] = 0;
     content_length_text[0] = 0;
-    (void)header_value(response.data, header_length, "Transfer-Encoding",
+    has_encoding = header_value(response.data, header_length, "Transfer-Encoding",
                        transfer_encoding, sizeof(transfer_encoding));
-    (void)header_value(response.data, header_length, "Content-Length",
+    has_length = header_value(response.data, header_length, "Content-Length",
                        content_length_text, sizeof(content_length_text));
-    if (string_contains_nocase(transfer_encoding, "chunked")) {
-        result = decode_chunked_body(body_start, raw_body_length, body);
-    } else if (content_length_text[0]) {
-        char *endptr = NULL;
-        unsigned long expected = strtoul(content_length_text, &endptr, 10);
-        if (endptr == content_length_text || *endptr ||
-            expected > (unsigned long)raw_body_length) {
+    if (has_encoding < 0 || has_length < 0) {
+        result = AMG_ERR_PROTOCOL;
+    } else if (has_encoding) {
+        if (has_length || strlen(transfer_encoding) != 7U ||
+            !text_equal_nocase_n(transfer_encoding, "chunked", 7U))
             result = AMG_ERR_PROTOCOL;
-        } else {
-            result = amg_buffer_append(body, body_start, (size_t)expected);
+        else
+            result = amg_https_decode_chunked(body_start, raw_body_length, body);
+    } else if (has_length) {
+        size_t expected = 0U, i;
+        for (i = 0U; content_length_text[i]; ++i) {
+            unsigned digit = (unsigned char)content_length_text[i] - '0';
+            if (digit > 9U || expected > (SIZE_MAX - digit) / 10U) break;
+            expected = expected * 10U + digit;
         }
+        if (!i || content_length_text[i] || expected != raw_body_length)
+            result = AMG_ERR_PROTOCOL;
+        else
+            result = amg_buffer_append(body, body_start, expected);
+    } else if (count < 0) {
+        result = error && error->code ? error->code : AMG_ERR_IO;
     } else {
         result = amg_buffer_append(body, body_start, raw_body_length);
     }

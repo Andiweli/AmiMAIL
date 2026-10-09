@@ -167,7 +167,7 @@ int main(void)
     amg_tls_close(c);
     reset(); c = amg_tls_connect_plain("mail", 993, 3, &error); assert(c);
     recv_mode = 2; assert(amg_tls_read(c, &byte, 1, &error) == AMG_ERR_IO);
-    recv_mode = 3; assert(amg_tls_read(c, &byte, 1, &error) == AMG_ERR_IO);
+    recv_mode = 3; assert(amg_tls_read(c, &byte, 1, &error) == 0);
     cancel_flag = 1; assert(amg_tls_write(c, &byte, 1, &error) == AMG_ERR_IO);
     amg_tls_close(c); reset();
     puts("TLS deadlines: connect fallback/errors, cancellation, descriptor bounds, WANT retries, partial writes and resource cleanup passed.");
