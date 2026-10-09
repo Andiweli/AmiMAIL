@@ -141,6 +141,11 @@ verwendet dafür automatisch einen lokalen Kontoschlüssel. Ein Master-Passwort
 ist weder beim Programmstart noch zum Ändern oder Speichern eines Kontos
 erforderlich.
 
+Wer Kontokonfiguration und passende .key-Datei lesen kann, kann die
+Zugangsdaten entschluesseln, auch aus einem Festplatten-Backup. Schuetze
+ENVARC:AmiMail und seine Backups. Die automatische Anmeldung bietet keinen
+Schutz gegen das Auslesen der Festplatte.
+
 Kann ein sehr altes verschlüsseltes Konto ohne passenden lokalen Schlüssel
 nicht automatisch geöffnet werden, bleiben seine öffentlichen Einstellungen
 erhalten. In diesem Fall müssen lediglich die IMAP-/SMTP-Passwörter erneut
@@ -370,6 +375,10 @@ Statuszeile. Bei lokalen Dateivorgängen ist die Navigation vorübergehend
 gesperrt; X oder Escape bricht sie ab. Fehlt fuelgauge.gadget, erscheint statt
 des Balkens eine Prozentanzeige. Beim Beenden bricht AmiMAIL Netzwerkzugriffe
 ab und wartet vor der Speicherfreigabe auf die Worker.
+
+Spool-Dateien enthalten unverschluesselte Mails und Anhaenge. Fehlgeschlagene
+Vorgaenge koennen Wiederherstellungsdateien behalten. Schuetze den Ordner und
+pruefe Reste, bevor du sie bei beendetem AmiMAIL loeschst.
 
 Temporärdaten liegen standardmäßig in PROGDIR:Spool auf dem Programmvolume.
 Für einen anderen beschreibbaren Disk-Ordner vor dem Start die globale

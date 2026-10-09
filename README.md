@@ -45,17 +45,25 @@ AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a
 - Built-in asynchronous **GitHub update check and release download to `RAM:`**
 - Live mail status through the AmigaOS **ENV/ENVARC** `AmiMAILStatus` variable
 - German UI on German AmigaOS systems, English UI otherwise
-- **No local email cache:** messages are read directly from the IMAP server
+- **No permanent mailbox database:** messages are read from IMAP; temporary mail and recovery files use a local spool
 
 ## 🔐 Account Security
 
-AmiMAIL stores the account data encrypted using a **mandatory user-defined master password**.
+AmiMAIL encrypts stored credentials with **AES-256-GCM** and creates a random
+256-bit key for each account. It stores that key beside the encrypted
+configuration in `ENVARC:AmiMail`, so accounts can log in automatically. There
+is no master-password prompt in the normal account settings.
 
-Sensitive account information is protected with:
+This protects the configuration from casual reading and detects modified
+encrypted data. It does **not** protect credentials from someone who can read
+both the `.cfg` and matching `.key` files, including from a disk image or backup.
+Protect the account directory and its backups. PBKDF2-HMAC-SHA256 remains
+supported for older master-password configurations; normal saves use random keys.
 
-- **PBKDF2-HMAC-SHA256** key derivation
-- **AES-256-GCM** authenticated encryption
-- encrypted storage of IMAP/SMTP passwords or app passwords
+Fetched messages and outgoing recovery copies can contain unencrypted mail
+and attachments in `PROGDIR:Spool` (or `AmiMAIL_SpoolDir`). Interrupted operations
+may retain recovery files to prevent data loss. Protect this drawer and inspect
+retained files before deleting them while AmiMAIL is stopped.
 
 ## 🌐 Installation
 
@@ -64,7 +72,7 @@ Sensitive account information is protected with:
 3. Make sure the Amiga has a working TCP/IP connection and the correct system date and time.
 4. Start `AmiMAIL`.
 5. Open the account settings and configure your server.
-6. Enter a master password to encrypt the stored account data.
+6. Save the account settings; AmiMAIL creates its local encryption key automatically.
 
 ## ⚙️ Requirements
 
@@ -114,3 +122,21 @@ AmiMAIL is licensed under the **AmiMAIL/AmiGmail Non-Commercial Source License 1
 AmiMAIL is an independent, non-commercial hobby project. **Amiga** and **AmigaOS** are trademarks of their respective owners. AmiSSL and other third-party components remain subject to their respective licenses.
 
 Copyright © Andreas 'Andiweli' Stürmer.
+
+## Building and checking changes
+
+`make release` and `make debug` use separate native object directories and copy
+the selected executable to `bin/AmiMAIL`. Run `make review-test host-check` on a
+host with GCC and Python. Native GUI/network tests use API doubles; they do not
+replace an AmigaOS runtime test.
+
+`make dist` and `make release-lha` stage the same binary package, including the
+icon, catalogs, guides, sounds and Installer source files. For the optional
+Installer, enter the extracted `Install` drawer and run
+`SYS:Utilities/Installer Install-AmiMAIL`. Manual installation by copying the
+extracted program drawer remains available. The shipped icon is used; the old
+Mason/Classic chooser is retained when both separate icons are supplied.
+
+`make source-dist` archives tracked working-tree files only. It excludes Git
+metadata, build outputs, backup sources and the private OAuth configuration
+header. Commit new source files before creating the source archive.

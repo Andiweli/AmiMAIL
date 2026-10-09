@@ -148,23 +148,31 @@ ENV:AmiMail.session-key-2
 ENV:AmiMail.session-key-3
 ```
 
-New account files use `AMIMAIL-ACCOUNT-2`. Secrets are encrypted with
-AES-256-GCM using a PBKDF2-HMAC-SHA256-derived key. The master password itself
-is never persisted. A derived 256-bit key is kept in the matching `ENVARC:` key
-file so account loading never needs a startup password requester. Volatile
-`ENV:` copies are retained for compatibility and the current-session unlock
-path.
+New account files use `AMIMAIL-ACCOUNT-2`. Normal GUI saves generate a random
+256-bit account key and encrypt secrets with AES-256-GCM. The matching `ENVARC:`
+key file enables automatic startup and re-encryption after settings changes.
+No master password is required by the current account dialogs. PBKDF2-HMAC-SHA256
+and older metadata remain supported by the legacy storage APIs. Volatile `ENV:`
+copies are retained for compatibility.
 
-The account's `allow_passwordless_changes` metadata flag controls whether the
-persistent derived key may also re-encrypt configuration changes. It does not
-control automatic startup. Enabling the flag on an existing account requires a
-verified master password once. Cached re-encryption preserves the account's
-PBKDF2 salt and iteration count, so the same master password remains valid.
+Possession of both configuration and key, for example in a full-disk backup,
+permits decryption. Protect the account directory and backup media. This is
+automatic local credential storage, not protection against disk theft.
 
-The original `account.cfg` remains account 1, so an AmiMAIL 1.5 configuration
-is adopted without conversion or data loss. Legacy `AMIMAIL-ACCOUNT-1` files
-are migrated once: the old stored master is
-used only to decrypt and immediately rewrite the account as ACCOUNT-2.
+Mail-file spooling is plaintext. Successful temporary transfers are cleaned up
+by their owners; interrupted outgoing operations may keep recovery copies. Do
+not discard unacknowledged outgoing mail automatically. Review leftover spool
+files when no transfer or other AmiMAIL instance is active.
+
+The original `account.cfg` remains account 1. Legacy `AMIMAIL-ACCOUNT-1` files
+remain recognized by the storage APIs. When a usable automatic key is missing,
+the current GUI retains the public settings and requires the IMAP/SMTP secrets
+to be entered again before saving in ACCOUNT-2 format.
+
+When a new automatic key is needed, it is first written as `.key.pending`.
+The configuration is then committed before the key is promoted. The loader
+accepts a pending key only if its salt and KDF match the committed configuration;
+a failed promotion retains the usable recovery copy.
 
 ## Provider-specific compatibility
 
@@ -243,3 +251,16 @@ The GitHub release check runs in the existing network worker, never in the GUI
 task. The repository endpoint is `Andiweli/AmiMAIL`; the expected release asset
 schema is `AmiMAIL-<tag>.lha`. Download is user-triggered and goes to `RAM:`;
 AmiMail does not auto-install or unpack releases.
+
+## Network deadlines
+
+Sockets stay nonblocking after connection. DNS/TCP establishment, TLS handshake,
+read and complete buffer write each have one timer.device deadline. WANT_READ,
+WANT_WRITE and partial writes share the budget. Workers receive a cancellation
+signal; each bsdsocket opener has separate errno storage. Shutdown still waits
+for worker acknowledgement before freeing shared objects.
+
+The deadline/cancellation signal is included in bsdsocket's BREAKMASK. DNS
+interruption depends on the actual stack resolver honoring that API. Verify
+this on the target Amiga with its installed stack; host API doubles cannot
+prove resolver responsiveness, AmiSSL runtime behavior or scheduler timing.

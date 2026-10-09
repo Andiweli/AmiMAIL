@@ -137,6 +137,11 @@ Credentials are stored locally in protected form. AmiMAIL creates and uses a
 local per-account key automatically. No master password is required at program
 startup or when changing or saving an account.
 
+Anyone who can read both the account configuration and its matching .key
+file can decrypt credentials, including from a disk backup. Protect the
+ENVARC:AmiMail drawer and backups. Automatic login does not protect against
+someone reading the disk.
+
 If a very old encrypted account cannot be opened because its matching local
 key is unavailable, its public settings remain available. In that case, only
 the IMAP/SMTP password needs to be entered again before saving the account.
@@ -349,6 +354,10 @@ status row. Navigation is temporarily locked during local file operations;
 X or Escape cancels them. If fuelgauge.gadget is unavailable, a percentage
 label is used instead of the bar. Closing AmiMAIL cancels network I/O and
 waits for workers to finish before freeing their data.
+
+Spool files contain unencrypted mail and attachments. Failed operations may
+retain recovery files. Protect this drawer and review retained files before
+deleting them while AmiMAIL is stopped.
 
 Temporary data normally goes to PROGDIR:Spool on the program volume. To use
 another writable disk drawer, set the global environment variable
