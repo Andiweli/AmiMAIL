@@ -149,7 +149,7 @@ FILES = ('src/gui_transfer.c', 'src/gui_attachments.c', 'src/network_task.c',
 # Additional declarations are scoped to the logger translation unit so the
 # existing executable test doubles keep their own Library/Task definitions.
 DIAG_API = API.replace('struct Task { int unused; };',
-                       'struct Task { struct Node tc_Node; };').replace(
+                       'struct Task { struct Node tc_Node; ULONG tc_SigAlloc; };').replace(
     '#endif', r"""
 struct Library { UWORD lib_Version, lib_Revision; };
 extern struct Library *WindowBase, *LayoutBase, *ButtonBase;

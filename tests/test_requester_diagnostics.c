@@ -34,7 +34,7 @@ typedef struct ComposeAttachment { int unused; } ComposeAttachment;
 typedef struct DraftEditData { int unused; } DraftEditData;
 typedef enum ComposeMode { COMPOSE_MODE_NEW=0 } ComposeMode;
 struct Node { UBYTE ln_Type; };
-struct Task { struct Node tc_Node; };
+struct Task { struct Node tc_Node; ULONG tc_SigAlloc; };
 struct Process { struct Task pr_Task; APTR pr_WindowPtr; };
 struct Library { UWORD lib_Version, lib_Revision; };
 struct TextAttr { UWORD ta_YSize; };
@@ -376,9 +376,11 @@ static void test_log(void)
     for(mode=0;mode<6;++mode) {
         reset();debug_enabled=mode!=0;open_fail=mode==2;seek_fail=mode==3;
         write_fail=mode==4;forced_full=mode==5;pending=SIGBREAKF_CTRL_C;
+        test_process.pr_Task.tc_SigAlloc=0xfffeffffUL;
         gui_requester_trace(&test_gui,"test.event",12UL,34UL);
         CHECK(native_error==765 && errno==ERANGE);
         CHECK(pending==SIGBREAKF_CTRL_C && test_process.pr_WindowPtr==(APTR)&main_window);
+        CHECK(test_process.pr_Task.tc_SigAlloc==0xfffeffffUL);
         CHECK(close_calls==((mode && !open_fail)?1:0));
         if(mode==0) CHECK(!mem_calls && !open_calls && !log_size);
         if(mode==1) {
@@ -386,6 +388,7 @@ static void test_log(void)
             CHECK(strstr(log_data,"chip_largest=524288")!=NULL);
             CHECK(strstr(log_data,"classes=window:47.24,layout:47.12,button:47.8")!=NULL);
             CHECK(strstr(log_data,"pending=00001000")!=NULL);
+            CHECK(strstr(log_data,"allocated=fffeffff")!=NULL);
         }
         if(mode>1) CHECK(!log_size);
     }

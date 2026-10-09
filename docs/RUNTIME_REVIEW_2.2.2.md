@@ -127,3 +127,82 @@ auch während ein Konto im Hintergrund abruft. Für verbleibende Kontaktprobleme
 vorher SetEnv AmiMAIL_RequesterDebug 1 ausführen und die neuen Logzeilen sichern.
 Die vollständige Beseitigung des Geräteabsturzes wird erst nach diesem Test
 bestätigt; es wurde kein Amiga-Gerätetest in dieser Umgebung ausgeführt.
+
+## Nachtrag: Herald-Test blockiert Kontakt-Unterdialoge
+
+Die nächste Geräterückmeldung grenzt den Ausfall ein: vier konfigurierte
+Mailkonten, einmaliger Herald-Test im Konfigurationsfenster. Danach öffnet sich
+die Kontaktverwaltung, aber Neu, Bearbeiten und Löschen funktionieren danach
+nicht mehr. Ein weiterer GURU wurde dabei nicht beobachtet. Ein Herald-Client
+hat zwei Ports pro AmiMAIL-Instanz; er wird nicht je getestetem Konto angelegt.
+
+Ein weiterer bestätigter Fehler liegt in der Zuordnung der Netzwerkports:
+Die GUI erzeugte sowohl Antwort- als auch Befehlsport jedes Workers mit
+CreateMsgPort. Erst im Worker wurde mp_SigTask des Befehlsports ersetzt. Das
+reserviert dessen Signal weiterhin in der GUI und reserviert es nicht im
+Worker. Dort konnte ein späterer Timerport dieselbe Bitnummer erhalten.
+CreateMsgPort und AllocSignal dokumentieren die Zuordnung zum aufrufenden Task:
+[CreateMsgPort](https://developer.amigaos3.net/autodocs/exec.library/CreateMsgPort.html),
+[AllocSignal](https://developer.amigaos3.net/autodocs/exec.library/AllocSignal.html).
+
+Das neue Testmodell verwendet die garantierten 16 Benutzer-Signalbits je Task.
+Neben den vier Konten reserviert es fünf GUI-Bits für Hauptfenster,
+Workbench-App-Port, mailto-Port, periodischen Timer und URL-Verarbeitung. Es
+führt die tatsächliche Herald-Erzeugung, Registrierung, Testbenachrichtigung,
+Antwortverarbeitung und Freigabe aus. Kontakt-Fensterports werden durch
+CreateMsgPort-Doubles modelliert; ReAction läuft dabei nicht auf dem Host.
+
+| Schritt | Bisher benötigte GUI-Bits | Nach Korrektur |
+| --- | ---: | ---: |
+| Vier Netzwerk-Worker und übrige GUI-Dienste | 13 | 9 |
+| Konfiguration geöffnet | 14 | 10 |
+| Herald erstmals getestet | 16 | 12 |
+| Konfiguration geschlossen | 15 | 11 |
+| Kontaktverwaltung geöffnet | 16 | 12 |
+| Kontakteditor oder Löschbestätigung zusätzlich | 17, Öffnen scheitert | 13 |
+
+Damit ist der gemeldete Ablauf im begrenzten Signalmodell reproduziert. Der
+tatsächliche Belegungsstand des Geräts wurde noch nicht aus einem Log ausgelesen.
+Die vorhandenen Kontakt-/Requester-Logs enthalten nun zusätzlich allocated,
+den unveränderten tc_SigAlloc-Schnappschuss des GUI-Tasks. Das erlaubt bei Bedarf
+die Gegenprüfung der verfügbaren Bits, ohne weitere Anwendungsdaten zu erfassen.
+
+Der Befehlsport wird jetzt im jeweiligen Worker angelegt und dort nach allen
+Netzwerk-/TLS-Freigaben gelöscht. Die GUI hält nur dessen Antwortport. Bei vier
+laufenden Konten werden dadurch vier GUI-Signalbits frei. Beim erneuten Start
+legt der Worker seinen Befehlsport erneut an. Falls ihm Speicher oder ein
+Signal fehlt, meldet er einen fehlgeschlagenen Start; die GUI wartet nicht
+endlos auf einen erfolgreichen Start. Auch dieser Rückweg bleibt bis zur
+Rückkehr zu DOS gegen das vorzeitige Entladen des Programmcodes geschützt.
+
+Außerdem wird die gemeinsame Startup-Übergabe nun vor dem Aufwecken der GUI
+geleert. Die GUI kann danach den nächsten Worker vorbereiten, ohne dass der
+vorherige Worker dessen Übergabe nachträglich überschreibt. Herald-Funktion,
+Requester-Layouts und Kontakt-Speicher-/Löschverhalten werden nicht geändert.
+
+Zusätzliche Validierung:
+
+- Tatsächliche native Worker-Port-/Start-/Abschlusshelfer mit taskgetrennten
+  Exec-Doubles: 140 Prüfungen über fünf Worker, richtige Portbesitzer und
+  Freigaben, Signal- und Allokationsfehler, erneuter Start sowie Warteschleife.
+- Herald-Test: 83794 Prüfungen einschließlich der Signalgrenze vor und nach
+  der Korrektur; Konto-Serialisierung und Migration: 68 Prüfungen.
+- Requester-/Diagnosetest: 30263 Prüfungen einschließlich des neuen
+  Belegungs-Schnappschusses und unveränderter Signal-/Fehlerzustände.
+- Vollständige Regressionstests und host-check erfolgreich. Die Worker- und
+  Herald-Tests zusätzlich mit ASan/UBSan erfolgreich.
+- Release und Debug vollständig neu gebaut: jeweils 51 Compilation Units,
+  keine Compiler-/Linkerwarnungen. Die C-Laufzeit-Sperren bleiben im echten
+  m68k-Debug-Build korrekt verlinkt. Version bleibt 2.2.2, Kataloge und Guides
+  bleiben unverändert.
+
+Für den Gerätetest erneut vollständig bauen und das Programm ersetzen. Den
+Herald-Test zuerst bei vier verbundenen Konten auslösen; danach Kontakteditor
+und Löschbestätigung mehrfach öffnen und abbrechen, AmiMAIL neu starten und
+den Ablauf wiederholen. Die tatsächliche Wirkung auf dem Gerät bleibt mit
+diesem Test zu bestätigen.
+
+Die Port-Korrektur wurde als a51ed6d943de816f7d5a8016dacda555b9de22a7 auf
+audit gepusht und der Remote-SHA abgeglichen. main blieb auf
+b8bfa79dc207066e6703bcfee220bf93eb9413f5. Beide Pakettests mit dem neu
+gebauten Programm waren ebenfalls erfolgreich.

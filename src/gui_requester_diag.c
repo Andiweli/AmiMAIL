@@ -71,7 +71,7 @@ static void requester_log(const AmgGui *gui, const char *event,
     written = snprintf(line, sizeof(line),
         "AmiMAIL %s task=%08lx seq=%lu time=%ld/%ld/%ld %s "
         "v1=%lu(0x%08lx) v2=%lu(0x%08lx) account=%lu uid=%lu "
-        "window=%08lx screen=%08lx pending=%08lx requester=%08lx "
+        "window=%08lx screen=%08lx pending=%08lx allocated=%08lx requester=%08lx "
         "ioerr_context=%ld chip=%lu chip_largest=%lu fast=%lu fast_largest=%lu "
         "classes=window:%u.%u,layout:%u.%u,button:%u.%u\n",
         AMIMAIL_VERSION, (unsigned long)(uintptr_t)task, ++sequence,
@@ -81,7 +81,8 @@ static void requester_log(const AmgGui *gui, const char *event,
         gui ? (unsigned long)gui->active_message_uid : 0UL,
         (unsigned long)(uintptr_t)(gui ? gui->window : NULL),
         (unsigned long)(uintptr_t)(gui ? gui->screen : NULL),
-        (unsigned long)signals, (unsigned long)(uintptr_t)old_requester_window,
+        (unsigned long)signals, (unsigned long)task->tc_SigAlloc,
+        (unsigned long)(uintptr_t)old_requester_window,
         (long)saved_ioerr, (unsigned long)chip, (unsigned long)chip_largest,
         (unsigned long)fast, (unsigned long)fast_largest,
         WindowBase ? (unsigned)WindowBase->lib_Version : 0U,
