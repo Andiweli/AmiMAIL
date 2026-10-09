@@ -1,11 +1,13 @@
 # AmiMAIL Audit und Fehlerbereinigung
 
-Stand: 9. Oktober 2026. Ausgangspunkt ist AmiMAIL 2.2.1 auf `main`, Commit
+Erste Abschlussprüfung: 9. Oktober 2026; Nachtrag vom 10. Oktober 2026 unten.
+Ausgangspunkt ist AmiMAIL 2.2.1 auf `main`, Commit
 `b8bfa79dc207066e6703bcfee220bf93eb9413f5`. Alle Änderungen liegen auf
 [audit](https://github.com/Andiweli/AmiMAIL/tree/audit). Die Versionsnummer bleibt
 2.2.1. `main`, andere Branches, Tags und GitHub-Releases wurden nicht verändert.
 
-24 bestätigte Befundgruppen wurden bewertet: 6 mit hoher, 16 mit mittlerer und
+Bei der ersten Abschlussprüfung wurden 24 bestätigte Befundgruppen bewertet:
+6 mit hoher, 16 mit mittlerer und
 2 mit niedriger Priorität. 23 sind im erlaubten Umfang abgeschlossen, davon
 20 technische Bereinigungen und 3 Korrekturen der Dokumentation beziehungsweise
 Lizenz. Der bestehende Release-Tag bleibt wegen der ausdrücklichen Vorgabe,
@@ -153,3 +155,65 @@ Entfernte, weiterhin in der Git-Historie verfügbare Backups:
 
 Der Vergleich mit `main` umfasst diese Änderungen und keine Verschiebung von
 `main`. Es gab keinen Merge, Rebase, Force-Push, PR oder neuen Release-Tag.
+
+## Nachtrag: Gmail-Container und Bestätigungsdialog
+
+10. Oktober 2026. Beim anschließenden Test auf AmigaOS 3.2.3 meldete der Nutzer
+zwei weitere Probleme. Die betreffenden Stellen gehörten bereits zum
+Ausgangsstand; der erste Audit hatte diese Bedingungen nicht abgedeckt.
+Die folgenden Korrekturen ergänzen die obigen 24 Befundgruppen.
+
+| ID | Priorität | Ursache und Korrektur | Status |
+| --- | --- | --- | --- |
+| F25 | Mittel | Der Filter entfernte den nicht auswählbaren Google-Namespace `[Gmail]` beziehungsweise `[Google Mail]` nur ohne weitere benutzerdefinierte Kinder. Ein Ordner wie `Important` ließ den Container sichtbar bleiben. Der Filter entfernt diese Container nun auch mit Kindern. Die Kinder bleiben erhalten, werden im sichtbaren Baum neu eingeordnet und behalten unverändert ihre vollständigen Serverpfade für SELECT und andere Mailboxoperationen. Andere Provider und tatsächlich auswählbare gleichnamige Ordner bleiben erhalten. | Korrigiert und mit der tatsächlichen nativen Ordnerauswertung auf dem Host geprüft; erneuter Gerätetest ausstehend. |
+| F26 | Mittel | Die Bestätigung übernahm die Rahmenmaße des Hauptfensters mit Größenänderungsgadget für einen Dialog ohne dieses Gadget und fixierte vor WM_OPEN sowohl Minimum als auch Maximum der Außengröße. Die fest begrenzten Layoutzeilen und andere tatsächliche Rahmenmaße können dadurch widersprüchliche Größenbedingungen ergeben. Nun werden Innenmaße übergeben; window.class berechnet die Rahmen und zentriert die endgültige Größe relativ zum aufrufenden Fenster. Die Größenverriegelung erfolgt über WINDOW_LockWidth/Height. | Die unsichere Größenannahme ist korrigiert und mit API-Doubles geprüft. Ob damit der gemeldete R4 auf diesem Gerät vollständig beseitigt ist, muss der Gerätetest bestätigen. |
+
+Das Gerätelog bestätigt für F26 die Fehlerstufe 4 bei WM_OPEN, eine gemessene
+Layout-Mindestgröße von 294 × 38 und die voreingestellte Außengröße 310 × 68.
+Es nennt window.class 47.38, layout.gadget 47.61 und button.gadget 47.9 und
+zeigt ausreichend freien Speicher. Die genaue interne Abbruchbedingung von
+window.class ist aus diesem Log allein nicht abzulesen. Die Größenkorrektur
+ist deshalb kein behaupteter Nachweis eines erfolgreichen Hardwaretests.
+
+Die dokumentierte Schnittstelle von
+[LayoutLimits](https://developer.amigaos3.net/autodocs/layout.gadget/LayoutLimits.html)
+liefert Größen ohne Fensterrahmen. Die klassischen
+[window.class-Autodocs](https://amigadev.elowar.com/read/ADCD_2.1/Includes_and_Autodocs_3._guide/node05C9.html)
+beschreiben die Innenmaße, Größenverriegelung und Positionierung relativ zu
+einem Referenzfenster. Die bisherige Ressourcenverwaltung und die gesonderten
+Ergebnisse für Ja, Nein, Abbruch und Öffnungsfehler bleiben erhalten. Ein Fehler
+sendet weiterhin keinen Löschauftrag; ein nicht bestätigter Entwurf bleibt offen.
+
+Geänderte Dateien: `src/gui_folders.c`, `src/gui_dialogs.c`, `Makefile`,
+`tests/test_folder_visibility.c`, `tests/test_folder_visibility.py`,
+`tests/test_imap_compat.c`, `tests/test_requester_diagnostics.c`,
+`tests/test_requester_diagnostics.py` und dieser Bericht.
+
+Prüfungen nach den Korrekturen:
+
+- Beide neuen Regressionen schlagen gegen den unveränderten Produktionscode
+  aus `69caf505` an. Der Dialogtest modelliert unterschiedliche reale Rahmen
+  und deren Größenbedingungen, keine vollständige window.class-Implementierung.
+- Ordnerauswertung: 75 Prüfungen; IMAP-Kompatibilität einschließlich Noselect:
+  263 Prüfungen; Requester/Entwürfe/Löschfreigabe: 24431 Prüfungen bestanden.
+- `make review-test host-check` vollständig erfolgreich. Auch die bestehenden
+  Dialog-, Composer-, Kontakte-, Worker- und Protokollprüfungen bestanden.
+- Ordner- und Requestertests zusätzlich mit ASan und UBSan bestanden.
+- Release und Debug mit `make -B` vollständig neu gebaut: jeweils alle 50
+  nativen Compilation Units und der m68k-Link erfolgreich, ohne Compiler-
+  oder Linkerwarnungen.
+- Abschließende Quellprüfung: Mailboxpfade und Baum-Elternindizes bleiben
+  konsistent; Dialogobjekte werden weiterhin auf allen Fehlerpfaden freigegeben.
+
+| Commit | Inhalt |
+| --- | --- |
+| `fb67ade32cec9e4864a3732f8874209b47e02940` | Gmail-Container ausblenden und Kinder erhalten |
+| `c0ef45a96c5806720f7de667bc7353baf583a688` | ReAction berechnet und zentriert Bestätigungsfenster mit eigenen Rahmen |
+
+Beide Code-Commits wurden auf `audit` gepusht und danach mit dem Remote-SHA
+abgeglichen. `main` bleibt bei `b8bfa79dc207066e6703bcfee220bf93eb9413f5`.
+Für den erneuten Amiga-Test: Gmail-Ordnerliste mit Unterordnern prüfen,
+eine Testmail erst mit Nein und danach mit Ja löschen und den Bestätigungsdialog
+für Papierkorb, Spam sowie das Schließen eines Entwurfs prüfen. Bei erneutem R4
+enthält das Debuglog nun zusätzlich `requester.inner-size`; erfolgreiche Dialoge
+protokollieren ihre tatsächliche Größe und Position nach WM_OPEN.
