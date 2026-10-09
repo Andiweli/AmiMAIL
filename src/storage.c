@@ -833,6 +833,8 @@ static int read_account_salt(const char *path, unsigned char salt[16],
                       T(MSG_ACCOUNT_FILE_DOES_NOT_CONTAIN_VALID_ENCRYPTION_DATA, "Account file does not contain valid encryption data."));
     return result;
 }
+
+
 #endif
 
 
@@ -1158,7 +1160,7 @@ int amg_storage_load_account(const char *path, const char *master_password,
 }
 
 #if AMIGMAIL_AMIGA
-static int load_cached_storage_key(
+static int load_specific_storage_key(
     const char *account_path, const char *key_path,
     unsigned char salt[16], unsigned char key[SESSION_KEY_SIZE],
     unsigned long *iterations,
@@ -1217,6 +1219,29 @@ done:
               "Session key has expired or is invalid."));
     return result;
 }
+static int load_cached_storage_key(
+    const char *account_path, const char *key_path,
+    unsigned char salt[16], unsigned char key[SESSION_KEY_SIZE],
+    unsigned long *iterations, AmgError *error)
+{
+    char pending[512];
+    int result = load_specific_storage_key(account_path, key_path,
+                                           salt, key, iterations, error);
+    if (result == AMG_OK) return result;
+    if (!key_path || strlen(key_path) + sizeof(".pending") > sizeof(pending))
+        return result;
+    snprintf(pending, sizeof(pending), "%s.pending", key_path);
+    /* A committed configuration may refer to the staged key if power was
+     * lost before promotion. Match its salt/KDF before accepting the key.
+     * Keep a valid pending copy even when promotion cannot write the volume. */
+    if (load_specific_storage_key(account_path, pending, salt, key,
+                                  iterations, error) == AMG_OK) {
+        (void)replace_file(pending, key_path);
+        amg_error_set(error, AMG_OK, "");
+        return AMG_OK;
+    }
+    return result;
+}
 #endif
 
 #if AMIGMAIL_AMIGA
@@ -1226,11 +1251,12 @@ static int write_automatic_storage_key(
 {
     char temporary[512];
     FILE *file = NULL;
-    int result = AMG_OK;
+    int result = AMG_OK, written;
     if (!key_path || !salt || !key ||
         strlen(key_path) + 5U >= sizeof(temporary))
         return AMG_ERR_ARGUMENT;
-    snprintf(temporary, sizeof(temporary), "%s.new", key_path);
+    written = snprintf(temporary, sizeof(temporary), "%s.new", key_path);
+    if (written < 0 || (size_t)written >= sizeof(temporary)) return AMG_ERR_LIMIT;
     file = fopen(temporary, "wb");
     if (!file) result = AMG_ERR_IO;
     if (result == AMG_OK && fprintf(file, "%s", SESSION_HEADER) < 0)
@@ -1265,10 +1291,14 @@ int amg_storage_save_account_auto(const char *account_path,
     unsigned char salt[16];
     unsigned char key[SESSION_KEY_SIZE];
     unsigned long iterations = STORAGE_ITERATIONS_CURRENT;
+    char pending[512];
     int result;
     int generated = 0;
     if (!account_path || !key_path || !account)
         return AMG_ERR_ARGUMENT;
+    if (strlen(key_path) + sizeof(".pending") > sizeof(pending))
+        return AMG_ERR_LIMIT;
+    snprintf(pending, sizeof(pending), "%s.pending", key_path);
     memset(salt, 0, sizeof(salt));
     memset(key, 0, sizeof(key));
 
@@ -1286,15 +1316,26 @@ int amg_storage_save_account_auto(const char *account_path,
         if (result == AMG_OK) {
             iterations = STORAGE_ITERATIONS_CURRENT;
             result = write_automatic_storage_key(
-                key_path, salt, key, error);
+                pending, salt, key, error);
             generated = result == AMG_OK;
         }
     }
     if (result == AMG_OK)
         result = save_account_internal(account_path, account, NULL,
                                        key, salt, iterations, error);
-    if (result != AMG_OK && generated)
-        discard_file(key_path);
+    if (generated) {
+        if (result == AMG_OK) {
+            /* Configuration is already committed: do not remove the staged
+             * key on failure. The loader can recover this matching pair. */
+            result = replace_file(pending, key_path);
+            if (result != AMG_OK)
+                amg_error_set(error, result,
+                    T(MSG_ACCOUNT_FILE_COULD_NOT_BE_SAVED_SECURELY,
+                      "Account key promotion failed; recovery copy retained."));
+        } else {
+            discard_file(pending);
+        }
+    }
     amg_secure_clear(key, sizeof(key));
     amg_secure_clear(salt, sizeof(salt));
     return result;
