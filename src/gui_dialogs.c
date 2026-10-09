@@ -9,6 +9,7 @@
 #include <clib/alib_protos.h>
 #include <classes/window.h>
 #include <dos/dos.h>
+#include <devices/inputevent.h>
 #include <gadgets/button.h>
 #include <gadgets/checkbox.h>
 #include <gadgets/clicktab.h>
@@ -2793,29 +2794,82 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
     DisposeObject(dialog);
 }
 
- int confirm_question_dialog_for_window(AmgGui *gui,
-                                              struct Window *ref_window,
-                                              const char *question,
-                                              const char *note, LONG width)
+/* Every temporary child has exactly one owner, including on an OM_NEW
+ * failure. Groups use CHILD_NoDispose; only the successfully constructed
+ * window owns the root layout. Dispose parents before the retained children.
+ * This is the same ownership convention as the attachment-selection dialog. */
+typedef struct ConfirmationObjects {
+    Object *question;
+    Object *note;
+    Object *yes;
+    Object *no;
+    Object *buttons;
+    Object *layout;
+    Object *dialog;
+} ConfirmationObjects;
+
+static void confirmation_dispose(ConfirmationObjects *objects)
+{
+    if (objects->dialog) DisposeObject(objects->dialog);
+    else if (objects->layout) DisposeObject(objects->layout);
+    if (objects->buttons) DisposeObject(objects->buttons);
+    if (objects->no) DisposeObject(objects->no);
+    if (objects->yes) DisposeObject(objects->yes);
+    if (objects->note) DisposeObject(objects->note);
+    if (objects->question) DisposeObject(objects->question);
+    memset(objects, 0, sizeof(*objects));
+}
+
+static Object *confirmation_label(Class *cl, const char *text)
+{
+    struct TagItem tags[] = {
+        { GA_ReadOnly, TRUE },
+        { GA_Text, (ULONG)(uintptr_t)text },
+        { BUTTON_BevelStyle, BVS_NONE },
+        { BUTTON_Transparent, TRUE },
+        { TAG_DONE, 0UL }
+    };
+    return NewObjectA(cl, NULL, tags);
+}
+
+static Object *confirmation_button(Class *cl, ULONG id, const char *text)
+{
+    struct TagItem tags[] = {
+        { GA_ID, id }, { GA_RelVerify, TRUE },
+        { GA_Text, (ULONG)(uintptr_t)text }, { TAG_DONE, 0UL }
+    };
+    return NewObjectA(cl, NULL, tags);
+}
+
+GuiConfirmationResult confirm_question_result_for_window(
+    AmgGui *gui, struct Window *ref_window, const char *question,
+    const char *note, LONG width)
 {
     LONG font_height = 8L;
     LONG question_height, note_height, button_height;
     LONG outer_width, outer_height, min_outer_width;
     LONG left, top, max_left, max_top;
     struct LayoutLimits limits;
-    Object *layout;
-    Object *dialog;
+    ConfirmationObjects objects;
+    Class *button_class, *layout_class, *window_class;
+    Object *layout, *dialog;
     struct Window *window;
-    ULONG signal_mask = 0;
+    ULONG signal_mask = 0UL;
+    unsigned int failure_stage = 0U;
+    unsigned long build_step = 0UL;
+    LONG ioerr_context = 0L;
     int done = 0;
-    int confirmed = 0;
+    GuiConfirmationResult answer = GUI_CONFIRM_DISMISSED;
 
-    if (!gui || !ref_window || !gui->screen) return 0;
+    memset(&objects, 0, sizeof(objects));
+    if (gui) gui->confirmation_failure = 0U;
+    gui_requester_trace(gui, "requester.enter",
+        (unsigned long)(uintptr_t)ref_window, (unsigned long)width);
+    if (!gui || !ref_window || !gui->screen) {
+        gui_requester_failure(gui, 1U, 0L);
+        return GUI_CONFIRM_FAILED;
+    }
 
-    /* The compose requester is called from gui_compose.c with no secondary
-     * note.  Supply its explanatory line here so all four Yes/No requesters
-     * keep using the same measured/centered layout without changing the
-     * compose-window code or the centering calculation. */
     if ((!note || !*note) && question &&
         !strcmp(question,
                 T(MSG_DO_YOU_WANT_TO_SAVE_THE_DRAFT,
@@ -2823,75 +2877,94 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
         note = T(MSG_THE_MAIL_CAN_BE_EDITED_LATER,
                  "The mail can be edited later.");
     }
-
     if (gui->screen->Font && gui->screen->Font->ta_YSize)
         font_height = (LONG)gui->screen->Font->ta_YSize;
-    /* Keep the message block to the actual text-line height.  The previous
-     * extra vertical padding looked like an additional blank line below the
-     * requester text and pushed the Yes/No row too far down. */
     question_height = font_height;
     note_height = font_height;
     button_height = font_height + 8L;
 
-    /* Build and measure the complete requester layout before opening the
-     * window.  WPOS_CENTERWINDOW is intentionally not used here: on classic
-     * ReAction 3.2 the final layout domain can differ from the provisional
-     * window size used for WPOS_CENTERWINDOW, which made short requesters
-     * (Trash/Spam/Draft) visibly or permanently offset while the larger
-     * delete requester happened to be centered. */
-    layout = VGroupObject,
-        LAYOUT_SpaceOuter, TRUE,
-        LAYOUT_SpaceInner, FALSE,
+    /* Never depend on public class-name registration or build several
+     * constructors in one variadic expression. The libraries are already
+     * opened for the whole GUI lifetime. All tags retain the accepted layout. */
+    failure_stage = 2U;
+    button_class = ButtonBase ? BUTTON_GetClass() : NULL;
+    layout_class = LayoutBase ? LAYOUT_GetClass() : NULL;
+    window_class = WindowBase ? WINDOW_GetClass() : NULL;
+    if (!button_class || !layout_class || !window_class) {
+        gui_requester_trace(gui, "requester.classes", button_class != NULL,
+            ((unsigned long)(layout_class != NULL) << 1) |
+             (unsigned long)(window_class != NULL));
+        if (!window_class) failure_stage = 3U;
+        goto failed;
+    }
 
-        /* Put the message lines directly into the outer group.  The previous
-         * nested VGroup introduced an additional vertical layout gap before
-         * the Yes/No row on classic ReAction.  Keeping the text objects as
-         * direct children removes that apparent blank line while the window
-         * is still measured and centered from the final LayoutLimits(). */
-        LAYOUT_AddChild, ButtonObject,
-            GA_ReadOnly, TRUE,
-            GA_Text, question ? question : "",
-            BUTTON_BevelStyle, BVS_NONE,
-            BUTTON_Transparent, TRUE,
-        EndObject,
-        CHILD_MinHeight, question_height,
-        CHILD_MaxHeight, question_height,
-        CHILD_WeightedHeight, 0,
-
-        note && *note ? LAYOUT_AddChild : TAG_IGNORE, ButtonObject,
-            GA_ReadOnly, TRUE,
-            GA_Text, note && *note ? note : "",
-            BUTTON_BevelStyle, BVS_NONE,
-            BUTTON_Transparent, TRUE,
-        EndObject,
-        note && *note ? CHILD_MinHeight : TAG_IGNORE, note_height,
-        note && *note ? CHILD_MaxHeight : TAG_IGNORE, note_height,
-        note && *note ? CHILD_WeightedHeight : TAG_IGNORE, 0,
-
-        LAYOUT_AddChild, HGroupObject,
-            LAYOUT_SpaceOuter, FALSE,
-            LAYOUT_SpaceInner, TRUE,
-            LAYOUT_EvenSize, TRUE,
-            LAYOUT_AddChild, ButtonObject,
-                GA_ID, GID_CONFIRM_YES,
-                GA_RelVerify, TRUE,
-                GA_Text, T(MSG_YES, "_Yes"),
-            EndObject,
-            LAYOUT_AddChild, ButtonObject,
-                GA_ID, GID_CONFIRM_NO,
-                GA_RelVerify, TRUE,
-                GA_Text, T(MSG_NO, "_No"),
-            EndObject,
-        EndObject,
-        CHILD_MinHeight, button_height,
-        CHILD_MaxHeight, button_height,
-        CHILD_WeightedHeight, 0,
-    EndObject;
-    if (!layout) return 0;
+    build_step = 1UL;
+    objects.question = confirmation_label(button_class, question ? question : "");
+    if (!objects.question) goto failed;
+    build_step = 2UL;
+    if (note && *note) {
+        objects.note = confirmation_label(button_class, note);
+        if (!objects.note) goto failed;
+    }
+    build_step = 3UL;
+    objects.yes = confirmation_button(button_class, GID_CONFIRM_YES,
+                                      T(MSG_YES, "_Yes"));
+    if (!objects.yes) goto failed;
+    build_step = 4UL;
+    objects.no = confirmation_button(button_class, GID_CONFIRM_NO,
+                                     T(MSG_NO, "_No"));
+    if (!objects.no) goto failed;
+    {
+        struct TagItem tags[] = {
+            { LAYOUT_Orientation, LAYOUT_ORIENT_HORIZ },
+            { LAYOUT_SpaceOuter, FALSE },
+            { LAYOUT_SpaceInner, TRUE },
+            { LAYOUT_EvenSize, TRUE },
+            { LAYOUT_AddChild, (ULONG)(uintptr_t)objects.yes },
+            { CHILD_NoDispose, TRUE },
+            { LAYOUT_AddChild, (ULONG)(uintptr_t)objects.no },
+            { CHILD_NoDispose, TRUE },
+            { TAG_DONE, 0UL }
+        };
+        build_step = 5UL;
+        objects.buttons = NewObjectA(layout_class, NULL, tags);
+        if (!objects.buttons) goto failed;
+    }
+    {
+        struct TagItem tags[] = {
+            { LAYOUT_Orientation, LAYOUT_ORIENT_VERT },
+            { LAYOUT_SpaceOuter, TRUE },
+            { LAYOUT_SpaceInner, FALSE },
+            { LAYOUT_AddChild, (ULONG)(uintptr_t)objects.question },
+            { CHILD_NoDispose, TRUE },
+            { CHILD_MinHeight, (ULONG)question_height },
+            { CHILD_MaxHeight, (ULONG)question_height },
+            { CHILD_WeightedHeight, 0UL },
+            { objects.note ? LAYOUT_AddChild : TAG_IGNORE,
+              (ULONG)(uintptr_t)objects.note },
+            { objects.note ? CHILD_NoDispose : TAG_IGNORE, TRUE },
+            { objects.note ? CHILD_MinHeight : TAG_IGNORE, (ULONG)note_height },
+            { objects.note ? CHILD_MaxHeight : TAG_IGNORE, (ULONG)note_height },
+            { objects.note ? CHILD_WeightedHeight : TAG_IGNORE, 0UL },
+            { LAYOUT_AddChild, (ULONG)(uintptr_t)objects.buttons },
+            { CHILD_NoDispose, TRUE },
+            { CHILD_MinHeight, (ULONG)button_height },
+            { CHILD_MaxHeight, (ULONG)button_height },
+            { CHILD_WeightedHeight, 0UL },
+            { TAG_DONE, 0UL }
+        };
+        build_step = 6UL;
+        objects.layout = NewObjectA(layout_class, NULL, tags);
+        if (!objects.layout) goto failed;
+    }
+    layout = objects.layout;
+    gui_requester_trace(gui, "requester.layout", 1UL, 0UL);
 
     memset(&limits, 0, sizeof(limits));
     LayoutLimits((struct Gadget *)layout, &limits,
                  gui->screen->RastPort.Font, gui->screen);
+    gui_requester_trace(gui, "requester.minimum",
+        (unsigned long)limits.MinWidth, (unsigned long)limits.MinHeight);
 
     /* LayoutLimits() reports the inner layout domain without window borders.
      * The reference window uses the same screen/title style, so its border
@@ -2926,58 +2999,94 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
     if (left > max_left) left = max_left;
     if (top > max_top) top = max_top;
 
-    dialog = WindowObject,
-        WA_Title, "AmiMail",
-        WA_Left, left,
-        WA_Top, top,
-        WA_Width, outer_width,
-        WA_Height, outer_height,
-        WA_MinWidth, outer_width,
-        WA_MaxWidth, outer_width,
-        WA_MinHeight, outer_height,
-        WA_MaxHeight, outer_height,
-        WA_PubScreen, gui->screen,
-        WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
-                  WFLG_ACTIVATE,
-        WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY,
-        WINDOW_Layout, (ULONG)(uintptr_t)layout,
-    EndWindow;
-    if (!dialog) {
-        DisposeObject(layout);
-        return 0;
+    gui_requester_trace(gui, "requester.position",
+        (unsigned long)left, (unsigned long)top);
+    gui_requester_trace(gui, "requester.size",
+        (unsigned long)outer_width, (unsigned long)outer_height);
+    {
+        struct TagItem tags[] = {
+            { WA_Title, (ULONG)(uintptr_t)"AmiMail" },
+            { WA_Left, (ULONG)left }, { WA_Top, (ULONG)top },
+            { WA_Width, (ULONG)outer_width }, { WA_Height, (ULONG)outer_height },
+            { WA_MinWidth, (ULONG)outer_width },
+            { WA_MaxWidth, (ULONG)outer_width },
+            { WA_MinHeight, (ULONG)outer_height },
+            { WA_MaxHeight, (ULONG)outer_height },
+            { WA_PubScreen, (ULONG)(uintptr_t)gui->screen },
+            { WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
+                        WFLG_ACTIVATE },
+            { WA_IDCMP, IDCMP_CLOSEWINDOW | IDCMP_GADGETUP | IDCMP_RAWKEY },
+            { TAG_DONE, 0UL }
+        };
+        failure_stage = 3U;
+        build_step = 7UL;
+        objects.dialog = NewObjectA(window_class, NULL, tags);
+        if (!objects.dialog) goto failed;
+        /* Attach only after OM_NEW succeeds: a failed window constructor
+         * must never free the same root that our failure cleanup frees. */
+        SetAttrs(objects.dialog, WINDOW_Layout,
+                 (ULONG)(uintptr_t)objects.layout, TAG_DONE);
     }
-
+    dialog = objects.dialog;
+    gui_requester_trace(gui, "requester.object", 1UL, 0UL);
+    failure_stage = 4U;
+    build_step = 8UL;
     window = RA_OpenWindow(dialog);
-    if (!window) {
-        DisposeObject(dialog);
-        return 0;
-    }
+    if (!window) goto failed;
+    failure_stage = 5U;
+    build_step = 9UL;
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);
+    if (!signal_mask) goto failed;
+    gui_requester_trace(gui, "requester.open",
+        (unsigned long)(uintptr_t)window, (unsigned long)signal_mask);
+
     while (!done) {
         ULONG signals = Wait(signal_mask | SIGBREAKF_CTRL_C);
-        if (signals & SIGBREAKF_CTRL_C) done = 1;
+        gui_requester_trace(gui, "requester.signals",
+            (unsigned long)signals, (unsigned long)signal_mask);
+        if (signals & SIGBREAKF_CTRL_C) {
+            gui_requester_trace(gui, "requester.cancel.ctrl-c", 0UL, 0UL);
+            break;
+        }
         if (signals & signal_mask) {
             ULONG result;
-            while ((result = RA_HandleInput(dialog, NULL)) != WMHI_LASTMSG) {
+            while (!done &&
+                   (result = RA_HandleInput(dialog, NULL)) != WMHI_LASTMSG) {
+                if (result == (ULONG)WMHI_IGNORE) continue;
+                gui_requester_trace(gui, "requester.input", result, 0UL);
                 switch (result & WMHI_CLASSMASK) {
                     case WMHI_CLOSEWINDOW:
+                        gui_requester_trace(gui, "requester.cancel.close", 0UL, 0UL);
                         done = 1;
                         break;
                     case WMHI_RAWKEY:
+                    {
+                        ULONG event_value = 0UL;
+                        struct InputEvent *event;
+                        /* Holding the ESC which opened this requester must
+                         * not dismiss it through a repeated key-down. */
+                        GetAttr(WINDOW_InputEvent, dialog, &event_value);
+                        event = (struct InputEvent *)(uintptr_t)event_value;
+                        if (event && (event->ie_Qualifier & IEQUALIFIER_REPEAT))
+                            break;
                         if ((result & WMHI_KEYMASK) == GUI_RAWKEY_ESCAPE) {
+                            gui_requester_trace(gui, "requester.cancel.escape", 0UL, 0UL);
                             done = 1;
-                        } else if (requester_rawkey_accept(
-                                       result & WMHI_KEYMASK)) {
-                            confirmed = 1;
+                        } else if (requester_rawkey_accept(result & WMHI_KEYMASK)) {
+                            answer = GUI_CONFIRM_YES;
+                            gui_requester_trace(gui, "requester.accept.enter", 1UL, 0UL);
                             done = 1;
                         }
                         break;
+                    }
                     case WMHI_GADGETUP:
                         if ((result & WMHI_GADGETMASK) == GID_CONFIRM_YES) {
-                            confirmed = 1;
+                            answer = GUI_CONFIRM_YES;
+                            gui_requester_trace(gui, "requester.accept.yes", 1UL, 0UL);
                             done = 1;
-                        } else if ((result & WMHI_GADGETMASK) ==
-                                   GID_CONFIRM_NO) {
+                        } else if ((result & WMHI_GADGETMASK) == GID_CONFIRM_NO) {
+                            answer = GUI_CONFIRM_NO;
+                            gui_requester_trace(gui, "requester.cancel.no", 0UL, 0UL);
                             done = 1;
                         }
                         break;
@@ -2985,8 +3094,27 @@ static void draw_about_banner(AmgGui *gui, struct Window *window,
             }
         }
     }
-    DisposeObject(dialog);
-    return confirmed;
+    confirmation_dispose(&objects);
+    gui_requester_trace(gui, "requester.result", answer == GUI_CONFIRM_YES,
+                         (unsigned long)answer);
+    return answer;
+
+failed:
+    ioerr_context = IoErr();
+    gui_requester_trace(gui, "requester.build-step", build_step, failure_stage);
+    confirmation_dispose(&objects);
+    gui_requester_failure(gui, failure_stage, (long)ioerr_context);
+    return GUI_CONFIRM_FAILED;
+}
+
+int confirm_question_dialog_for_window(AmgGui *gui,
+                                       struct Window *ref_window,
+                                       const char *question,
+                                       const char *note, LONG width)
+{
+    /* Preserve the Boolean contract of all delete/empty-folder callers. */
+    return confirm_question_result_for_window(gui, ref_window, question,
+                                              note, width) == GUI_CONFIRM_YES;
 }
 
 static int confirm_question_dialog(AmgGui *gui, const char *question,

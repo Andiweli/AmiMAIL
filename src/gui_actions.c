@@ -1311,17 +1311,23 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
     AmgNetwork *network;
     char status_text[128];
     if (!gui) return;
+    gui_requester_trace(gui, "delete.begin", 0UL, 0UL);
     uids = selected_message_uids_alloc(gui, &count);
     if (!uids) {
+        gui_requester_trace(gui, "delete.blocked.allocation", 0UL, 0UL);
         status_local(gui, T(MSG_NOT_ENOUGH_MEMORY, "Not enough memory."));
         return;
     }
+    gui_requester_trace(gui, "delete.selection", (unsigned long)count,
+        (unsigned long)amg_network_is_connected(gui->network));
     if (!count) {
+        gui_requester_trace(gui, "delete.blocked.no-selection", 0UL, 0UL);
         free(uids);
         status_local(gui, T(MSG_PLEASE_SELECT_A_MESSAGE_FIRST, "Please select a message first."));
         return;
     }
     if (!amg_network_is_connected(gui->network)) {
+        gui_requester_trace(gui, "delete.blocked.offline", 0UL, 0UL);
         free(uids);
         status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
@@ -1330,14 +1336,16 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
     source_label = source_index < gui->label_count
         ? gui->labels[source_index].server_mailbox_utf8
         : gui->current_mailbox_utf8;
-    trash_label = gui->labels[6U].available
+    trash_label = gui->label_count > 6U && gui->labels[6U].available
         ? gui->labels[6U].server_mailbox_utf8 : "\\Trash";
     if (!source_label || !*source_label) {
+        gui_requester_trace(gui, "delete.blocked.no-folder", 0UL, 0UL);
         free(uids);
         status_local(gui, T(MSG_THE_CURRENT_MAIL_FOLDER_IS_UNKNOWN, "The current mail folder is unknown."));
         return;
     }
     if (!strcmp(source_label, trash_label)) {
+        gui_requester_trace(gui, "delete.blocked.in-trash", 0UL, 0UL);
         free(uids);
         status_local(gui, T(MSG_THE_MESSAGE_IS_ALREADY_IN_TRASH, "The message is already in Trash."));
         return;
@@ -1346,13 +1354,18 @@ static void delete_selected_messages(AmgGui *gui, AmgError *error)
     snprintf(trash_copy, sizeof(trash_copy), "%s", trash_label);
     network = gui->network;
     if (!confirm_delete_dialog(gui)) {
+        gui_requester_trace(gui, "delete.not-confirmed",
+            (unsigned long)gui->confirmation_failure, 0UL);
         free(uids);
         return;
     }
+    gui_requester_trace(gui, "delete.confirmed", (unsigned long)count, 0UL);
     for (i = 0; i < count; ++i) {
         int result = amg_network_request(
             network, AMG_NET_DELETE, uids[i],
             trash_copy, source_copy, error);
+        gui_requester_trace(gui, "delete.enqueue",
+            (unsigned long)uids[i], (unsigned long)(long)result);
         if (result != AMG_OK) {
             free(uids);
             if (error && error->message[0]) status_utf8(gui, error->message);
@@ -1369,6 +1382,8 @@ static void empty_trash(AmgGui *gui, AmgError *error)
     const char *trash_label;
     int result;
     if (!gui) return;
+    gui_requester_trace(gui, "empty_trash.begin",
+        (unsigned long)amg_network_is_connected(gui->network), 0UL);
     if (!amg_network_is_connected(gui->network)) {
         status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
@@ -1393,6 +1408,8 @@ static void empty_spam(AmgGui *gui, AmgError *error)
     const char *spam_label;
     int result;
     if (!gui) return;
+    gui_requester_trace(gui, "empty_spam.begin",
+        (unsigned long)amg_network_is_connected(gui->network), 0UL);
     if (!amg_network_is_connected(gui->network)) {
         status_local(gui, T(MSG_PLEASE_CLICK_FETCH_FIRST, "Please click 'Fetch' first."));
         return;
@@ -2114,6 +2131,8 @@ void handle_main_shortcut(AmgGui *gui, char letter, AmgError *error)
 void handle_main_gadget(AmgGui *gui, ULONG gadget_id,
                                AmgError *error)
 {
+    if (gadget_id == GID_DELETE)
+        gui_requester_trace(gui, "delete.dispatch", (unsigned long)gadget_id, 0UL);
     if (gadget_id != GID_REPLY_MENU) gui_reply_popup_close(gui);
     switch (gadget_id) {
         case GID_NEW_MAIL:

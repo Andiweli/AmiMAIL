@@ -38,6 +38,7 @@ typedef struct AmgGui {
     char current_mailbox_utf8[512];
     GuiLabel labels[7]; size_t label_count;
     AmgNetwork *network;
+    unsigned int confirmation_failure;
 } AmgGui;
 #define AMIGMAIL_AMIGA 1
 #define AMIGMAIL_MAX_LABELS 256U
@@ -159,6 +160,9 @@ static int amg_network_is_connected(AmgNetwork *n){return n!=NULL;}
 static int amg_network_request(AmgNetwork *n,int type,ULONG uid,const char *target,const char *source,AmgError *error)
 { (void)error;CHECK(type==AMG_NET_DELETE);CHECK(uid==42UL||uid==43UL);++queued;queued_network=n;
   snprintf(queued_source,sizeof(queued_source),"%s",source);snprintf(queued_target,sizeof(queued_target),"%s",target);return AMG_OK; }
+static void gui_requester_trace(const AmgGui *gui, const char *event,
+                                 unsigned long value1, unsigned long value2)
+{ (void)gui; (void)event; (void)value1; (void)value2; }
 static int confirm_delete_dialog(AmgGui *gui)
 {
     if(confirm_mode==2){

@@ -1,5 +1,15 @@
 # Changelog
 
+## AmiMAIL 2.2.1 - 2026-09-29
+- Fixed inconsistent draft prompts for Escape, Cancel and window close.
+- Reworked confirmation dialog creation and cleanup.
+- Kept drafts open when a prompt is dismissed or cannot be opened.
+- Preserved text and attachments if queuing a draft save fails.
+- Prevented queued input from overriding confirmation decisions.
+- Avoided interrupting newly queued draft saves on application quit.
+- Added localized requester errors and optional diagnostic logging.
+- Keep the German V13 catalog and update both guides to 2.2.1.
+
 ## AmiMAIL 2.2.0 - 2026-09-28
 - Replace nine checkmark buttons with native ReAction checkbox gadgets.
 - Preserve account settings and checkbox-dependent field activation.

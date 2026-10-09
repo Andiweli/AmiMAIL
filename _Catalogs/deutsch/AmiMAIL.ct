@@ -1,4 +1,4 @@
-## version $VER: AmiMAIL.catalog 12.0 (28.09.2026)
+## version $VER: AmiMAIL.catalog 13.0 (29.09.2026)
 ## language deutsch
 ## codeset 0
 ;
@@ -1796,3 +1796,9 @@ In Zielordner kopiert; Original nur als gel\303\266scht markiert (Server ohne UI
 ;
 MSG_IMAP_MOVE_SOURCE_REMAINS
 Server hat die Quellnachricht nach dem Verschieben behalten. Vor erneutem Versuch neu laden.
+;
+MSG_CONFIRMATION_OPEN_FAILED
+Best\344tigung konnte nicht ge\366ffnet werden (R%lu). Aktion abgebrochen.
+;
+MSG_CONFIRMATION_FAILED_DRAFT_KEPT
+Best\344tigung fehlgeschlagen. Entwurf bleibt ge\366ffnet.

@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_DE.guide
-@$VER: AmiMAIL_DE.guide 2.2.0 (28.09.2026)
+@$VER: AmiMAIL_DE.guide 2.2.1 (29.09.2026)
 
-@NODE MAIN "AmiMAIL 2.2.0 - Anleitung"
-AmiMAIL 2.2.0
+@NODE MAIN "AmiMAIL 2.2.1 - Anleitung"
+AmiMAIL 2.2.1
 Nativer IMAP/SMTP-Mailclient für AmigaOS 3.2+
 ReAction, IMAP, SMTP und AmiSSL
 
@@ -266,6 +266,10 @@ das Bearbeiten von Entwürfen.
 
 Das Hauptfenster bleibt während des Verfassens aktiv.
 
+Escape, Abbrechen und das Schließsymbol fragen einheitlich nach dem
+Speichern des Entwurfs. Das gilt auch für Antworten, Weiterleitungen
+und bearbeitete Entwürfe. Die Auswahl ist im Abschnitt Entwürfe erklärt.
+
 
 @{"Zurück zum Inhalt" LINK MAIN}
 @ENDNODE
@@ -279,7 +283,24 @@ Anhänge wiederhergestellt.
 
 Speichern ersetzt den alten Entwurf erst nach erfolgreichem Anlegen des
 neuen Entwurfs. Beim Senden wird der alte Entwurf erst nach erfolgreicher
-SMTP-Zustellung entfernt. Abbrechen verändert den Serverentwurf nicht.
+SMTP-Zustellung entfernt.
+
+Beim Schließen des Verfassen-Fensters gilt für die Speicherabfrage:
+
+- Ja: Entwurf zum Speichern einreihen. Scheitert bereits das Einreihen,
+  bleibt das Fenster mit Text und Anhängen offen.
+- Nein: ohne Speichern der lokalen Änderungen schließen. Ein bereits
+  vorhandener Serverentwurf bleibt unverändert.
+- Escape oder Schließen der Abfrage: Verfassen-Fenster offen lassen.
+
+Kann die Abfrage nicht geöffnet werden, bleibt der Entwurf offen. Die
+Statuszeile zeigt einen Fehlercode R1-R5. Ein Fehler erlaubt niemals
+das Verwerfen des Entwurfs.
+
+Wird beim Beenden von AmiMAIL Ja gewählt, bleibt das Hauptfenster
+offen, damit die eingereihte Speicherung weiterlaufen kann. Vor dem
+erneuten Beenden auf das Ergebnis warten. Das Einreihen ist noch keine
+Bestätigung des Servers.
 
 
 @{"Zurück zum Inhalt" LINK MAIN}
@@ -517,7 +538,9 @@ eingetragen werden.
 
 @NODE KEYBOARD "Tastaturbedienung"
 - Return/Enter bestätigt die primäre OK-/Übernehmen-Aktion in Requestern.
-- Escape schließt bzw. verwirft Dialoge mit Abbruchmöglichkeit.
+- Escape im Verfassen-Fenster öffnet dieselbe Abfrage wie Abbrechen.
+- Escape in dieser Abfrage lässt Verfassen-Fenster und Entwurf offen.
+- In anderen Dialogen nutzt Escape deren normale Abbruchfunktion.
 - TAB folgt der ReAction-Fokusreihenfolge in Eingabefenstern.
 - Das Mausrad scrollt Mailliste und Mailvorschau.
 
@@ -544,12 +567,20 @@ AmiMAIL liefert bei TLS-Fehlern möglichst genaue Diagnoseangaben. Diese
 Informationen zusammen mit TCP/IP-Stack, AmiSSL-Version und
 Serverkonfiguration erleichtern einen Fehlerbericht erheblich.
 
+Bei Bestätigungsfehlern zeigt die Statuszeile einen Schrittcode R1-R5.
+Für eine genaue Aufzeichnung vor dem Test in einer Amiga-Shell
+SetEnv AmiMAIL_RequesterDebug 1 eingeben. Danach die Datei
+T:AmiMAIL-requesters.log vor einem Neustart sichern. Mit
+SetEnv AmiMAIL_RequesterDebug 0 die ausführliche Diagnose abschalten.
+Das Log enthält technische Zustände, keine Mailtexte, Betreffzeilen
+oder Zugangsdaten.
+
 
 @{"Zurück zum Inhalt" LINK MAIN}
 @ENDNODE
 
 @NODE ABOUT "Über / Copyright"
-AmiMAIL 2.2.0 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
+AmiMAIL 2.2.1 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 

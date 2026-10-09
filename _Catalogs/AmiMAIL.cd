@@ -1,4 +1,4 @@
-## version 12
+## version 13
 ## language english
 ## basename AmiMAIL
 ;
@@ -1707,3 +1707,9 @@ Copied to destination; original only marked deleted (server lacks UIDPLUS).
 ;
 MSG_IMAP_MOVE_SOURCE_REMAINS (2100000088//)
 Server kept the source message after the move. Reload before retrying.
+;
+MSG_CONFIRMATION_OPEN_FAILED (2100000089//)
+Confirmation could not be opened (R%lu). Action cancelled.
+;
+MSG_CONFIRMATION_FAILED_DRAFT_KEPT (2100000090//)
+Confirmation failed. Draft remains open.

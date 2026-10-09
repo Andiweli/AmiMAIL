@@ -66,7 +66,7 @@ def main():
     sys.modules[spec.name] = catalog_tool
     spec.loader.exec_module(catalog_tool)
     catalog = catalog_tool.load_catalog(ROOT)
-    assert catalog.version == 12
+    assert catalog.version == 13
     catalog_tool.verify_binary((ROOT / '_Catalogs/deutsch/AmiMAIL.catalog').read_bytes(), catalog)
     rows = ['struct TestTranslation { long id; const char *de; };',
             'static const struct TestTranslation translations[] = {']

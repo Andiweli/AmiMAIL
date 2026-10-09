@@ -75,7 +75,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_transfer_and_selection_translations(self):
         _, records = TOOL.read_binary(TOOL.build_bytes(self.catalog))
-        self.assertEqual(self.catalog.version, 12)
+        self.assertEqual(self.catalog.version, 13)
         for key in ('MSG_ATTACHMENT_SELECTION', 'MSG_SELECT_REGULAR_ATTACHMENTS',
                     'MSG_SELECT_EMBEDDED_GRAPHICS', 'MSG_TRANSFER_CANCELLED',
                     'MSG_LOCAL_COPY_KEPT', 'MSG_DELIVERY_UNCERTAIN'):
@@ -83,6 +83,16 @@ class CatalogTests(unittest.TestCase):
             self.assertEqual(records[self.catalog.ids[key]], self.catalog.translated[key])
         self.assertNotEqual(self.catalog.english['MSG_ATTACHMENT_SELECTION'],
                             self.catalog.translated['MSG_ATTACHMENT_SELECTION'])
+
+    def test_confirmation_failure_translations(self):
+        _, records = TOOL.read_binary(TOOL.build_bytes(self.catalog))
+        for key in ('MSG_CONFIRMATION_OPEN_FAILED', 'MSG_CONFIRMATION_FAILED_DRAFT_KEPT'):
+            self.assertIn(key, self.catalog.ids)
+            self.assertEqual(records[self.catalog.ids[key]], self.catalog.translated[key])
+        self.assertIn(b'Best\xe4tigung', self.catalog.translated['MSG_CONFIRMATION_OPEN_FAILED'])
+        self.assertIn(b'R%lu', self.catalog.translated['MSG_CONFIRMATION_OPEN_FAILED'])
+        self.assertEqual(TOOL.format_arguments(self.catalog.english['MSG_CONFIRMATION_OPEN_FAILED']),
+                         TOOL.format_arguments(self.catalog.translated['MSG_CONFIRMATION_OPEN_FAILED']))
 
     def test_herald_translations_and_local_encoding(self):
         _, records = TOOL.read_binary(TOOL.build_bytes(self.catalog))

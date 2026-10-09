@@ -1,5 +1,5 @@
 PROJECT := AmiMAIL
-VERSION := 2.2.0
+VERSION := 2.2.1
 
 ifeq ($(origin CC),default)
 CC := m68k-amigaos-gcc
@@ -66,7 +66,7 @@ SOURCES := src/main.c src/app.c src/splash.c src/common.c src/fileio.c src/trans
            src/imap.c src/smtp.c src/storage.c src/contacts.c src/contacts_import.c \
            src/network_task.c src/gui.c src/gui_runtime.c src/gui_actions.c src/gui_mailto.c \
            src/gui_window.c src/gui_icons.c src/gui_update.c src/iconified_data.c src/gui_state.c src/gui_notify.c src/gui_herald.c src/herald.c \
-           src/gui_dialogs.c src/gui_contacts.c src/gui_compose.c src/gui_folders.c \
+           src/gui_dialogs.c src/gui_requester_diag.c src/gui_contacts.c src/gui_compose.c src/gui_folders.c \
            src/gui_messages.c src/gui_preview.c src/gui_attachments.c src/gui_transfer.c src/charset.c src/i18n.c src/banner_data.c
 OBJECTS := $(SOURCES:src/%.c=build/%.o)
 
@@ -310,3 +310,17 @@ checkbox-lifecycle-test:
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_checkbox_lifecycle.py
 
 review-test: checkbox-lifecycle-test
+
+# Confirmation failure reporting and destructive-action gates (host doubles).
+.PHONY: requester-diagnostics-test
+requester-diagnostics-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_requester_diagnostics.py
+
+review-test: requester-diagnostics-test
+
+# Same draft question for ESC, Cancel, Close and application quit requests.
+.PHONY: compose-close-test
+compose-close-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_compose_close.py
+
+review-test: compose-close-test

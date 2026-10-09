@@ -21,7 +21,7 @@ HEADERS = """clib/alib_protos.h classes/window.h gadgets/layout.h
  utility/tagitem.h utility/hooks.h libraries/asl.h libraries/gadtools.h
  devices/timer.h exec/lists.h exec/ports.h exec/tasks.h exec/memory.h
  intuition/classes.h intuition/intuition.h dos/dosextens.h dos/dostags.h
- dos/dos.h dos/var.h""".split()
+ dos/dos.h dos/var.h exec/libraries.h exec/nodes.h""".split()
 API = r'''
 #ifndef AMIMAIL_TEST_NATIVE_API_H
 #define AMIMAIL_TEST_NATIVE_API_H
@@ -144,7 +144,32 @@ LONG IoErr(void); LONG GetVar(CONST_STRPTR name, STRPTR buffer, LONG size, ULONG
 #endif
 '''
 FILES = ('src/gui_transfer.c', 'src/gui_attachments.c', 'src/network_task.c',
-         'src/transfer.c', 'src/attachment_export.c')
+         'src/transfer.c', 'src/attachment_export.c', 'src/gui_requester_diag.c')
+
+# Additional declarations are scoped to the logger translation unit so the
+# existing executable test doubles keep their own Library/Task definitions.
+DIAG_API = API.replace('struct Task { int unused; };',
+                       'struct Task { struct Node tc_Node; };').replace(
+    '#endif', r"""
+struct Library { UWORD lib_Version, lib_Revision; };
+extern struct Library *WindowBase, *LayoutBase, *ButtonBase;
+struct DateStamp { LONG ds_Days, ds_Minute, ds_Tick; };
+#define NT_PROCESS 13
+#define MEMF_CHIP 2UL
+#define MEMF_FAST 4UL
+#define MEMF_LARGEST (1UL << 17)
+#define MODE_READWRITE 1004L
+#define OFFSET_END 1L
+#define OFFSET_CURRENT 0L
+ULONG AvailMem(ULONG requirements);
+LONG SetIoErr(LONG result);
+struct DateStamp *DateStamp(struct DateStamp *stamp);
+BPTR Open(CONST_STRPTR name, LONG mode);
+LONG Close(BPTR file);
+LONG Seek(BPTR file, LONG position, LONG mode);
+LONG Write(BPTR file, CONST_APTR buffer, LONG length);
+#endif
+""").replace('CONST_APTR buffer', 'const void *buffer')
 
 def main():
     cc = shlex.split(os.environ.get('HOST_CC', 'gcc'))
@@ -160,6 +185,7 @@ def main():
             header.parent.mkdir(parents=True, exist_ok=True)
             header.write_text('/* Host syntax double; not an SDK header. */\n', encoding='ascii')
         for file in FILES:
+            api.write_text(DIAG_API if file == "src/gui_requester_diag.c" else API, encoding="ascii")
             subprocess.run(cc + flags + ['-include', str(api), '-I' + str(directory),
                            '-Iinclude', file], cwd=ROOT, check=True)
             print('native-branch syntax (API doubles):', file)

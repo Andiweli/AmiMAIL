@@ -42,7 +42,14 @@ def wiring():
     assert actions.count('event.payload_length, old_uid);')==1
     header=(ROOT/'include/account.h').read_text()
     assert 'subject_enabled' not in header and 'herald_subject' not in header
-    assert 'PROJECT := AmiMAIL\nVERSION := 2.2.0' in (ROOT/'Makefile').read_text()
+    # Release bumps must keep the executable and package versions in sync,
+    # without pinning an obsolete release in these retrieval tests.
+    version_header = (ROOT/'include/amigmail.h').read_text()
+    match = re.search(r'^#define AMIMAIL_VERSION "(\d+\.\d+\.\d+)"$',
+                      version_header, re.M)
+    assert match is not None, 'Missing or invalid executable version'
+    expected = f'PROJECT := AmiMAIL\nVERSION := {match.group(1)}'
+    assert expected in (ROOT/'Makefile').read_text()
 
 
 

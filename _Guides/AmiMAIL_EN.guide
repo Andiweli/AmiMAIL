@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_EN.guide
-@$VER: AmiMAIL_EN.guide 2.2.0 (28.09.2026)
+@$VER: AmiMAIL_EN.guide 2.2.1 (29.09.2026)
 
-@NODE MAIN "AmiMAIL 2.2.0 - Guide"
-AmiMAIL 2.2.0
+@NODE MAIN "AmiMAIL 2.2.1 - Guide"
+AmiMAIL 2.2.1
 Native IMAP/SMTP mail client for AmigaOS 3.2+
 ReAction, IMAP, SMTP and AmiSSL
 
@@ -252,6 +252,10 @@ used for replies, Reply All, forwards and editing drafts.
 
 The main window remains active while composing.
 
+Escape, Cancel and the window close gadget all ask whether to save
+the draft. This also applies to replies, forwards and edited drafts.
+See the Drafts section for the available choices.
+
 
 @{"Back to contents" LINK MAIN}
 @ENDNODE
@@ -264,7 +268,21 @@ restored when editing a draft.
 
 Saving first appends the replacement draft and only then removes the old
 one. Sending removes the old draft only after SMTP delivery succeeds.
-Cancelling leaves the server draft unchanged.
+When closing the Compose window, the save question offers:
+
+- Yes: queue the draft for saving. If queuing fails, keep the window
+  open with its text and attachments.
+- No: close without saving local changes. An existing server draft
+  is left unchanged.
+- Escape or closing the question: keep the Compose window open.
+
+If the question cannot open, the draft stays open and the status line
+shows an R1-R5 failure code. No failure is treated as permission to
+discard the draft.
+
+If you choose Yes while quitting AmiMAIL, the main window stays open
+so the queued save can continue. Wait for its result before quitting
+again. A queued save is not yet a server confirmation.
 
 
 @{"Back to contents" LINK MAIN}
@@ -490,7 +508,9 @@ mailto: handler.
 
 @NODE KEYBOARD "Keyboard operation"
 - Return/Enter confirms the primary OK/Apply action in requesters.
-- Escape closes or cancels dialogs that provide a cancel action.
+- Escape in the Compose window opens the same save question as Cancel.
+- Escape in that question keeps the Compose window and draft open.
+- In other dialogs, Escape uses their normal cancel action.
 - TAB follows the ReAction focus order in input windows.
 - The mouse wheel scrolls the message list and message preview.
 
@@ -516,12 +536,18 @@ AmiMAIL provides detailed TLS diagnostics where possible. Include those
 details together with TCP/IP stack, AmiSSL version and server configuration
 in bug reports.
 
+Confirmation failures display an R1-R5 stage code. For a detailed
+trace, enter SetEnv AmiMAIL_RequesterDebug 1 in an Amiga Shell before
+reproducing the problem. Save T:AmiMAIL-requesters.log before rebooting.
+Use SetEnv AmiMAIL_RequesterDebug 0 to disable verbose tracing. The log
+contains technical state, not mail text, subjects or credentials.
+
 
 @{"Back to contents" LINK MAIN}
 @ENDNODE
 
 @NODE ABOUT "About / Copyright"
-AmiMAIL 2.2.0 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
+AmiMAIL 2.2.1 - native general IMAP/SMTP mail client for AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 

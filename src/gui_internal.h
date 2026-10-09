@@ -155,6 +155,7 @@ struct AmgGui {
     struct Gadget *account_tabs_gadget;
     Object *window_object;
     struct Window *window;
+    unsigned int confirmation_failure; /* R-code; 0 means no creation failure. */
     struct MsgPort *app_port;
     int iconified;
     struct DiskObject *icon_iconified;
@@ -536,6 +537,24 @@ int gui_contacts_select_emails(AmgGui *gui, struct Window *parent,
 int account_is_locked(const AmgAccount *account);
 int account_dialog(AmgGui *gui, AmgError *error);
 void about_dialog(AmgGui *gui);
+/* Diagnostics run only in the GUI task. Confirmation returns 1 for explicit
+ * Yes/Return, 0 otherwise; never return a negative error as a true value.
+ * confirmation_failure distinguishes a failed requester from a user's No. */
+void gui_requester_trace(const AmgGui *gui, const char *event,
+                         unsigned long value1, unsigned long value2);
+void gui_requester_failure(AmgGui *gui, unsigned int stage,
+                           long ioerr_context);
+/* The detailed API is used when declining to save differs from dismissing
+ * the question. The legacy Boolean wrapper below remains safe for deletes. */
+typedef enum GuiConfirmationResult {
+    GUI_CONFIRM_DISMISSED = 0,
+    GUI_CONFIRM_YES = 1,
+    GUI_CONFIRM_NO = 2,
+    GUI_CONFIRM_FAILED = 3
+} GuiConfirmationResult;
+GuiConfirmationResult confirm_question_result_for_window(
+    AmgGui *gui, struct Window *ref_window, const char *question,
+    const char *note, LONG width);
 int confirm_question_dialog_for_window(AmgGui *gui,
                                        struct Window *ref_window,
                                        const char *question,

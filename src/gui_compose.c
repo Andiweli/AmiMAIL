@@ -66,6 +66,8 @@
 #define COMPOSE_RAWKEY_X 0x32U
 #define COMPOSE_RAWKEY_C 0x33U
 #define COMPOSE_RAWKEY_V 0x34U
+#define COMPOSE_RAWKEY_ESCAPE 0x45U
+#define COMPOSE_CLOSE_VERIFY_CODE 0x7f01UL
 
 /* The editable compose TextEditor is deliberately not connected to the
  * generic modelclass link used by the read-only preview.  Instead, let the
@@ -311,6 +313,21 @@ static ULONG compose_texteditor_dispatcher(struct Hook *hook, APTR object_ptr,
     if (message->MethodID == GM_HANDLEINPUT) {
         struct gpInput *input = (struct gpInput *)message_ptr;
         struct InputEvent *event = input->gpi_IEvent;
+
+        /* ESC is a close *request*, never an edit/revert command. Send one
+         * verified editor event to the window loop; do not open a requester
+         * or export text from input.device context. Key-up/repeat do nothing. */
+        if (event && event->ie_Class == IECLASS_RAWKEY &&
+            (event->ie_Code & (UWORD)~IECODE_UP_PREFIX) == COMPOSE_RAWKEY_ESCAPE) {
+            if ((event->ie_Code & IECODE_UP_PREFIX) ||
+                (event->ie_Qualifier & IEQUALIFIER_REPEAT))
+                return GMR_MEACTIVE;
+            if (input->gpi_Termination) {
+                *input->gpi_Termination = COMPOSE_CLOSE_VERIFY_CODE;
+                return GMR_NOREUSE | GMR_VERIFY;
+            }
+            return GMR_MEACTIVE;
+        }
 
         if (event && event->ie_Class == IECLASS_RAWKEY &&
             (event->ie_Qualifier & IEQUALIFIER_RCOMMAND) &&
@@ -1838,6 +1855,68 @@ static int queue_composed_mail(AmgGui *gui, struct Window *window,
 
 
 
+/* All user-initiated exit paths share this decision. A failed or dismissed
+ * question never owns or discards the editor text/temporary attachments.
+ * A queued draft is NOT yet a server acknowledgement. */
+typedef enum ComposeCloseResult {
+    COMPOSE_CLOSE_KEEP = 0,
+    COMPOSE_CLOSE_SAVED,
+    COMPOSE_CLOSE_DISCARD
+} ComposeCloseResult;
+
+static ComposeCloseResult compose_confirm_close(
+    AmgGui *gui, struct Window *window, struct Gadget *to_gadget,
+    struct Gadget *cc_gadget, struct Gadget *bcc_gadget,
+    struct Gadget *subject_gadget, struct Gadget *body_gadget,
+    struct Gadget *compose_status, const ComposeAttachment *attachments,
+    size_t attachment_count, ComposeMode mode, const DraftEditData *seed,
+    AmgError *error)
+{
+    GuiConfirmationResult answer;
+    struct Window *reference = gui->window ? gui->window : window;
+
+    gui_requester_trace(gui, "compose.close-question", (unsigned long)mode, 0UL);
+    answer = confirm_question_result_for_window(gui, reference,
+        T(MSG_DO_YOU_WANT_TO_SAVE_THE_DRAFT, "Do you want to save the draft?"),
+        T(MSG_THE_MAIL_CAN_BE_EDITED_LATER, "The mail can be edited later."), 310L);
+    if (answer == GUI_CONFIRM_YES) {
+        int result = queue_composed_mail(gui, window, to_gadget, cc_gadget,
+            bcc_gadget, subject_gadget, body_gadget, attachments,
+            attachment_count, mode, seed, 1, error);
+        gui_requester_trace(gui, "compose.draft-queue", (unsigned long)result, 0UL);
+        if (result == AMG_OK) return COMPOSE_CLOSE_SAVED;
+        set_utf8_string(compose_status, window,
+                        error ? error->message : "");
+    } else if (answer == GUI_CONFIRM_NO) {
+        gui_requester_trace(gui, "compose.discard-confirmed", 1UL, 0UL);
+        return COMPOSE_CLOSE_DISCARD;
+    } else if (answer == GUI_CONFIRM_FAILED) {
+        char message[256];
+        /* Keep the diagnostic step visible in the compose status line too.
+         * Previously the generic message overwrote the useful R1-R5 code. */
+        snprintf(message, sizeof(message), "%s (R%lu)",
+            T(MSG_CONFIRMATION_FAILED_DRAFT_KEPT,
+              "Confirmation failed. Draft remains open."),
+            (unsigned long)gui->confirmation_failure);
+        set_string(compose_status, window, message);
+    }
+    gui_requester_trace(gui, "compose.kept-open", (unsigned long)answer, 0UL);
+    WindowToFront(window);
+    ActivateWindow(window);
+    return COMPOSE_CLOSE_KEEP;
+}
+
+static int compose_escape_request(Object *dialog, ULONG result)
+{
+    ULONG event_value = 0UL;
+    struct InputEvent *event;
+    if (!rawkey_is_cancel(result)) return 0;
+    GetAttr(WINDOW_InputEvent, dialog, &event_value);
+    event = (struct InputEvent *)(uintptr_t)event_value;
+    return !event || !(event->ie_Qualifier & IEQUALIFIER_REPEAT);
+}
+
+
 int compose_dialog(AmgGui *gui, ComposeMode mode,
                           DraftEditData *draft_seed, AmgError *error)
 {
@@ -1864,6 +1943,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
     int forward_mode = mode == COMPOSE_MODE_FORWARD;
     int done = 0, submitted = 0, sent_queued = 0;
     int select_all_pending = 0;
+    int close_pending = 0, quit_pending = 0;
     ComposeScrollerSyncState body_scroll_state;
     ComposeInputHookState compose_input_state;
     struct Hook compose_idcmp_hook;
@@ -2127,6 +2207,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                         body_gadget = (struct Gadget *)NewObject(
                             compose_texteditor_class, NULL,
                             GA_ID, GID_COMPOSE_BODY,
+                            GA_RelVerify, TRUE,
                             GA_TabCycle, TRUE,
                             GA_TEXTEDITOR_Contents,
                                 (ULONG)(uintptr_t)initial_body,
@@ -2283,26 +2364,41 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
         ULONG runtime_signal = gui_runtime_signal_mask(gui);
         ULONG signals = Wait(signal_mask | runtime_signal |
                              SIGBREAKF_CTRL_C);
-        if (signals & SIGBREAKF_CTRL_C) done = 1;
+        if (signals & SIGBREAKF_CTRL_C) {
+            close_pending = 1;
+            quit_pending = 1;
+        }
 
         if (runtime_signal && (signals & runtime_signal)) {
             gui_runtime_process_signals(gui, signals & runtime_signal, error);
-            if (!gui->running) done = 1;
+            if (!gui->running) {
+                /* Main-window Close/Quit must not bypass the draft question.
+                 * No actual shutdown has happened yet in the nested loop. */
+                gui->running = 1;
+                close_pending = 1;
+                quit_pending = 1;
+            }
         }
 
         if (!done && (signals & signal_mask)) {
             ULONG result;
-            while ((result = RA_HandleInput(dialog, NULL)) != WMHI_LASTMSG) {
+            UWORD code = 0U;
+            while (!done && (result = RA_HandleInput(dialog, &code)) != WMHI_LASTMSG) {
+                /* Drain the original activation completely before opening a
+                 * modal question. Duplicate close events cannot dismiss it or
+                 * enqueue a second draft. Never execute later send/delete
+                 * actions from a batch whose first decision was to close. */
+                if (result == (ULONG)WMHI_IGNORE || close_pending) continue;
                 switch (result & WMHI_CLASSMASK) {
                     case WMHI_CLOSEWINDOW:
-                        done = 1;
+                        close_pending = 1;
                         break;
 
                     case WMHI_RAWKEY:
                         if (rawkey_is_help(result)) {
                             about_dialog(gui);
-                        } else if (rawkey_is_cancel(result)) {
-                            done = 1;
+                        } else if (compose_escape_request(dialog, result)) {
+                            close_pending = 1;
                         }
                         break;
 
@@ -2321,7 +2417,11 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                                 menu_code, window, body_gadget);
                         } else {
                             handle_menu(gui, menu_code, error);
-                            if (!gui->running) done = 1;
+                            if (!gui->running) {
+                                gui->running = 1;
+                                close_pending = 1;
+                                quit_pending = 1;
+                            }
                         }
                         break;
                     }
@@ -2329,28 +2429,12 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                     case WMHI_GADGETUP:
                         switch (result & WMHI_GADGETMASK) {
                             case GID_COMPOSE_CANCEL:
-                                /* Keep all destructive/save Yes/No
-                                 * requesters centered over the main AmiMail
-                                 * window for a consistent UI position. */
-                                if (confirm_question_dialog_for_window(
-                                        gui, gui->window,
-                                        T(MSG_DO_YOU_WANT_TO_SAVE_THE_DRAFT, "Do you want to save the draft?"),
-                                        NULL, 310L)) {
-                                    if (queue_composed_mail(
-                                            gui, window, to_gadget, cc_gadget,
-                                            bcc_gadget, subject_gadget,
-                                            body_gadget, attachments,
-                                            attachment_count, mode, draft_seed,
-                                            1, error) == AMG_OK) {
-                                        submitted = 1;
-                                        done = 1;
-                                    } else {
-                                        set_utf8_string(compose_status, window,
-                                                        error->message);
-                                    }
-                                } else {
-                                    done = 1;
-                                }
+                                close_pending = 1;
+                                break;
+
+                            case GID_COMPOSE_BODY:
+                                if (code == (UWORD)COMPOSE_CLOSE_VERIFY_CODE)
+                                    close_pending = 1;
                                 break;
 
                             case GID_COMPOSE_TO_CONTACTS:
@@ -2406,7 +2490,7 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                         break;
                 }
             }
-            if (!done) {
+            if (!done && !close_pending) {
                 if (select_all_pending) {
                     /* Match the reliable RAmiga+A path after the menu has
                      * fully closed: reactivate the editor, then mark it. */
@@ -2424,6 +2508,25 @@ int compose_dialog(AmgGui *gui, ComposeMode mode,
                 sync_listbrowser_scroller(
                     window, attachments_gadget, attachments_scroller);
             }
+        }
+
+        if (!done && close_pending) {
+            ComposeCloseResult choice;
+            close_pending = 0;
+            select_all_pending = 0;
+            choice = compose_confirm_close(gui, window, to_gadget, cc_gadget,
+                bcc_gadget, subject_gadget, body_gadget, compose_status,
+                attachments, attachment_count, mode, draft_seed, error);
+            if (choice != COMPOSE_CLOSE_KEEP) {
+                submitted = choice == COMPOSE_CLOSE_SAVED;
+                done = 1;
+                /* Do not stop the worker just after queueing a saved draft:
+                 * network shutdown cancels pending work. Keep the main window
+                 * alive for its existing save/progress/error handling. */
+                if (quit_pending && choice == COMPOSE_CLOSE_DISCARD)
+                    gui->running = 0;
+            }
+            quit_pending = 0;
         }
     }
     compose_state_save(window);
