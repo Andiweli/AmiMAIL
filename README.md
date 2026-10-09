@@ -19,33 +19,56 @@ AmiMAIL is a lightweight native **Email client for AmigaOS 3.2+**. It provides a
 
 ## 📧 Features
 
-- Native **AmigaOS 3.2+ / ReAction** interface
-- Support for up to **five independent IMAP/SMTP accounts** with native account tabs in the main window and Account settings
-- Per-account server settings, credentials, notification sounds, signatures and encrypted startup/unlock state
-- Secure connections using **direct SSL/TLS or STARTTLS** through AmiSSL
-- Automatic detection of standard IMAP folders such as **Inbox, Sent, Drafts, Spam/Junk and Trash**, with manual folder assignment when required
-- Additional and nested IMAP folders displayed as an expandable folder tree with remembered expand/collapse state
-- Independent background Inbox checks for each enabled account, including optional fetch at startup and periodic checks while AmiMAIL is iconified
-- Compose new messages, **Reply, Reply All and Forward**, with RFC-compliant sender display names
-- Per-account **signature management** with automatic insertion into new messages, replies and forwards
-- Move and delete messages, empty Trash and Spam, and mark messages as read/unread or flagged/unflagged
-- Multi-selection for supported message operations
-- Create, save, reopen, edit and send **IMAP drafts**
-- Improved **HTML-to-text conversion** for HTML-only or malformed messages, while preferring clean plain-text alternatives when available
-- MIME messages with Base64, Quoted-Printable, RFC 2047 and extended HTML-entity handling
-- Send **attachments with a combined maximum of 20 MB**
-- Preserve attachments when forwarding messages and save attachments from received messages
-- Sort messages by sender, subject, date or message size
-- Clickable URLs and **`mailto:` integration with single-instance hand-off**
-- Local **Contacts / Address Book** with add, edit and multi-selection delete
-- Import contacts from **CSV and VCF/vCard**, including duplicate detection
-- Select one or multiple contacts for **To, CC and BCC** while composing mail
-- Optional configurable **new-mail notification sound** per account using AmigaOS DataTypes
-- Native **ReAction Iconify** support with background mail checks and an embedded Workbench AppIcon
-- Built-in asynchronous **GitHub update check and release download to `RAM:`**
-- Live mail status through the AmigaOS **ENV/ENVARC** `AmiMAILStatus` variable
-- German UI on German AmigaOS systems, English UI otherwise
-- **No permanent mailbox database:** messages are read from IMAP; temporary mail and recovery files use a local spool
+A native AmigaOS 3.2+ mail client with a ReAction interface.
+
+### Accounts and connections
+
+- Manage multiple **IMAP/SMTP accounts** with individual server settings, credentials and signatures.
+- Add, remove, reorder and enable or disable accounts.
+- Connect using **SSL/TLS or STARTTLS** through AmiSSL.
+- Configure independent startup and periodic Inbox checks for each account.
+- Log in automatically using locally encrypted account credentials.
+
+### Messages and folders
+
+- Compose messages, **Reply, Reply All and Forward**.
+- Create, save, reopen, edit and send **IMAP drafts**.
+- Detect standard system folders automatically or assign them manually.
+- Browse nested folders in an expandable tree with remembered state.
+- Move and delete messages, including multiple selected messages.
+- Empty Trash and Spam/Junk folders; mark messages as read/unread or flagged/unflagged.
+- Sort messages by **date** and display their reply status.
+- Read plain-text messages and text converted from HTML mail, with MIME and character-encoding support.
+
+### Attachments and contacts
+
+- Send attachments and preserve them when forwarding messages.
+- Save selected attachments and embedded images from received mail.
+- Remember the last attachment save directory.
+- Manage a local **Contacts / Address Book**.
+- Import **CSV and VCF/vCard** files with duplicate detection.
+- Select contacts for **To, CC and BCC**.
+
+### Notifications and interface
+
+- Configure per-account notification sounds and optional **Herald notifications** with new-mail counts and subjects.
+- Keep checking for mail while AmiMAIL is iconified.
+- View transfer progress and cancel supported operations.
+- Restore window positions, sizes and the message-list/preview layout.
+- Use keyboard shortcuts, mouse-wheel scrolling and native message selection.
+
+### Desktop integration
+
+- Open clickable web links and email addresses from the mail preview.
+- Handle **mailto:** links through the existing AmiMAIL instance.
+- Check for updates and download releases from GitHub to **RAM:**.
+- Expose mail status through the **AmiMAILStatus** environment variable.
+- Use the **English or German interface**, with documentation in both languages.
+
+### Mail storage
+
+- Access messages directly through IMAP without a permanent offline mailbox database.
+- Process temporary mail and attachments on disk, retaining recovery copies after failed or uncertain transfers.
 
 ## 🔐 Account Security
 
