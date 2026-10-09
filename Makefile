@@ -360,3 +360,9 @@ contacts-native-syntax-test:
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/check_contacts_native_syntax.py
 
 review-test: contact-sort-test contacts-native-syntax-test
+
+.PHONY: tls-deadline-test
+tls-deadline-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_tls_deadlines.py
+
+review-test: tls-deadline-test

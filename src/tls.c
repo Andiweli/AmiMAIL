@@ -12,6 +12,9 @@
 #include <exec/libraries.h>
 #include <exec/semaphores.h>
 #include <exec/tasks.h>
+#include <devices/timer.h>
+#include <dos/dos.h>
+#include <libraries/bsdsocket.h>
 #include <proto/exec.h>
 
 /* bsdsocket.library keeps opener state per task.  The generated inline
@@ -29,6 +32,7 @@ static struct Library *amg_tls_current_socket_base(void);
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509_vfy.h>
@@ -45,12 +49,14 @@ typedef struct AmgTlsTaskState {
     struct Library *socket_base;
     unsigned int references;
     volatile int *cancel_flag;
+    int socket_errno;
 } AmgTlsTaskState;
 
 static AmgTlsTaskState tls_tasks[AMG_TLS_MAX_TASKS];
 static struct SignalSemaphore tls_state_lock;
 static int tls_state_lock_ready = 0;
 static unsigned int tls_users = 0U;
+static AmgTlsTaskState *tls_find_task_state(struct Task *task);
 
 struct AmgTlsConnection {
     int socket_fd;
@@ -58,7 +64,22 @@ struct AmgTlsConnection {
     volatile int *cancel_flag;
     SSL_CTX *context;
     SSL *ssl;
+    struct MsgPort *timer_port;
+    struct timerequest *timer;
+    int timer_open;
+    unsigned int deadline_depth;
 };
+
+/* libnix errno is shared by subprocesses. Socket/AmiSSL errors must instead
+ * use the opener's own storage, including during concurrent handshakes. */
+static int *tls_errno_pointer(void)
+{
+    static int fallback;
+    AmgTlsTaskState *state = tls_find_task_state(FindTask(NULL));
+    return state ? &state->socket_errno : &fallback;
+}
+#undef errno
+#define errno (*tls_errno_pointer())
 
 static const char *socket_error_text(int value)
 {
@@ -218,6 +239,7 @@ int amg_tls_global_init(AmgError *error)
     AmgTlsTaskState *state;
     struct Library *task_socket_base = NULL;
     int shared_opened_here = 0;
+    int initialized;
     struct TagItem task_tags[4];
 
     tls_ensure_state_lock();
@@ -288,6 +310,7 @@ int amg_tls_global_init(AmgError *error)
     state->socket_base = task_socket_base;
     state->references = 1U;
     SocketBase = task_socket_base;
+    SetErrnoPtr(&state->socket_errno, sizeof(state->socket_errno));
     task_tags[0].ti_Tag = AmiSSL_SocketBase;
     task_tags[0].ti_Data = (ULONG)(uintptr_t)task_socket_base;
     task_tags[1].ti_Tag = AmiSSL_ErrNoPtr;
@@ -297,9 +320,11 @@ int amg_tls_global_init(AmgError *error)
     task_tags[3].ti_Tag = TAG_DONE;
     task_tags[3].ti_Data = 0;
 
-    if (InitAmiSSLA(task_tags) != 0 ||
+    initialized = InitAmiSSLA(task_tags) == 0;
+    if (!initialized ||
         !OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS |
                           OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL)) {
+        if (initialized) (void)CleanupAmiSSLA(NULL);
         memset(state, 0, sizeof(*state));
         CloseLibrary(task_socket_base);
         if (shared_opened_here) tls_close_shared_instance();
@@ -351,18 +376,119 @@ void amg_tls_global_cleanup(void)
     ReleaseSemaphore(&tls_state_lock);
 }
 
-static int open_socket(const char *host, unsigned short port,
-                       unsigned long timeout, AmgError *error)
+static void tls_deadline_end(AmgTlsConnection *connection)
+{
+    if (!connection->deadline_depth || --connection->deadline_depth) return;
+    (void)SocketBaseTags(SBTM_SETVAL(SBTC_BREAKMASK), SIGBREAKF_CTRL_C, TAG_DONE);
+    if (!CheckIO((struct IORequest *)connection->timer))
+        AbortIO((struct IORequest *)connection->timer);
+    WaitIO((struct IORequest *)connection->timer);
+    SetSignal(0UL, 1UL << connection->timer_port->mp_SigBit);
+}
+
+static int tls_deadline_begin(AmgTlsConnection *connection, AmgError *error)
+{
+    if (connection->deadline_depth) {
+        ++connection->deadline_depth;
+        return 1;
+    }
+    if (!connection->timer_open) {
+        if (!connection->timer_port) connection->timer_port = CreateMsgPort();
+        if (connection->timer_port && !connection->timer)
+            connection->timer = (struct timerequest *)CreateIORequest(
+                connection->timer_port, sizeof(*connection->timer));
+        if (!connection->timer || OpenDevice((CONST_STRPTR)TIMERNAME,
+                UNIT_VBLANK, (struct IORequest *)connection->timer, 0UL)) {
+            amg_error_set(error, AMG_ERR_IO, "Network deadline timer unavailable.");
+            return 0;
+        }
+        connection->timer_open = 1;
+    }
+    /* One timer spans every WANT_READ/WANT_WRITE retry and every partial
+     * write. Readiness notifications do not extend the operation's budget. */
+    SetSignal(0UL, SIGBREAKF_CTRL_C);
+    if (SocketBaseTags(SBTM_SETVAL(SBTC_BREAKMASK),
+            SIGBREAKF_CTRL_C | (1UL << connection->timer_port->mp_SigBit),
+            TAG_DONE) != 0) {
+        amg_error_set(error, AMG_ERR_IO, "Socket interrupt configuration failed.");
+        return 0;
+    }
+    connection->timer->tr_node.io_Command = TR_ADDREQUEST;
+    connection->timer->tr_time.tv_secs = connection->timeout_seconds;
+    connection->timer->tr_time.tv_micro = 0UL;
+    SendIO((struct IORequest *)connection->timer);
+    connection->deadline_depth = 1U;
+    return 1;
+}
+
+static int tls_deadline_check(AmgTlsConnection *connection, AmgError *error)
+{
+    if (connection->cancel_flag && *connection->cancel_flag) {
+        amg_error_set(error, AMG_ERR_IO,
+                      T(MSG_NETWORK_ERROR, "Network operation cancelled."));
+        return 0;
+    }
+    if (connection->deadline_depth && CheckIO((struct IORequest *)connection->timer)) {
+        amg_error_set(error, AMG_ERR_IO,
+                      T(MSG_TIMED_OUT_WAITING_FOR_NETWORK_DATA,
+                        "Timed out waiting for network data."));
+        return 0;
+    }
+    return 1;
+}
+
+static int wait_for_tls_socket(AmgTlsConnection *connection, int write_ready,
+                               AmgError *error)
+{
+    fd_set read_set, write_set;
+    struct timeval timeout;
+    LONG ready;
+    if (connection->socket_fd < 0 || connection->socket_fd >= FD_SETSIZE) {
+        amg_error_set(error, AMG_ERR_IO, "Socket descriptor exceeds select capacity.");
+        return 0;
+    }
+    while (tls_deadline_check(connection, error)) {
+        FD_ZERO(&read_set);
+        FD_ZERO(&write_set);
+        if (write_ready) FD_SET(connection->socket_fd, &write_set);
+        else FD_SET(connection->socket_fd, &read_set);
+        timeout.tv_sec = 1L;
+        timeout.tv_usec = 0L;
+        ready = WaitSelect(connection->socket_fd + 1,
+            write_ready ? NULL : &read_set, write_ready ? &write_set : NULL,
+            NULL, &timeout, NULL);
+        if (!tls_deadline_check(connection, error)) return 0;
+        if (ready > 0) return 1;
+        if (ready < 0 && errno != EINTR) {
+            amg_error_set(error, AMG_ERR_IO,
+                          T(MSG_SOCKET_WAIT_ERROR_WHILE_ACCESSING_THE_NETWORK,
+                            "Socket wait error while accessing the network."));
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static int socket_would_block(int value)
+{
+    return value == EAGAIN || value == EWOULDBLOCK || value == EINTR;
+}
+
+static int open_socket(AmgTlsConnection *connection, const char *host,
+                       unsigned short port, AmgError *error)
 {
     const struct hostent *entry;
     char **address_cursor;
     struct sockaddr_in address;
-    struct timeval tv;
     int fd = -1;
     int last_error = 0;
 
+    if (!tls_deadline_check(connection, error)) return -1;
     entry = gethostbyname((STRPTR)host);
-    if (!entry || !entry->h_addr_list || !entry->h_addr_list[0]) {
+    if (!tls_deadline_check(connection, error)) return -1;
+    if (!entry || entry->h_addrtype != AF_INET ||
+        entry->h_length != (int)sizeof(address.sin_addr) ||
+        !entry->h_addr_list || !entry->h_addr_list[0]) {
         char message[256];
         amg_tr_snprintf(message, sizeof(message),
                         MSG_SERVER_NAME_VALUE_COULD_NOT_BE_RESOLVED,
@@ -371,8 +497,6 @@ static int open_socket(const char *host, unsigned short port,
         return -1;
     }
 
-    tv.tv_sec = (long)(timeout ? timeout : 30U);
-    tv.tv_usec = 0;
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
@@ -383,6 +507,9 @@ static int open_socket(const char *host, unsigned short port,
      * look offline. */
     for (address_cursor = entry->h_addr_list; *address_cursor;
          ++address_cursor) {
+        LONG nonblocking = 1L, socket_status;
+        socklen_t status_size = sizeof(socket_status);
+        if (!tls_deadline_check(connection, error)) return -1;
         fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) {
             char message[256];
@@ -393,19 +520,34 @@ static int open_socket(const char *host, unsigned short port,
             return -1;
         }
 
-        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
-                         (char *)&tv, sizeof(tv));
-        (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
-                         (char *)&tv, sizeof(tv));
+        if (fd >= FD_SETSIZE || IoctlSocket(fd, FIONBIO, &nonblocking) < 0) {
+            CloseSocket(fd);
+            amg_error_set(error, AMG_ERR_IO, "Nonblocking socket initialization failed.");
+            return -1;
+        }
         memcpy(&address.sin_addr, *address_cursor,
                (size_t)entry->h_length);
 
         errno = 0;
         if (connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0)
             return fd;
-
         last_error = errno;
+        if (last_error == EINPROGRESS || last_error == EALREADY ||
+            socket_would_block(last_error)) {
+            connection->socket_fd = fd;
+            if (!wait_for_tls_socket(connection, 1, error)) {
+                CloseSocket(fd);
+                connection->socket_fd = -1;
+                return -1;
+            }
+            socket_status = 0;
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&socket_status,
+                           &status_size) == 0 && socket_status == 0)
+                return fd;
+            last_error = socket_status ? (int)socket_status : errno;
+        }
         CloseSocket(fd);
+        connection->socket_fd = -1;
         fd = -1;
     }
 
@@ -438,8 +580,12 @@ AmgTlsConnection *amg_tls_connect_plain(const char *host, unsigned short port,
         AmgTlsTaskState *state = tls_find_task_state(FindTask(NULL));
         connection->cancel_flag = state ? state->cancel_flag : NULL;
     }
-    connection->socket_fd = open_socket(host, port,
-                                        connection->timeout_seconds, error);
+    if (!tls_deadline_begin(connection, error)) {
+        amg_tls_close(connection);
+        return NULL;
+    }
+    connection->socket_fd = open_socket(connection, host, port, error);
+    tls_deadline_end(connection);
     if (connection->socket_fd < 0) {
         amg_tls_close(connection);
         return NULL;
@@ -453,6 +599,7 @@ static int amg_tls_starttls_internal(AmgTlsConnection *connection, const char *h
     if (!connection || connection->socket_fd < 0 || !host || !*host)
         return AMG_ERR_ARGUMENT;
     if (connection->ssl) return AMG_OK;
+    if (!tls_deadline_begin(connection, error)) return AMG_ERR_IO;
 
     connection->context = SSL_CTX_new(TLS_client_method());
     if (!connection->context) {
@@ -495,28 +642,37 @@ static int amg_tls_starttls_internal(AmgTlsConnection *connection, const char *h
         ssl_error(error, AMG_ERR_TLS, "TLS socket binding");
         goto fail;
     }
-    {
+    while (tls_deadline_check(connection, error)) {
         int handshake_result, ssl_result, socket_error;
         ERR_clear_error();
         errno = 0;
         handshake_result = SSL_connect(connection->ssl);
         socket_error = errno;
-        if (handshake_result != 1) {
+        if (handshake_result == 1) break;
+        {
             ssl_result = SSL_get_error(connection->ssl, handshake_result);
+            if (ssl_result == SSL_ERROR_WANT_READ || ssl_result == SSL_ERROR_WANT_WRITE) {
+                if (!wait_for_tls_socket(connection, ssl_result == SSL_ERROR_WANT_WRITE, error))
+                    goto fail;
+                continue;
+            }
             ssl_operation_error(error, AMG_ERR_TLS, "TLS-Handshake",
                                 connection->ssl, handshake_result,
                                 ssl_result, socket_error);
             goto fail;
         }
     }
+    if (!tls_deadline_check(connection, error)) goto fail;
     if (SSL_get_verify_result(connection->ssl) != X509_V_OK) {
         amg_error_set(error, AMG_ERR_TLS,
                       T(MSG_THE_SERVER_CERTIFICATE_IS_INVALID_PLEASE_ALSO_CHECK, "The server certificate is invalid. Please also check date and time."));
         goto fail;
     }
+    tls_deadline_end(connection);
     return AMG_OK;
 
 fail:
+    tls_deadline_end(connection);
     if (connection->ssl) {
         SSL_free(connection->ssl);
         connection->ssl = NULL;
@@ -562,72 +718,7 @@ AmgTlsConnection *amg_tls_connect_tls12(const char *host, unsigned short port,
     return amg_tls_connect_internal(host, port, timeout_seconds, 1, error);
 }
 
-static int wait_for_tls_socket(AmgTlsConnection *connection, int write_ready,
-                               AmgError *error)
-{
-    fd_set read_set, write_set;
-    struct timeval timeout;
-    unsigned long remaining_seconds;
-    unsigned long wait_seconds;
-    LONG ready;
-    remaining_seconds = connection->timeout_seconds
-        ? connection->timeout_seconds : 30U;
-    for (;;) {
-        if (connection->cancel_flag && *connection->cancel_flag) {
-            amg_error_set(error, AMG_ERR_IO,
-                          T(MSG_NETWORK_ERROR, "Network operation cancelled."));
-            return 0;
-        }
-        FD_ZERO(&read_set);
-        FD_ZERO(&write_set);
-        if (write_ready)
-            FD_SET(connection->socket_fd, &write_set);
-        else
-            FD_SET(connection->socket_fd, &read_set);
-        wait_seconds = remaining_seconds > 1U ? 1U : remaining_seconds;
-        timeout.tv_sec = (long)wait_seconds;
-        timeout.tv_usec = 0L;
-        ready = WaitSelect(
-            connection->socket_fd + 1,
-            write_ready ? NULL : &read_set,
-            write_ready ? &write_set : NULL,
-            NULL, &timeout, NULL);
-        if (ready > 0) return 1;
-        if (ready < 0) {
-            amg_error_set(error, AMG_ERR_IO,
-                          T(MSG_SOCKET_WAIT_ERROR_WHILE_ACCESSING_THE_NETWORK, "Socket wait error while accessing the network."));
-            return 0;
-        }
-        if (connection->cancel_flag && *connection->cancel_flag) {
-            amg_error_set(error, AMG_ERR_IO,
-                          T(MSG_NETWORK_ERROR, "Network operation cancelled."));
-            return 0;
-        }
-        if (remaining_seconds <= wait_seconds)
-            break;
-        remaining_seconds -= wait_seconds;
-    }
-    if (ready == 0)
-        amg_error_set(error, AMG_ERR_IO,
-                      T(MSG_TIMED_OUT_WAITING_FOR_NETWORK_DATA, "Timed out waiting for network data."));
-    return 0;
-}
-
-static int socket_errno_is_timeout(int value)
-{
-#ifdef ETIMEDOUT
-    if (value == ETIMEDOUT) return 1;
-#endif
-#ifdef EAGAIN
-    if (value == EAGAIN) return 1;
-#endif
-#ifdef EWOULDBLOCK
-    if (value == EWOULDBLOCK) return 1;
-#endif
-    return 0;
-}
-
-long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length,
+static long tls_read_internal(AmgTlsConnection *connection, void *data, size_t length,
                   AmgError *error)
 {
     int result, ssl_result, socket_error;
@@ -635,29 +726,27 @@ long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length,
         return AMG_ERR_ARGUMENT;
 
     if (!connection->ssl) {
+      for (;;) {
         if (!wait_for_tls_socket(connection, 0, error))
             return AMG_ERR_IO;
         result = recv(connection->socket_fd, data,
                       length > 0x7fffffffU ? 0x7fffffff : (int)length, 0);
         if (result > 0) return result;
+        if (result < 0 && socket_would_block(errno)) continue;
         if (result == 0)
             amg_error_set(error, AMG_ERR_IO,
                           T(MSG_THE_SERVER_CLOSED_THE_TCP_CONNECTION, "The server closed the TCP connection."));
-        else if (socket_errno_is_timeout(errno))
-            amg_error_set(error, AMG_ERR_IO,
-                          T(MSG_TIMED_OUT_WHILE_READING_FROM_THE_MAIL_SERVER, "Timed out while reading from the mail server."));
         else {
             char message[192];
             amg_tr_snprintf(message, sizeof(message), MSG_TCP_READ_ERROR_ERRNO_VALUE, "TCP read error (errno %d).", errno);
             amg_error_set(error, AMG_ERR_IO, message);
         }
         return AMG_ERR_IO;
+      }
     }
 
     for (;;) {
-        if (SSL_pending(connection->ssl) <= 0 &&
-            !wait_for_tls_socket(connection, 0, error))
-            return AMG_ERR_IO;
+        if (!tls_deadline_check(connection, error)) return AMG_ERR_IO;
         ERR_clear_error();
         errno = 0;
         result = SSL_read(connection->ssl, data,
@@ -687,7 +776,7 @@ long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length,
     }
 }
 
-long amg_tls_write(AmgTlsConnection *connection, const void *data,
+static long tls_write_internal(AmgTlsConnection *connection, const void *data,
                    size_t length, AmgError *error)
 {
     int result, ssl_result, socket_error;
@@ -696,25 +785,24 @@ long amg_tls_write(AmgTlsConnection *connection, const void *data,
     if (!length) return 0;
 
     if (!connection->ssl) {
+      for (;;) {
         if (!wait_for_tls_socket(connection, 1, error))
             return AMG_ERR_IO;
         result = send(connection->socket_fd, (char *)data,
                       length > 0x7fffffffU ? 0x7fffffff : (int)length, 0);
         if (result > 0) return result;
-        if (socket_errno_is_timeout(errno))
-            amg_error_set(error, AMG_ERR_IO,
-                          T(MSG_TIMED_OUT_WHILE_WRITING_TO_THE_MAIL_SERVER, "Timed out while writing to the mail server."));
-        else {
+        if (result < 0 && socket_would_block(errno)) continue;
+        {
             char message[192];
             amg_tr_snprintf(message, sizeof(message), MSG_TCP_WRITE_ERROR_ERRNO_VALUE, "TCP write error (errno %d).", errno);
             amg_error_set(error, AMG_ERR_IO, message);
         }
         return AMG_ERR_IO;
+      }
     }
 
     for (;;) {
-        if (!wait_for_tls_socket(connection, 1, error))
-            return AMG_ERR_IO;
+        if (!tls_deadline_check(connection, error)) return AMG_ERR_IO;
         ERR_clear_error();
         errno = 0;
         result = SSL_write(connection->ssl, data,
@@ -740,9 +828,38 @@ long amg_tls_write(AmgTlsConnection *connection, const void *data,
     }
 }
 
+long amg_tls_read(AmgTlsConnection *connection, void *data, size_t length,
+                  AmgError *error)
+{
+    long result;
+    if (!connection || !data || !length || connection->socket_fd < 0)
+        return AMG_ERR_ARGUMENT;
+    if (!tls_deadline_begin(connection, error)) return AMG_ERR_IO;
+    result = tls_read_internal(connection, data, length, error);
+    tls_deadline_end(connection);
+    return result;
+}
+
+long amg_tls_write(AmgTlsConnection *connection, const void *data, size_t length,
+                   AmgError *error)
+{
+    long result;
+    if (!connection || (!data && length) || connection->socket_fd < 0)
+        return AMG_ERR_ARGUMENT;
+    if (!length) return 0;
+    if (!tls_deadline_begin(connection, error)) return AMG_ERR_IO;
+    result = tls_write_internal(connection, data, length, error);
+    tls_deadline_end(connection);
+    return result;
+}
+
 void amg_tls_close(AmgTlsConnection *connection)
 {
     if (!connection) return;
+    while (connection->deadline_depth) tls_deadline_end(connection);
+    if (connection->timer_open) CloseDevice((struct IORequest *)connection->timer);
+    if (connection->timer) DeleteIORequest((struct IORequest *)connection->timer);
+    if (connection->timer_port) DeleteMsgPort(connection->timer_port);
     if (connection->ssl) {
         /* During application shutdown the peer may be unreachable.  A
          * graceful TLS close would then wait on the socket again, defeating
@@ -780,12 +897,21 @@ void amg_tls_close(AmgTlsConnection *connection) { (void)connection; }
 int amg_tls_write_all(AmgTlsConnection *connection, const void *data, size_t length, AmgError *error)
 {
     const unsigned char *p = (const unsigned char *)data;
+    int result = AMG_OK;
+    if (!connection || (!data && length)) return AMG_ERR_ARGUMENT;
+#if AMIGMAIL_AMIGA
+    if (!length) return AMG_OK;
+    if (!tls_deadline_begin(connection, error)) return AMG_ERR_IO;
+#endif
     while (length) {
         long written = amg_tls_write(connection, p, length, error);
-        if (written <= 0) return written < 0 ? (int)written : AMG_ERR_IO;
+        if (written <= 0) { result = written < 0 ? (int)written : AMG_ERR_IO; break; }
         p += written; length -= (size_t)written;
     }
-    return AMG_OK;
+#if AMIGMAIL_AMIGA
+    tls_deadline_end(connection);
+#endif
+    return result;
 }
 
 static int decode_chunked(const unsigned char *data, size_t length, AmgBuffer *output)

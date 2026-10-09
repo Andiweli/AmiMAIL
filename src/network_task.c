@@ -145,6 +145,8 @@ int amg_network_cancel_transfer(AmgNetwork *network, unsigned long serial)
         network->progress.serial == serial) {
         network->io_cancel_requested = 1;
         network->progress.cancellable = 0;
+        if (network->process)
+            Signal((struct Task *)network->process, SIGBREAKF_CTRL_C);
         accepted = 1;
     }
     Permit();
@@ -1358,6 +1360,8 @@ void amg_network_stop(AmgNetwork *network)
     network->stop_requested = 1;
     network->io_cancel_requested = 1;
     PutMsg(network->commands, &stop.message);
+    if (network->process)
+        Signal((struct Task *)network->process, SIGBREAKF_CTRL_C);
     /* No malloc during low-memory shutdown, and do not release any GUI or
      * network memory until the worker has acknowledged its final message. */
     while (!acknowledged) {
