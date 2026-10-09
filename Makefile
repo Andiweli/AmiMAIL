@@ -355,5 +355,11 @@ https-oauth-test:
 
 review-test: https-oauth-test
 
+.PHONY: folder-visibility-test
+folder-visibility-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_folder_visibility.py
+
+review-test: folder-visibility-test
+
 static-analysis:
 	HOST_CC="$(HOST_CC)" $(PYTHON) tools/static_analysis.py

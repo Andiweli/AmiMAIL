@@ -30,6 +30,20 @@ static void test_list(void)
     CHECK(special_flag("\\SentOther \\AllOther") == 0UL);
     CHECK(special_flag("\\Sent \\All") == (AMG_LABEL_SENT | AMG_LABEL_ALL));
     {
+        AmgImapSession session;
+        AmgImapLabel label;
+        amg_imap_session_init(&session);
+        CHECK(parse_list_line("* LIST (\\HasChildren \\Noselect) \"/\" \"[Gmail]\"",
+                              &session, &label, NULL, 0U) == 1);
+        CHECK(!label.selectable && !strcmp(label.name_utf8, "[Gmail]"));
+        CHECK(parse_list_line("* XLIST (\\NOSELECT) \"/\" \"[Google Mail]\"",
+                              &session, &label, NULL, 0U) == 1);
+        CHECK(!label.selectable && !strcmp(label.name_utf8, "[Google Mail]"));
+        CHECK(parse_list_line("* LIST (\\NoselectOther) \"/\" \"[Gmail]\"",
+                              &session, &label, NULL, 0U) == 1);
+        CHECK(label.selectable);
+    }
+    {
         AmgBuffer command;
         amg_buffer_init(&command);
         CHECK(quote_mailbox("Inbox\r\nA2 LOGOUT", &command) == AMG_ERR_ARGUMENT);

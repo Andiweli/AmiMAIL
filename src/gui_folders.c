@@ -528,7 +528,7 @@ static int google_namespace_container_name(const char *mailbox_utf8)
          !strcmp(mailbox_utf8, "[Google Mail]"));
 }
 
-static void prune_empty_google_namespace_container(AmgGui *gui)
+static void prune_google_namespace_containers(AmgGui *gui)
 {
     size_t i;
     int google_account;
@@ -541,35 +541,15 @@ static void prune_empty_google_namespace_container(AmgGui *gui)
     i = GUI_SYSTEM_LABEL_COUNT;
     while (i < gui->label_count) {
         GuiLabel *label = &gui->labels[i];
-        size_t j, prefix_length;
-        int has_custom_child = 0;
-
         if (label->selectable ||
             !google_namespace_container_name(label->mailbox_utf8)) {
             ++i;
             continue;
         }
 
-        prefix_length = strlen(label->mailbox_utf8);
-        if (label->delimiter) {
-            for (j = GUI_SYSTEM_LABEL_COUNT; j < gui->label_count; ++j) {
-                const GuiLabel *candidate;
-                if (j == i) continue;
-                candidate = &gui->labels[j];
-                if (!strncmp(candidate->mailbox_utf8, label->mailbox_utf8,
-                             prefix_length) &&
-                    candidate->mailbox_utf8[prefix_length] == label->delimiter) {
-                    has_custom_child = 1;
-                    break;
-                }
-            }
-        }
-
-        if (has_custom_child) {
-            ++i;
-            continue;
-        }
-
+        /* This is a server namespace, not an openable mailbox. Retain its
+         * children and their exact server paths; tree preparation below
+         * promotes them to the first visible level without this container. */
         if (i + 1U < gui->label_count)
             memmove(&gui->labels[i], &gui->labels[i + 1U],
                     (gui->label_count - i - 1U) * sizeof(gui->labels[0]));
@@ -750,7 +730,7 @@ static void prepare_custom_label_tree(AmgGui *gui)
                (payload[position] == '\r' || payload[position] == '\n'))
             ++position;
     }
-    prune_empty_google_namespace_container(gui);
+    prune_google_namespace_containers(gui);
     prepare_custom_label_tree(gui);
     load_label_expansion_state(gui);
     rebuild_label_lists(gui);
