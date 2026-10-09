@@ -71,21 +71,29 @@ static char *backup_name(const char *path)
     return backup;
 }
 
-int amg_file_recover(const char *path)
+int amg_file_recover_from(const char *path, const char *backup)
 {
-    char *backup;
     int state, saved;
-    if (!path || !*path) return AMG_ERR_ARGUMENT;
+    if (!path || !*path || !backup || !*backup || !strcmp(path, backup))
+        return AMG_ERR_ARGUMENT;
     state = file_state(path);
     if (state == 1) return AMG_OK;
     if (state < 0) return AMG_ERR_IO;
-    backup = backup_name(path);
-    if (!backup) return AMG_ERR_MEMORY;
     saved = file_state(backup);
     if (saved == 1) state = move_file(backup, path) ? 1 : -1;
     else if (saved < 0) state = -1;
-    free(backup);
     return state < 0 ? AMG_ERR_IO : AMG_OK;
+}
+
+int amg_file_recover(const char *path)
+{
+    char *backup = backup_name(path);
+    int result;
+    if (!path || !*path) return AMG_ERR_ARGUMENT;
+    if (!backup) return AMG_ERR_MEMORY;
+    result = amg_file_recover_from(path, backup);
+    free(backup);
+    return result;
 }
 
 int amg_file_replace(const char *temporary, const char *path)

@@ -1,6 +1,8 @@
 #include "contacts.h"
+#include "fileio.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -282,61 +284,16 @@ static int decode_hex(const char *hex, char *output, size_t capacity)
     return AMG_OK;
 }
 
-static int path_exists(const char *path)
+static int recover_contacts(const char *path)
 {
-#if AMIGMAIL_AMIGA
-    BPTR lock = Lock((CONST_STRPTR)path, ACCESS_READ);
-    if (!lock) return 0;
-    UnLock(lock);
-    return 1;
-#else
-    FILE *file = fopen(path, "rb");
-    if (!file) return 0;
-    fclose(file);
-    return 1;
-#endif
-}
-
-static int delete_path(const char *path)
-{
-#if AMIGMAIL_AMIGA
-    return DeleteFile((CONST_STRPTR)path) ? AMG_OK : AMG_ERR_IO;
-#else
-    return remove(path) == 0 ? AMG_OK : AMG_ERR_IO;
-#endif
-}
-
-static int rename_path(const char *from, const char *to)
-{
-#if AMIGMAIL_AMIGA
-    return Rename((CONST_STRPTR)from, (CONST_STRPTR)to) ? AMG_OK : AMG_ERR_IO;
-#else
-    return rename(from, to) == 0 ? AMG_OK : AMG_ERR_IO;
-#endif
-}
-
-/* Keep the previous contact file recoverable until the new file is in place.
- * This avoids losing the address book if the final rename fails. */
-static int replace_file(const char *temporary, const char *path)
-{
-    char backup[1024];
-    int had_old;
-    int written;
-    if (snprintf(backup, sizeof(backup), "%s.old", path) >=
-        (int)sizeof(backup)) return AMG_ERR_LIMIT;
-
-    had_old = path_exists(path);
-    if (path_exists(backup)) (void)delete_path(backup);
-    if (had_old && rename_path(path, backup) != AMG_OK) return AMG_ERR_IO;
-
-    written = rename_path(temporary, path);
-    if (written == AMG_OK) {
-        if (had_old && path_exists(backup)) (void)delete_path(backup);
-        return AMG_OK;
-    }
-
-    if (had_old) (void)rename_path(backup, path);
-    return written;
+    char legacy[1024];
+    int result = amg_file_recover(path);
+    if (result != AMG_OK) return result;
+    if (snprintf(legacy, sizeof(legacy), "%s.old", path) >=
+        (int)sizeof(legacy)) return AMG_ERR_LIMIT;
+    /* Retain recovery compatibility with the pre-audit .old save sequence.
+     * New saves use the shared, fault-tested .bak replacement policy. */
+    return amg_file_recover_from(path, legacy);
 }
 
 #if AMIGMAIL_AMIGA
@@ -360,13 +317,21 @@ int amg_contacts_save(const char *path, const AmgContactBook *book,
     size_t i;
     int result = AMG_OK;
     if (!path || !book) return AMG_ERR_ARGUMENT;
+    result = recover_contacts(path);
+    if (result != AMG_OK) {
+        contact_error(error, result, "Contact file could not be recovered.");
+        return result;
+    }
 #if AMIGMAIL_AMIGA
     ensure_contacts_drawer();
 #endif
     if (!strcmp(path, AMG_CONTACTS_DEFAULT_PATH))
         snprintf(temporary, sizeof(temporary), "%s", AMG_CONTACTS_TEMP_PATH);
-    else
-        snprintf(temporary, sizeof(temporary), "%s.new", path);
+    else if (snprintf(temporary, sizeof(temporary), "%s.new", path) >=
+             (int)sizeof(temporary)) {
+        contact_error(error, AMG_ERR_LIMIT, "Contact file path is too long.");
+        return AMG_ERR_LIMIT;
+    }
     file = fopen(temporary, "wb");
     if (!file) {
         contact_error(error, AMG_ERR_IO, "Contact file could not be created.");
@@ -387,7 +352,7 @@ int amg_contacts_save(const char *path, const AmgContactBook *book,
             fputs("end\n", file) == EOF) result = AMG_ERR_IO;
     }
     if (fclose(file) != 0 && result == AMG_OK) result = AMG_ERR_IO;
-    if (result == AMG_OK) result = replace_file(temporary, path);
+    if (result == AMG_OK) result = amg_file_replace(temporary, path);
     if (result != AMG_OK) {
 #if AMIGMAIL_AMIGA
         DeleteFile((CONST_STRPTR)temporary);
@@ -423,8 +388,18 @@ int amg_contacts_load(const char *path, AmgContactBook *book, AmgError *error)
     int in_contact = 0;
     int result = AMG_OK;
     if (!path || !book) return AMG_ERR_ARGUMENT;
+    result = recover_contacts(path);
+    if (result != AMG_OK) {
+        contact_error(error, result, "Contact file could not be recovered.");
+        return result;
+    }
+    errno = 0;
     file = fopen(path, "rb");
     if (!file) {
+        if (errno != ENOENT) {
+            contact_error(error, AMG_ERR_IO, "Contact file could not be read.");
+            return AMG_ERR_IO;
+        }
         amg_contacts_free(book);
         amg_contacts_init(book);
         contact_error(error, AMG_OK, "");

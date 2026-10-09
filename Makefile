@@ -147,6 +147,15 @@ review-test: host-test $(REVIEW_TEST) $(FILEIO_TEST) $(SMTP_STREAM_TEST) catalog
 	./$(FILEIO_TEST)
 	./$(SMTP_STREAM_TEST)
 
+.PHONY: contacts-recovery-test
+build/contacts-recovery-tests: tests/test_contacts_recovery.c src/contacts.c src/fileio.c src/common.c $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_contacts_recovery.c src/fileio.c src/common.c -o $@
+
+contacts-recovery-test: build/contacts-recovery-tests
+	./build/contacts-recovery-tests
+
+review-test: contacts-recovery-test
+
 check-env:
 
 	@command -v $(CC) >/dev/null || { echo "FEHLT: $(CC)"; exit 1; }
