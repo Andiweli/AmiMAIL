@@ -15,6 +15,7 @@ static struct Process worker_process;
 static AmgNetwork *stopping_network;
 static int worker_alive;
 static unsigned worker_signals;
+static unsigned stop_acknowledgements;
 static AmgNetMessage *queued, *response;
 #define CHECK(expr) do { ++checks; if (!(expr)) { \
     fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #expr); abort(); \
@@ -48,6 +49,16 @@ void PutMsg(struct MsgPort *port, struct Message *message)
         return;
     }
     queued = (AmgNetMessage *)message;
+}
+void ReplyMsg(struct Message *message)
+{
+    /* A runnable parent could immediately free network and unload worker code.
+     * The last acknowledgement must not permit that preemption yet. */
+    CHECK(message != NULL && forbid_depth > 0);
+    CHECK(stopping_network && !stopping_network->running);
+    CHECK(!stopping_network->worker_ready && !stopping_network->connected);
+    CHECK(!stopping_network->stop_requested);
+    ++stop_acknowledgements;
 }
 struct Message *GetMsg(struct MsgPort *port)
 {
@@ -292,6 +303,19 @@ int main(void)
     CHECK(!network.io_cancel_requested && !network.stop_requested);
     CHECK(forbid_depth == 0 && queued == NULL && response == NULL);
     CHECK(wake_count > 0U);
+    network.running = network.worker_ready = network.connected = 1;
+    network.stop_requested = 1;
+    {
+        struct Message stop_message;
+        memset(&stop_message, 0, sizeof(stop_message));
+        network_worker_finish(&network, &stop_message);
+        CHECK(stop_acknowledgements == 1U && forbid_depth == 1);
+        /* Model DOS task removal after the worker has returned to DOS code. */
+        forbid_depth = 0;
+        network_worker_finish(&network, NULL);
+        CHECK(stop_acknowledgements == 1U && forbid_depth == 1);
+        forbid_depth = 0;
+    }
     printf("Progress queue/context: %u checks passed (API doubles).\n", checks);
     return 0;
 }

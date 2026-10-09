@@ -676,6 +676,21 @@ static int receive_mail_file(AmgNetwork *network, AmgImapSession *imap,
     return result;
 }
 
+static void network_worker_finish(AmgNetwork *network, struct Message *stop_message)
+{
+    /* The parent may unload this executable as soon as STOP is acknowledged.
+     * Keep it unscheduled through the worker's final C epilogue. There must be
+     * no waiting/DOS/library cleanup after this point, and no matching Permit:
+     * this process returns directly to DOS and exits, outside our executable.
+     * Forbid here does not replace the parent's protected STOP dispatch. */
+    Forbid();
+    network->running = 0;
+    network->worker_ready = 0;
+    network->connected = 0;
+    network->stop_requested = 0;
+    if (stop_message) ReplyMsg(stop_message);
+}
+
 static void network_worker(void)
 {
     AmgNetwork *network = starting_network;
@@ -946,11 +961,7 @@ done:
     amg_imap_disconnect(&imap);
     amg_oauth_tokens_clear(&tokens);
     if (tls_ready) amg_tls_global_cleanup();
-    network->running = 0;
-    network->worker_ready = 0;
-    network->connected = 0;
-    network->stop_requested = 0;
-    if (stop_message) ReplyMsg(stop_message);
+    network_worker_finish(network, stop_message);
 }
 
 AmgNetwork *amg_network_create(void)
