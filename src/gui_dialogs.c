@@ -2847,8 +2847,7 @@ GuiConfirmationResult confirm_question_result_for_window(
 {
     LONG font_height = 8L;
     LONG question_height, note_height, button_height;
-    LONG outer_width, outer_height, min_outer_width;
-    LONG left, top, max_left, max_top;
+    LONG inner_width, inner_height;
     struct LayoutLimits limits;
     ConfirmationObjects objects;
     Class *button_class, *layout_class, *window_class;
@@ -2966,52 +2965,28 @@ GuiConfirmationResult confirm_question_result_for_window(
     gui_requester_trace(gui, "requester.minimum",
         (unsigned long)limits.MinWidth, (unsigned long)limits.MinHeight);
 
-    /* LayoutLimits() reports the inner layout domain without window borders.
-     * The reference window uses the same screen/title style, so its border
-     * sizes are a safe classic-ReAction allowance.  Keep the historical
-     * caller width as a minimum, but enlarge it before centering if the
-     * translated text actually requires more room. */
-    outer_width = width;
-    min_outer_width = (LONG)limits.MinWidth +
-                      (LONG)ref_window->BorderLeft +
-                      (LONG)ref_window->BorderRight;
-    if (outer_width < min_outer_width) outer_width = min_outer_width;
-    outer_height = (LONG)limits.MinHeight +
-                   (LONG)ref_window->BorderTop +
-                   (LONG)ref_window->BorderBottom;
-    if (outer_height < 1L) outer_height = 1L;
-
-    if (outer_width > (LONG)gui->screen->Width)
-        outer_width = (LONG)gui->screen->Width;
-    if (outer_height > (LONG)gui->screen->Height)
-        outer_height = (LONG)gui->screen->Height;
-
-    left = (LONG)ref_window->LeftEdge +
-           ((LONG)ref_window->Width - outer_width) / 2L;
-    top = (LONG)ref_window->TopEdge +
-          ((LONG)ref_window->Height - outer_height) / 2L;
-    max_left = (LONG)gui->screen->Width - outer_width;
-    max_top = (LONG)gui->screen->Height - outer_height;
-    if (max_left < 0L) max_left = 0L;
-    if (max_top < 0L) max_top = 0L;
-    if (left < 0L) left = 0L;
-    if (top < 0L) top = 0L;
-    if (left > max_left) left = max_left;
-    if (top > max_top) top = max_top;
-
-    gui_requester_trace(gui, "requester.position",
-        (unsigned long)left, (unsigned long)top);
-    gui_requester_trace(gui, "requester.size",
-        (unsigned long)outer_width, (unsigned long)outer_height);
+    /* LayoutLimits measures the inner domain. A size-gadget main window
+     * does not supply the borders of this non-resizable requester. Never
+     * turn those estimated outer dimensions into hard WA_Max* limits:
+     * window.class must still add its own borders and apply its font/domain
+     * requirements during WM_OPEN. Lock the final size through ReAction,
+     * and let it center that final size relative to the calling window. */
+    inner_width = width - (LONG)ref_window->BorderLeft -
+                          (LONG)ref_window->BorderRight;
+    if (inner_width < (LONG)limits.MinWidth)
+        inner_width = (LONG)limits.MinWidth;
+    inner_height = (LONG)limits.MinHeight;
+    if (inner_height < 1L) inner_height = 1L;
+    gui_requester_trace(gui, "requester.inner-size",
+        (unsigned long)inner_width, (unsigned long)inner_height);
     {
         struct TagItem tags[] = {
             { WA_Title, (ULONG)(uintptr_t)"AmiMail" },
-            { WA_Left, (ULONG)left }, { WA_Top, (ULONG)top },
-            { WA_Width, (ULONG)outer_width }, { WA_Height, (ULONG)outer_height },
-            { WA_MinWidth, (ULONG)outer_width },
-            { WA_MaxWidth, (ULONG)outer_width },
-            { WA_MinHeight, (ULONG)outer_height },
-            { WA_MaxHeight, (ULONG)outer_height },
+            { WA_InnerWidth, (ULONG)inner_width },
+            { WA_InnerHeight, (ULONG)inner_height },
+            { WINDOW_LockWidth, TRUE }, { WINDOW_LockHeight, TRUE },
+            { WINDOW_Position, WPOS_CENTERWINDOW },
+            { WINDOW_RefWindow, (ULONG)(uintptr_t)ref_window },
             { WA_PubScreen, (ULONG)(uintptr_t)gui->screen },
             { WA_Flags, WFLG_CLOSEGADGET | WFLG_DRAGBAR | WFLG_DEPTHGADGET |
                         WFLG_ACTIVATE },
@@ -3033,6 +3008,10 @@ GuiConfirmationResult confirm_question_result_for_window(
     build_step = 8UL;
     window = RA_OpenWindow(dialog);
     if (!window) goto failed;
+    gui_requester_trace(gui, "requester.position",
+        (unsigned long)window->LeftEdge, (unsigned long)window->TopEdge);
+    gui_requester_trace(gui, "requester.size",
+        (unsigned long)window->Width, (unsigned long)window->Height);
     failure_stage = 5U;
     build_step = 9UL;
     GetAttr(WINDOW_SigMask, dialog, &signal_mask);

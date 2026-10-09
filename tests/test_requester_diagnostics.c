@@ -19,7 +19,12 @@ typedef unsigned char *STRPTR;
 typedef const unsigned char *CONST_STRPTR;
 typedef unsigned long BPTR;
 typedef struct Object Object;
-struct Object { int kind, live; size_t children; Object *child[4]; int keep[4]; };
+struct Object { int kind, live; size_t children; Object *child[4]; int keep[4];
+    ULONG inner_width, inner_height, width, height, min_height, max_width, max_height;
+    LONG left, top;
+    ULONG position, lock_width, lock_height;
+    struct Window *reference;
+};
 typedef struct TestClass { int kind; } Class;
 struct TagItem { ULONG ti_Tag, ti_Data; };
 struct InputEvent { UWORD ie_Qualifier; };
@@ -91,7 +96,10 @@ enum { LAYOUT_SpaceOuter=100, LAYOUT_SpaceInner, LAYOUT_AddChild, LAYOUT_EvenSiz
  BUTTON_BevelStyle, BUTTON_Transparent, GA_ID, GA_RelVerify,
  WA_Title, WA_Left, WA_Top, WA_Width, WA_Height, WA_MinWidth, WA_MaxWidth,
  WA_MinHeight, WA_MaxHeight, WA_PubScreen, WA_Flags, WA_IDCMP, WINDOW_Layout,
- WINDOW_SigMask, WINDOW_InputEvent, LAYOUT_Orientation, CHILD_NoDispose };
+ WINDOW_SigMask, WINDOW_InputEvent, LAYOUT_Orientation, CHILD_NoDispose,
+ WA_InnerWidth, WA_InnerHeight, WINDOW_LockWidth, WINDOW_LockHeight,
+ WINDOW_Position, WINDOW_RefWindow };
+#define WPOS_CENTERWINDOW 4UL
 #define LAYOUT_ORIENT_HORIZ 0UL
 #define LAYOUT_ORIENT_VERT 1UL
 enum { GID_CONFIRM_YES=300, GID_CONFIRM_NO, GID_COMPOSE_CANCEL=400 };
@@ -123,6 +131,8 @@ static int fail_stage, object_count, disposed_layout, disposed_window, window_op
 static Object test_objects[32];
 static Class test_button_class={TEST_BUTTON}, test_layout_class={TEST_VGROUP}, test_window_class={TEST_WINDOW};
 static int live_objects, allocation_call, fail_allocation;
+static UWORD domain_width, domain_height;
+static UBYTE actual_border_left, actual_border_right, actual_border_top, actual_border_bottom;
 static ULONG raw_qualifier;
 static struct InputEvent input_event;
 static ULONG events[8];
@@ -211,6 +221,19 @@ static Object *NewObjectA(Class *cl, CONST_STRPTR name, const struct TagItem *ta
         if(tag==LAYOUT_Orientation && value==LAYOUT_ORIENT_HORIZ) o->kind=TEST_HGROUP;
         if(tag==LAYOUT_AddChild) {CHECK(value && o->children<4);o->child[o->children++]=(Object *)(uintptr_t)value;}
         if(tag==CHILD_NoDispose) {CHECK(o->children);o->keep[o->children-1U]=value!=0;}
+        if(tag==WA_InnerWidth) o->inner_width=value;
+        if(tag==WA_InnerHeight) o->inner_height=value;
+        if(tag==WA_Width) o->width=value;
+        if(tag==WA_Height) o->height=value;
+        if(tag==WA_MinHeight) o->min_height=value;
+        if(tag==WA_MaxWidth) o->max_width=value;
+        if(tag==WA_MaxHeight) o->max_height=value;
+        if(tag==WINDOW_Position) o->position=value;
+        if(tag==WINDOW_RefWindow) o->reference=(struct Window *)(uintptr_t)value;
+        if(tag==WINDOW_LockWidth) o->lock_width=value;
+        if(tag==WINDOW_LockHeight) o->lock_height=value;
+        if(tag==WA_Left) o->left=(LONG)value;
+        if(tag==WA_Top) o->top=(LONG)value;
     }
     ++allocation_call; ++object_count;
     fail=(fail_allocation && allocation_call==fail_allocation) ||
@@ -235,9 +258,35 @@ static int rawkey_is_cancel(ULONG result)
 { return (result&WMHI_KEYMASK)==GUI_RAWKEY_ESCAPE; }
 static void LayoutLimits(struct Gadget *g,struct LayoutLimits *l,
                          struct TextFont *f,struct Screen *s)
-{ CHECK(g && f==&font && s==&screen);l->MinWidth=302;l->MinHeight=40; }
+{ CHECK(g && f==&font && s==&screen);l->MinWidth=domain_width;l->MinHeight=domain_height; }
 static struct Window *test_OpenWindow(Object *o)
-{ CHECK(o && o->kind==TEST_WINDOW);++window_open_calls;native_error=104;return fail_stage==4?NULL:&confirm_window; }
+{
+    LONG min_width, min_height;
+    CHECK(o && o->kind==TEST_WINDOW);++window_open_calls;native_error=104;
+    if(fail_stage==4) return NULL;
+    CHECK(o->children==1 && o->child[0]->kind==TEST_VGROUP);
+    min_width=(LONG)domain_width+actual_border_left+actual_border_right;
+    min_height=(LONG)domain_height+actual_border_top+actual_border_bottom;
+    /* The fixed-height child rows also bound the layout's maximum height.
+     * Reference borders can cause either a too-small maximum or a too-large
+     * minimum. Model those constraints, not the full window.class algorithm. */
+    if((o->max_width && (LONG)o->max_width<min_width) ||
+       (o->max_height && (LONG)o->max_height<min_height) ||
+       (o->min_height && (LONG)o->min_height>min_height)) return NULL;
+    confirm_window.Width=o->inner_width
+        ? (LONG)o->inner_width+actual_border_left+actual_border_right : (LONG)o->width;
+    confirm_window.Height=o->inner_height
+        ? (LONG)o->inner_height+actual_border_top+actual_border_bottom : (LONG)o->height;
+    if(confirm_window.Width<min_width) confirm_window.Width=min_width;
+    if(confirm_window.Height<min_height) confirm_window.Height=min_height;
+    confirm_window.LeftEdge=o->left;confirm_window.TopEdge=o->top;
+    if(o->position==WPOS_CENTERWINDOW) {
+        CHECK(o->reference);
+        confirm_window.LeftEdge=o->reference->LeftEdge+(o->reference->Width-confirm_window.Width)/2;
+        confirm_window.TopEdge=o->reference->TopEdge+(o->reference->Height-confirm_window.Height)/2;
+    }
+    return &confirm_window;
+}
 static ULONG GetAttr(ULONG tag,Object *o,ULONG *value)
 {
     CHECK(o);
@@ -301,6 +350,10 @@ static void reset(void)
     compose_queue_result=AMG_OK;compose_queue_calls=0;
     memset(test_objects,0,sizeof(test_objects));live_objects=allocation_call=fail_allocation=0;
     raw_qualifier=0;
+    domain_width=302;domain_height=40;
+    actual_border_left=main_window.BorderLeft;actual_border_right=main_window.BorderRight;
+    actual_border_top=main_window.BorderTop;actual_border_bottom=main_window.BorderBottom;
+    memset(&confirm_window,0,sizeof(confirm_window));
 }
 
 static void test_log(void)
@@ -391,6 +444,37 @@ static void test_decisions(void)
     reset();CHECK(!confirm_empty_spam_dialog(&test_gui));
 }
 
+static void test_native_sizing(void)
+{
+    int done, submitted;
+    /* The main window has a sizing border; the requester has no size gadget. */
+    main_window.BorderBottom=24;
+    reset();actual_border_bottom=4;
+    events[0]=WMHI_GADGETUP|GID_CONFIRM_YES;
+    CHECK(confirm_delete_dialog(&test_gui)==1);
+    CHECK(confirm_window.Height==56 && !test_gui.confirmation_failure);
+    CHECK(!live_objects);
+    main_window.BorderBottom=4;
+    reset();debug_enabled=1;actual_border_top=28;actual_border_bottom=8;
+    actual_border_left=6;actual_border_right=6;
+    events[0]=WMHI_GADGETUP|GID_CONFIRM_YES;
+    CHECK(confirm_delete_dialog(&test_gui)==1);
+    CHECK(confirm_window.Width==314 && confirm_window.Height==76);
+    CHECK(confirm_window.LeftEdge==203 && confirm_window.TopEdge==207);
+    CHECK(strstr(log_data,"requester.inner-size v1=302")!=NULL);
+    CHECK(strstr(log_data,"requester.size v1=314")!=NULL);
+    CHECK(!live_objects && !test_gui.confirmation_failure);
+    reset();domain_width=700;domain_height=120;actual_border_top=32;
+    events[0]=WMHI_GADGETUP|GID_CONFIRM_YES;
+    CHECK(confirm_question_result_for_window(&test_gui,&main_window,"Q","N",310)==GUI_CONFIRM_YES);
+    CHECK(confirm_window.Width==708 && confirm_window.Height==156);
+    CHECK(!live_objects);
+    reset();actual_border_top=28;events[0]=WMHI_GADGETUP|GID_CONFIRM_NO;
+    test_compose_cancel(&test_gui,&done,&submitted);
+    CHECK(done && !submitted && !compose_queue_calls);
+    CHECK(!test_gui.confirmation_failure && !live_objects);
+}
+
 static void test_delete_safety(void)
 {
     AmgError error;
@@ -470,7 +554,7 @@ static void test_repeat_and_lifecycle(void)
 }
 int main(void)
 {
-    test_log();test_failures();test_decisions();test_delete_safety();test_draft_safety();test_repeat_and_lifecycle();
+    test_log();test_failures();test_decisions();test_native_sizing();test_delete_safety();test_draft_safety();test_repeat_and_lifecycle();
     printf("requester diagnostics: %u checks passed (explicit API doubles).\n",checks);
     return 0;
 }

@@ -68,7 +68,11 @@ def wiring():
     assert 'GUI_CONFIRM_NO' in requester and 'GUI_CONFIRM_DISMISSED' in requester
     assert 'return GUI_CONFIRM_FAILED;' in requester
     assert 'note_height = font_height;' in requester
-    assert '((LONG)ref_window->Width - outer_width) / 2L' in requester
+    assert 'WA_InnerWidth' in requester and 'WA_InnerHeight' in requester
+    assert 'WINDOW_Position, WPOS_CENTERWINDOW' in requester
+    assert 'WINDOW_RefWindow' in requester
+    assert 'WINDOW_LockWidth' in requester and 'WINDOW_LockHeight' in requester
+    assert 'WA_MaxHeight' not in requester and 'WA_MaxWidth' not in requester
     dispatch = actions[actions.index('void handle_main_gadget('):]
     assert dispatch.index('"delete.dispatch"') < dispatch.index('gui_reply_popup_close(gui);')
     assert 'src/gui_requester_diag.c' in (ROOT/'Makefile').read_text()
