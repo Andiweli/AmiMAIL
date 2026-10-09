@@ -54,7 +54,7 @@ class PackagingTests(unittest.TestCase):
             for name in ("bin", "assets", "_Catalogs", "_Guides", "_Installer", "docs", "config"):
                 shutil.copytree(ROOT / name, root / name)
             module = load("release_stage")
-            destination = root / "dist/AmiMAIL-2.2.1"
+            destination = root / "dist/AmiMAIL-2.2.2"
             module.stage(root, destination)
             setup = destination / "Install/Setup"
             for path in ("AmiMAIL", "AmiMAIL.info", "LICENSE", "Guides/AmiMAIL_EN.guide",
@@ -68,7 +68,7 @@ class PackagingTests(unittest.TestCase):
             module.stage(root, destination)
             self.assertFalse((destination / "obsolete").exists())
             with self.assertRaises(ValueError):
-                module.stage(root, root / "AmiMAIL-2.2.1")
+                module.stage(root, root / "AmiMAIL-2.2.2")
 
 
 if __name__ == "__main__":

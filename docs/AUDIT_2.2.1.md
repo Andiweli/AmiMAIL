@@ -1,5 +1,9 @@
 # AmiMAIL Audit und Fehlerbereinigung
 
+Die weitere Nachprüfung nach dem Gerätetest und die Korrekturen für 2.2.2 sind
+im [Nachprüfungsbericht](REGRESSION_REVIEW_2.2.2.md) dokumentiert. Die folgenden
+Angaben halten den bisherigen Audit-Verlauf fest.
+
 Erste Abschlussprüfung: 9. Oktober 2026; Nachtrag vom 10. Oktober 2026 unten.
 Ausgangspunkt ist AmiMAIL 2.2.1 auf `main`, Commit
 `b8bfa79dc207066e6703bcfee220bf93eb9413f5`. Alle Änderungen liegen auf

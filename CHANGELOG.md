@@ -1,5 +1,14 @@
 # Changelog
 
+## AmiMAIL 2.2.2 - 2026-10-10
+- Restore padding and a font-sized blank row in Yes/No confirmation requesters.
+- Keep ReAction's own window sizing and the safe Yes/No/dismiss/error outcomes.
+- Hide Gmail namespace roots even without Noselect; recognize Google OAuth and proxy cases.
+- Preserve child mailbox paths and selectable namesakes on other providers.
+- Add layout-tag, font-size and namespace regression tests; recheck the audit changes.
+- Update the executable identification, build version, README badge and both guides to 2.2.2.
+- Keep the existing status/progress UI and the compatible German V13 catalog.
+
 ## AmiMAIL 2.2.1 - 2026-09-29
 - Fixed inconsistent draft prompts for Escape, Cancel and window close.
 - Reworked confirmation dialog creation and cleanup.
