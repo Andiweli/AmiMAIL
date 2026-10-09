@@ -206,3 +206,24 @@ Die Port-Korrektur wurde als a51ed6d943de816f7d5a8016dacda555b9de22a7 auf
 audit gepusht und der Remote-SHA abgeglichen. main blieb auf
 b8bfa79dc207066e6703bcfee220bf93eb9413f5. Beide Pakettests mit dem neu
 gebauten Programm waren ebenfalls erfolgreich.
+
+## Geräterückmeldung und Version 2.3.0
+
+Am 10. Oktober 2026 hat der Nutzer bestätigt, dass die Kontaktverwaltung nach
+der Worker-Port-Korrektur wieder funktioniert. Die bereits bestätigten
+Requester-Abstände und das Ausblenden des Gmail-Wurzelordners bleiben erhalten.
+Diese Rückmeldung bestätigt die gemeldete Kontaktregression; sie ersetzt
+keinen vollständigen Gerätetest aller Abläufe und keine abschließende
+Ursachenbestätigung für den zuvor gemeldeten GURU.
+
+Auf Nutzerwunsch wird der geprüfte Stand als Version 2.3.0 geführt. Programm,
+Build-/Paketversion, README und beide Guides erhalten dieselbe Versionsnummer.
+Der deutsche V13-Katalog bleibt kompatibel und unverändert. Die historischen
+Versionsangaben dieses Berichts bleiben zur Nachvollziehbarkeit erhalten.
+
+Version 2.3.0 wurde als Release und Debug vollständig neu gebaut: jeweils
+51 Compilation Units, keine Compiler-/Linkerwarnungen, korrektes Amiga-HUNK-
+Format und $VER: AmiMAIL 2.3.0 (10.10.2026). Die Laufzeit-Sperren sind im
+m68k-Debug-Programm weiterhin korrekt verlinkt. Beide Pakettests und die
+Prüfung des unveränderten V13-Katalogs bestanden. Bei den Guides wurden nur
+die vier Versionsangaben je Datei ersetzt; alle übrigen Bytes bleiben gleich.

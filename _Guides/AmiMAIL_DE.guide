@@ -1,8 +1,8 @@
 @DATABASE AmiMAIL_DE.guide
-@$VER: AmiMAIL_DE.guide 2.2.2 (10.10.2026)
+@$VER: AmiMAIL_DE.guide 2.3.0 (10.10.2026)
 
-@NODE MAIN "AmiMAIL 2.2.2 - Anleitung"
-AmiMAIL 2.2.2
+@NODE MAIN "AmiMAIL 2.3.0 - Anleitung"
+AmiMAIL 2.3.0
 Nativer IMAP/SMTP-Mailclient für AmigaOS 3.2+
 ReAction, IMAP, SMTP und AmiSSL
 
@@ -589,7 +589,7 @@ oder Zugangsdaten.
 @ENDNODE
 
 @NODE ABOUT "Über / Copyright"
-AmiMAIL 2.2.2 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
+AmiMAIL 2.3.0 - nativer allgemeiner IMAP/SMTP-Mailclient für AmigaOS 3.2+.
 
 © 2026 Andreas "Andiweli" Stürmer
 

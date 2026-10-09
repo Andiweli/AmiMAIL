@@ -1,5 +1,15 @@
 # Changelog
 
+## AmiMAIL 2.3.0 - 2026-10-10
+- Improve memory management, worker shutdown and multi-account stability.
+- Fix contact actions after testing Herald notifications.
+- Fix Yes/No confirmation requesters and preserve their spacing.
+- Hide non-selectable Gmail root folders while keeping their child folders.
+- Improve IMAP/SMTP parsing, TLS timeouts and HTTPS/OAuth error handling.
+- Make account and contact saves safer, with recovery after interrupted writes.
+- Restore attachment export folder persistence across restarts.
+- Fix release packaging and update documentation, licensing and both guides.
+
 ## AmiMAIL 2.2.2 - 2026-10-10
 - Restore padding and a font-sized blank row in Yes/No confirmation requesters.
 - Keep ReAction's own window sizing and the safe Yes/No/dismiss/error outcomes.
