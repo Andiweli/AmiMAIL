@@ -9,7 +9,7 @@ PYTHON ?= python3
 HOST_TEST_FLAGS ?= -std=c99 -O2 $(COMMON_WARN) -Werror
 LHA ?= lha
 RELEASE_ASSET := AmiMAIL-v$(VERSION).lha
-RELEASE_ICON := assets/Icons/AmiMail.info
+RELEASE_ICON := assets/Icons/AmiMAIL.info
 RELEASE_CATALOGS := _Catalogs
 RELEASE_README := $(wildcard README.md)
 SOURCE_ROOT := $(notdir $(CURDIR))
@@ -68,7 +68,15 @@ SOURCES := src/main.c src/app.c src/splash.c src/common.c src/fileio.c src/trans
            src/gui_window.c src/gui_icons.c src/gui_update.c src/iconified_data.c src/gui_state.c src/gui_notify.c src/gui_herald.c src/herald.c \
            src/gui_dialogs.c src/gui_requester_diag.c src/gui_contacts.c src/gui_compose.c src/gui_folders.c \
            src/gui_messages.c src/gui_preview.c src/gui_attachments.c src/gui_transfer.c src/charset.c src/i18n.c src/banner_data.c
-OBJECTS := $(SOURCES:src/%.c=build/%.o)
+BUILD_VARIANT ?= release
+NATIVE_BUILD_DIR := build/amiga/$(BUILD_VARIANT)
+NATIVE_BINARY := $(NATIVE_BUILD_DIR)/$(PROJECT)
+OBJECTS := $(SOURCES:src/%.c=$(NATIVE_BUILD_DIR)/%.o)
+ifeq ($(BUILD_VARIANT),debug)
+CFLAGS := $(AMIGA_CFLAGS) -O0 -g3
+else
+CFLAGS := $(AMIGA_CFLAGS) -Os -DNDEBUG
+endif
 
 HOST_SOURCES := src/common.c src/fileio.c src/transfer.c src/mailfile.c src/attachment_export.c src/buffer.c src/account.c src/periodic.c src/mail_notice.c src/codec.c src/crypto.c \
                 src/imap_parser.c src/mime.c src/mailto.c src/oauth.c src/tls.c src/smtp.c \
@@ -84,19 +92,23 @@ CATALOG_TOOL := tools/catalog_tool.py
 
 all: release
 
-release: CFLAGS := $(AMIGA_CFLAGS) -Os -DNDEBUG
-release: check-env catalogs bin/$(PROJECT)
+release: check-env catalogs native-build
 
-debug: CFLAGS := $(AMIGA_CFLAGS) -O0 -g3
-debug: clean catalogs bin/$(PROJECT)
+debug: check-env catalogs
+	$(MAKE) BUILD_VARIANT=debug native-build
 
-bin/$(PROJECT): $(OBJECTS) | bin
+.PHONY: native-build
+native-build: $(NATIVE_BINARY) | bin
+	cp $(NATIVE_BINARY) bin/$(PROJECT)
 
+$(NATIVE_BINARY): $(OBJECTS)
 	$(CC) $(AMIGA_LDFLAGS) -o $@ $(OBJECTS) $(AMIGA_LIBS)
 
-build/%.o: src/%.c | build
-
+$(NATIVE_BUILD_DIR)/%.o: src/%.c | $(NATIVE_BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(NATIVE_BUILD_DIR):
+	mkdir -p $@
 
 build bin:
 
@@ -184,72 +196,32 @@ check-env:
 
 	@test -d "$(AMISSL_OS3_LIB)" || { echo "FEHLT: AMISSL_OS3_LIB=$(AMISSL_OS3_LIB)"; exit 1; }
 
-dist: release
+# Both binary archive formats use exactly the same staged contents.
+.PHONY: release-stage
+release-stage: release
+	$(PYTHON) tools/release_stage.py --root . --destination dist/$(PROJECT)-$(VERSION)
 
-	rm -rf dist/$(PROJECT)-$(VERSION)
-
-	mkdir -p dist/$(PROJECT)-$(VERSION)/docs
-
-	cp bin/$(PROJECT) CHANGELOG.md LICENSE $(RELEASE_README) dist/$(PROJECT)-$(VERSION)/
-
-	cp $(RELEASE_ICON) dist/$(PROJECT)-$(VERSION)/$(PROJECT).info
-
-	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md \
-	   docs/FIX_2.1.0_HERALD.md docs/FIX_2.1.0_HERALD_SUBJECT_INTERVALS.md \
-	   docs/HERALD_CLIENT_LICENSE.txt dist/$(PROJECT)-$(VERSION)/docs/
-
-	cp -R config dist/$(PROJECT)-$(VERSION)/
-
-	mkdir -p dist/$(PROJECT)-$(VERSION)/Catalogs/deutsch
-
-	cp $(RELEASE_CATALOGS)/deutsch/AmiMAIL.catalog dist/$(PROJECT)-$(VERSION)/Catalogs/deutsch/
-
-	cp -R _Guides dist/$(PROJECT)-$(VERSION)/Guides
-
+dist: release-stage
 	cd dist && tar -czf $(PROJECT)-$(VERSION)-AmigaOS3.tar.gz $(PROJECT)-$(VERSION)
 
-release-lha: release
-
+release-lha: release-stage
 	@command -v $(LHA) >/dev/null || { echo "FEHLT: $(LHA) (fuer das GitHub-LHA)"; exit 1; }
-
-	rm -rf dist/$(PROJECT)-$(VERSION) dist/$(RELEASE_ASSET)
-
-	mkdir -p dist/$(PROJECT)-$(VERSION)/docs
-
-	cp bin/$(PROJECT) CHANGELOG.md LICENSE $(RELEASE_README) dist/$(PROJECT)-$(VERSION)/
-
-	cp $(RELEASE_ICON) dist/$(PROJECT)-$(VERSION)/$(PROJECT).info
-
-	cp docs/ARCHITECTURE.md docs/MAILTO.md docs/UPDATE.md docs/OAUTH_SETUP.md \
-	   docs/FIX_2.1.0_HERALD.md docs/FIX_2.1.0_HERALD_SUBJECT_INTERVALS.md \
-	   docs/HERALD_CLIENT_LICENSE.txt dist/$(PROJECT)-$(VERSION)/docs/
-
-	cp -R config dist/$(PROJECT)-$(VERSION)/
-
-	mkdir -p dist/$(PROJECT)-$(VERSION)/Catalogs/deutsch
-
-	cp $(RELEASE_CATALOGS)/deutsch/AmiMAIL.catalog dist/$(PROJECT)-$(VERSION)/Catalogs/deutsch/
-
-	cp -R _Guides dist/$(PROJECT)-$(VERSION)/Guides
-
+	rm -f dist/$(RELEASE_ASSET)
 	cd dist && $(LHA) a $(RELEASE_ASSET) $(PROJECT)-$(VERSION)
-
 	@echo "GitHub release asset: dist/$(RELEASE_ASSET)"
 
 source-dist:
-
-	mkdir -p dist
-
-	rm -f dist/$(PROJECT)-$(VERSION)-source.zip
-
-	cd .. && zip -qr "$(CURDIR)/dist/$(PROJECT)-$(VERSION)-source.zip" "$(SOURCE_ROOT)" \
-		-x '$(SOURCE_ROOT)/build/*' '$(SOURCE_ROOT)/bin/*' '$(SOURCE_ROOT)/dist/*' '*.bak'
+	$(PYTHON) tools/source_dist.py --root . --name "$(SOURCE_ROOT)" --output dist/$(PROJECT)-$(VERSION)-source.zip
 
 clean:
 
 	rm -rf build bin dist/$(PROJECT)-$(VERSION) dist/$(PROJECT)-$(VERSION)-AmigaOS3.tar.gz dist/$(RELEASE_ASSET) dist/$(PROJECT)-$(VERSION)-source.zip
 
+# Windows cross-compiler dependency files contain drive-letter paths. Never
+# parse these during an independent Linux/host test invocation.
+ifneq ($(filter all release debug native-build dist release-lha release-stage,$(or $(MAKECMDGOALS),all)),)
 -include $(OBJECTS:.o=.d)
+endif
 
 # File-backed MIME / selective export, including a full 20 MiB round trip.
 build/mailfile-tests: tests/test_mailfile.c $(HOST_SOURCES) $(HOST_HEADERS) | build
@@ -366,3 +338,22 @@ tls-deadline-test:
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_tls_deadlines.py
 
 review-test: tls-deadline-test
+
+.PHONY: storage-keypair-test packaging-test
+storage-keypair-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_storage_keypair.py
+
+review-test: storage-keypair-test
+
+# Requires a previously built native bin/AmiMAIL, unlike the host-only suite.
+packaging-test:
+	$(PYTHON) -m unittest discover -s tests -p test_packaging.py
+
+.PHONY: https-oauth-test static-analysis
+https-oauth-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_https_oauth.py
+
+review-test: https-oauth-test
+
+static-analysis:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tools/static_analysis.py

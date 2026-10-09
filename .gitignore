@@ -1,7 +1,8 @@
 /build/
-/bin/AmiMail
-/dist/*.zip
-/dist/*.tar.gz
-/dist/AmiMail-*/
+/bin/
+/dist/
 include/oauth_client_config.local.h
 *.bak
+
+__pycache__/
+*.pyc

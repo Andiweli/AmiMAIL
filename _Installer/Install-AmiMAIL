@@ -56,22 +56,25 @@
 (complete 15)
 
 ; ----------------------------------------------------------------------
-; Icon selection
-; 0 = AmiMAIL by Mason
-; 1 = AmiMAIL Classic
+; Use the shipped icon. Older hand-assembled packages with both named
+; variants retain their icon chooser.
 ; ----------------------------------------------------------------------
-
-(set #icon
-    (askchoice
-        (prompt "Select Icon to install.")
-        (help
-            "Select which Workbench icon should be installed for AmiMAIL."
+(set #icon-source "Setup/AmiMAIL.info")
+(if (and (exists "Setup/AmiMAIL_Mason.info")
+         (exists "Setup/AmiMAIL_Classic.info"))
+    (
+        (set #icon
+            (askchoice
+                (prompt "Select Icon to install.")
+                (help "Select the Workbench icon to install.")
+                (choices "AmiMAIL by Mason" "AmiMAIL Classic")
+                (default 0)
+            )
         )
-        (choices
-            "AmiMAIL by Mason"
-            "AmiMAIL Classic"
+        (if (= #icon 0)
+            (set #icon-source "Setup/AmiMAIL_Mason.info")
+            (set #icon-source "Setup/AmiMAIL_Classic.info")
         )
-        (default 0)
     )
 )
 
@@ -136,17 +139,8 @@
     (abort "Required file Setup/AmiMAIL was not found.")
 )
 
-(if (= #icon 0)
-    (
-        (if (= (exists "Setup/AmiMAIL_Mason.info") 0)
-            (abort "Required file Setup/AmiMAIL_Mason.info was not found.")
-        )
-    )
-    (
-        (if (= (exists "Setup/AmiMAIL_Classic.info") 0)
-            (abort "Required file Setup/AmiMAIL_Classic.info was not found.")
-        )
-    )
+(if (= (exists #icon-source) 0)
+    (abort (cat "Required Workbench icon was not found: " #icon-source))
 )
 
 (if (= (exists "Setup/Locale/Catalogs/AmiMAIL.cd") 0)
@@ -190,25 +184,76 @@
     (optional "force")
 )
 
-(if (= #icon 0)
+(copyfiles
+    (prompt "Installing AmiMAIL Workbench icon...")
+    (help @copyfiles-help)
+    (source #icon-source)
+    (dest #destination)
+    (newname "AmiMAIL.info")
+    (optional "force")
+)
+
+(if (exists "Setup/LICENSE")
+    (copyfiles
+        (prompt "Installing LICENSE...") (help @copyfiles-help)
+        (source "Setup/LICENSE") (dest #destination) (optional "force")
+    )
+)
+
+(if (exists "Setup/README.md")
+    (copyfiles
+        (prompt "Installing README.md...") (help @copyfiles-help)
+        (source "Setup/README.md") (dest #destination) (optional "force")
+    )
+)
+
+(if (exists "Setup/CHANGELOG.md")
+    (copyfiles
+        (prompt "Installing CHANGELOG.md...") (help @copyfiles-help)
+        (source "Setup/CHANGELOG.md") (dest #destination) (optional "force")
+    )
+)
+
+; Include the program's documentation and default configuration when supplied.
+; Legacy packages without these drawers remain installable.
+(if (= (exists "Setup/docs") 2)
     (
+        (if (<> (exists (tackon #destination "docs")) 2)
+            (makedir (tackon #destination "docs")
+                (prompt "Creating docs drawer...") (help @makedir-help))
+        )
         (copyfiles
-            (prompt "Installing AmiMAIL by Mason icon...")
-            (help @copyfiles-help)
-            (source "Setup/AmiMAIL_Mason.info")
-            (dest #destination)
-            (newname "AmiMAIL.info")
-            (optional "force")
+            (prompt "Installing docs...") (help @copyfiles-help)
+            (source "Setup/docs") (dest (tackon #destination "docs"))
+            (all) (optional "force")
         )
     )
+)
+
+(if (= (exists "Setup/config") 2)
     (
+        (if (<> (exists (tackon #destination "config")) 2)
+            (makedir (tackon #destination "config")
+                (prompt "Creating config drawer...") (help @makedir-help))
+        )
         (copyfiles
-            (prompt "Installing AmiMAIL Classic icon...")
-            (help @copyfiles-help)
-            (source "Setup/AmiMAIL_Classic.info")
-            (dest #destination)
-            (newname "AmiMAIL.info")
-            (optional "force")
+            (prompt "Installing config...") (help @copyfiles-help)
+            (source "Setup/config") (dest (tackon #destination "config"))
+            (all) (optional "force")
+        )
+    )
+)
+
+(if (= (exists "Setup/Guides") 2)
+    (
+        (if (<> (exists (tackon #destination "Guides")) 2)
+            (makedir (tackon #destination "Guides")
+                (prompt "Creating Guides drawer...") (help @makedir-help))
+        )
+        (copyfiles
+            (prompt "Installing Guides...") (help @copyfiles-help)
+            (source "Setup/Guides") (dest (tackon #destination "Guides"))
+            (all) (optional "force")
         )
     )
 )
