@@ -664,57 +664,136 @@ static int smtp_recipient(AmgTlsConnection *connection, const char *start,
                           size_t length, AmgError *error)
 {
     char address[512], command[640];
-    const char *left, *right;
-    int count;
+    size_t i, used = 0U, left = SIZE_MAX, right = SIZE_MAX, at = SIZE_MAX;
+    unsigned comments = 0U;
+    int count, quoted = 0, escaped = 0, quoted_end = 0;
     while (length && isspace((unsigned char)*start)) {
         ++start;
         --length;
     }
     while (length && isspace((unsigned char)start[length - 1U])) --length;
     if (!length) return 0;
-    left = memchr(start, '<', length);
-    right = left ? memchr(left + 1, '>', length - (size_t)(left + 1 - start))
-                 : NULL;
-    if (left && right) {
-        start = left + 1;
-        length = (size_t)(right - start);
+    /* Angle brackets in quoted names/local parts and nested comments are
+     * text, not the envelope boundary. Reject malformed/duplicate brackets. */
+    for (i = 0U; i < length; ++i) {
+        unsigned char c = (unsigned char)start[i];
+        if ((c < 32U && c != '\t') || c == 127U) goto invalid;
+        if (escaped) { escaped = 0; continue; }
+        if ((quoted || comments) && c == '\\') { escaped = 1; continue; }
+        if (!comments && c == '"') { quoted = !quoted; continue; }
+        if (quoted) continue;
+        if (c == '(') { ++comments; continue; }
+        if (comments) { if (c == ')') --comments; continue; }
+        if (c == ')') goto invalid;
+        if (c == '<') {
+            if (left != SIZE_MAX || right != SIZE_MAX) goto invalid;
+            left = i;
+        } else if (c == '>') {
+            if (left == SIZE_MAX || right != SIZE_MAX) goto invalid;
+            right = i;
+        } else if (right != SIZE_MAX && !isspace(c)) goto invalid;
     }
+    if (quoted || escaped || comments ||
+        (left != SIZE_MAX && right == SIZE_MAX)) goto invalid;
+    if (left != SIZE_MAX) { start += left + 1U; length = right - left - 1U; }
     while (length && isspace((unsigned char)*start)) {
         ++start;
         --length;
     }
     while (length && isspace((unsigned char)start[length - 1U])) --length;
-    if (!length || length >= sizeof(address)) return AMG_ERR_ARGUMENT;
-    memcpy(address, start, length);
-    address[length] = 0;
-    if (!header_safe(address) || !strchr(address, '@') || strchr(address, ' '))
-        return AMG_ERR_ARGUMENT;
+    /* Remove RFC comments without losing a quoted local part or escapes.
+     * Whitespace is legal inside a quoted local part, never in a bare atom. */
+    quoted = escaped = 0; comments = 0U;
+    for (i = 0U; i < length; ++i) {
+        unsigned char c = (unsigned char)start[i];
+        if (!escaped && !quoted && c == '(') { ++comments; continue; }
+        if (comments) {
+            if (escaped) escaped = 0;
+            else if (c == '\\') escaped = 1;
+            else if (c == ')') --comments;
+            continue;
+        }
+        if (escaped) escaped = 0;
+        else if (quoted && c == '\\') escaped = 1;
+        else if (c == '"') {
+            if ((!quoted && used != 0U) || at != SIZE_MAX) goto invalid;
+            quoted = !quoted;
+            if (!quoted) quoted_end = 1;
+        } else if (!quoted) {
+            if (c == '@') { if (at != SIZE_MAX) goto invalid; at = used; }
+            else if (isspace(c)) {
+                /* Comments may be separated from a bare mailbox by spaces. */
+                size_t next = i;
+                while (next < length && isspace((unsigned char)start[next])) ++next;
+                if (!used || next == length || start[next] == '(') continue;
+                goto invalid;
+            } else if (c == '<' || c == '>' || c == ')' || c == ',' ||
+                       c == ';' || c == '\\' || c < 32U || c == 127U)
+                goto invalid;
+            else if (quoted_end && at == SIZE_MAX) goto invalid;
+        }
+        if (used + 1U >= sizeof(address)) goto invalid;
+        address[used++] = (char)c;
+    }
+    address[used] = 0;
+    if (quoted || escaped || comments || at == SIZE_MAX || !at ||
+        at + 1U == used || !header_safe(address)) goto invalid;
     count = snprintf(command, sizeof(command), "RCPT TO:<%s>\r\n", address);
     if (count < 0 || (size_t)count >= sizeof(command)) return AMG_ERR_LIMIT;
     if (smtp_command(connection, command, 2, error) != AMG_OK)
         return error ? error->code : AMG_ERR_PROTOCOL;
     return 1;
+invalid:
+    amg_error_set(error, AMG_ERR_ARGUMENT,
+                  T(MSG_INVALID_MAIL_ADDRESS_OR_HEADER_LINE, "Invalid mail address or header line."));
+    return AMG_ERR_ARGUMENT;
 }
 
 static int smtp_recipient_list(AmgTlsConnection *connection, const char *list,
                                unsigned *recipient_count, AmgError *error)
 {
     const char *p, *start;
+    unsigned comments = 0U;
+    int quoted = 0, escaped = 0, angle = 0, group = 0, saw_at = 0;
     if (!list || !*list) return AMG_OK;
-    if (!header_safe(list)) return AMG_ERR_ARGUMENT;
+    if (!recipient_count || !header_safe(list)) goto invalid;
     p = start = list;
     for (;;) {
-        if (*p == ',' || *p == ';' || *p == 0) {
+        unsigned char c = (unsigned char)*p;
+        if (!c && (quoted || escaped || comments || angle || group)) goto invalid;
+        if (escaped) escaped = 0;
+        else if ((quoted || comments) && c == '\\') escaped = 1;
+        else if (!comments && c == '"') quoted = !quoted;
+        else if (!quoted && c == '(') ++comments;
+        else if (!quoted && comments) { if (c == ')') --comments; }
+        else if (!quoted) {
+            if (c == ')') goto invalid;
+            if (c == '<') { if (angle) goto invalid; angle = 1; }
+            else if (c == '>') { if (!angle) goto invalid; angle = 0; }
+            else if (c == '@') saw_at = 1;
+            else if (c == ':' && !angle && !saw_at) {
+                if (group) goto invalid;
+                group = 1; start = p + 1;
+            }
+        }
+        if (!quoted && !comments && !angle &&
+            (c == ',' || c == ';' || !c)) {
             int result = smtp_recipient(connection, start,
                                         (size_t)(p - start), error);
             if (result < 0) return result;
             if (result > 0) ++*recipient_count;
             if (!*p) break;
             start = p + 1;
+            saw_at = 0;
+            if (c == ';') group = 0;
         }
         ++p;
     }
     return AMG_OK;
+invalid:
+    amg_error_set(error, AMG_ERR_ARGUMENT,
+                  T(MSG_INVALID_MAIL_ADDRESS_OR_HEADER_LINE, "Invalid mail address or header line."));
+    return AMG_ERR_ARGUMENT;
 }
 
 static int smtp_begin_data(AmgTlsConnection *connection, const char *from,

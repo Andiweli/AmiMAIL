@@ -22,17 +22,6 @@ static const char imap_message_list_fetch_items[] =
     "BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE MESSAGE-ID REFERENCES "
     "IN-REPLY-TO CONTENT-TYPE)])";
 
-static int ascii_ci_contains(const char *text, const char *needle)
-{
-    size_t length = strlen(needle);
-    for (; *text; ++text) {
-        size_t i;
-        for (i = 0; i < length && text[i] && tolower((unsigned char)text[i]) == tolower((unsigned char)needle[i]); ++i) {}
-        if (i == length) return 1;
-    }
-    return 0;
-}
-
 static int ascii_ci_equal(const char *left, const char *right)
 {
     while (*left && *right) {
@@ -43,6 +32,35 @@ static int ascii_ci_equal(const char *left, const char *right)
         ++right;
     }
     return !*left && !*right;
+}
+
+static int ascii_ci_prefix(const char *text, const char *prefix)
+{
+    while (*prefix) {
+        if (!*text || tolower((unsigned char)*text++) !=
+                      tolower((unsigned char)*prefix++)) return 0;
+    }
+    return 1;
+}
+
+static int imap_has_flag(const char *flags, const char *flag)
+{
+    size_t wanted = strlen(flag);
+    while (*flags) {
+        const char *end;
+        size_t i;
+        while (*flags && isspace((unsigned char)*flags)) ++flags;
+        end = flags;
+        while (*end && !isspace((unsigned char)*end)) ++end;
+        if ((size_t)(end - flags) == wanted) {
+            for (i = 0U; i < wanted; ++i)
+                if (tolower((unsigned char)flags[i]) !=
+                    tolower((unsigned char)flag[i])) break;
+            if (i == wanted) return 1;
+        }
+        flags = end;
+    }
+    return 0;
 }
 
 static int mailbox_equal(const char *left, const char *right)
@@ -844,16 +862,16 @@ fail:
 static unsigned long special_flag(const char *flags)
 {
     unsigned long result = 0;
-    if (ascii_ci_contains(flags,"\\Inbox")) result|=AMG_LABEL_INBOX;
-    if (ascii_ci_contains(flags,"\\Sent")) result|=AMG_LABEL_SENT;
-    if (ascii_ci_contains(flags,"\\Drafts")) result|=AMG_LABEL_DRAFTS;
-    if (ascii_ci_contains(flags,"\\Trash")) result|=AMG_LABEL_TRASH;
-    if (ascii_ci_contains(flags,"\\Junk") ||
-        ascii_ci_contains(flags,"\\Spam")) result|=AMG_LABEL_SPAM;
-    if (ascii_ci_contains(flags,"\\All") ||
-        ascii_ci_contains(flags,"\\AllMail")) result|=AMG_LABEL_ALL;
-    if (ascii_ci_contains(flags,"\\Flagged") ||
-        ascii_ci_contains(flags,"\\Starred")) result|=AMG_LABEL_FLAGGED;
+    if (imap_has_flag(flags,"\\Inbox")) result|=AMG_LABEL_INBOX;
+    if (imap_has_flag(flags,"\\Sent")) result|=AMG_LABEL_SENT;
+    if (imap_has_flag(flags,"\\Drafts")) result|=AMG_LABEL_DRAFTS;
+    if (imap_has_flag(flags,"\\Trash")) result|=AMG_LABEL_TRASH;
+    if (imap_has_flag(flags,"\\Junk") ||
+        imap_has_flag(flags,"\\Spam")) result|=AMG_LABEL_SPAM;
+    if (imap_has_flag(flags,"\\All") ||
+        imap_has_flag(flags,"\\AllMail")) result|=AMG_LABEL_ALL;
+    if (imap_has_flag(flags,"\\Flagged") ||
+        imap_has_flag(flags,"\\Starred")) result|=AMG_LABEL_FLAGGED;
     return result;
 }
 
@@ -945,35 +963,80 @@ static const char *resolve_special_mailbox(const AmgImapSession *session,
     return mailbox_utf8;
 }
 
-static const char *parse_quoted(const char *p, AmgBuffer *value)
+static int parse_quoted(const char *p, AmgBuffer *value)
 {
-    if (*p != '"') return NULL;
+    if (*p != '"') return AMG_ERR_PARSE;
     ++p;
     while (*p && *p != '"') {
+        int result;
         if (*p == '\\' && p[1]) ++p;
-        if (amg_buffer_append_char(value,(unsigned char)*p++)!=AMG_OK) return NULL;
+        result = amg_buffer_append_char(value, (unsigned char)*p++);
+        if (result != AMG_OK) return result;
     }
-    return *p == '"' ? p + 1 : NULL;
+    return *p == '"' ? AMG_OK : AMG_ERR_PARSE;
 }
 
 static int parse_list_line(const char *line, const AmgImapSession *session,
-                           AmgImapLabel *label)
+                           AmgImapLabel *label,
+                           const unsigned char *literal, size_t literal_length)
 {
-    const char *p, *end; AmgBuffer wire, decoded;
-    if (strncmp(line,"* LIST ",7U) && strncmp(line,"* XLIST ",8U)) return 0;
-    p = strchr(line,'('); if(!p) return 0; end=strchr(p,')'); if(!end)return 0;
-    { char flags[256]; size_t n=(size_t)(end-p-1);if(n>=sizeof(flags))n=sizeof(flags)-1U;memcpy(flags,p+1,n);flags[n]=0;label->special_use=special_flag(flags);label->selectable=!ascii_ci_contains(flags,"\\Noselect"); }
+    const char *p, *end;
+    AmgBuffer wire, decoded;
+    char flags[256];
+    size_t n;
+    int result;
+    if (!ascii_ci_prefix(line, "* LIST ") &&
+        !ascii_ci_prefix(line, "* XLIST ")) return 0;
+    memset(label, 0, sizeof(*label));
+    p = strchr(line,'('); if(!p) return AMG_ERR_PARSE;
+    end=strchr(p,')'); if(!end)return AMG_ERR_PARSE;
+    n = (size_t)(end - p - 1);
+    if (n >= sizeof(flags)) return AMG_ERR_LIMIT;
+    memcpy(flags, p + 1, n); flags[n] = 0;
+    label->special_use = special_flag(flags);
+    label->selectable = !imap_has_flag(flags, "\\Noselect");
     p=end+1;while(*p==' ')++p;
-    if(*p=='"'){ if(!p[1]||p[2]!='"')return 0;label->delimiter=p[1];p+=3; } else if(!strncmp(p,"NIL",3U)){label->delimiter=0;p+=3;} else return 0;
+    if (*p == '"') {
+        ++p;
+        if (*p == '\\') ++p;
+        if (!*p || p[1] != '"') return AMG_ERR_PARSE;
+        label->delimiter = *p; p += 2;
+    } else if (ascii_ci_prefix(p, "NIL") && p[3] == ' ') {
+        label->delimiter = 0; p += 3;
+    } else return AMG_ERR_PARSE;
     while (*p == ' ') ++p;
     amg_buffer_init(&wire);
     amg_buffer_init(&decoded);
-    if(*p=='"'){if(!parse_quoted(p,&wire)){amg_buffer_free(&wire);amg_buffer_free(&decoded);return 0;}}
-    else {const char *q=p;while(*q&&*q!='\r'&&*q!='\n'&&!isspace((unsigned char)*q))++q;amg_buffer_append(&wire,p,(size_t)(q-p));}
-    amg_buffer_terminate(&wire);if(amg_modified_utf7_decode((const char*)wire.data,&decoded)!=AMG_OK){amg_buffer_free(&wire);amg_buffer_free(&decoded);return 0;}
-    amg_buffer_terminate(&decoded);snprintf(label->wire_name,sizeof(label->wire_name),"%s",(const char*)wire.data);
+    (void)amg_buffer_set_limit(&wire, sizeof(label->wire_name) - 1U);
+    (void)amg_buffer_set_limit(&decoded, sizeof(label->name_utf8) - 1U);
+    if (*p == '"') result = parse_quoted(p, &wire);
+    else if (*p == '{') {
+        size_t declared = 0U;
+        result = literal && amg_imap_parse_literal_length(
+            (const unsigned char *)p, strlen(p), &declared) == 1 &&
+            declared == literal_length && !memchr(literal, 0, literal_length)
+                ? amg_buffer_append(&wire, literal, literal_length)
+                : AMG_ERR_PARSE;
+    } else {
+        const char *q = p;
+        while (*q && !isspace((unsigned char)*q)) ++q;
+        result = q != p ? amg_buffer_append(&wire, p, (size_t)(q - p))
+                        : AMG_ERR_PARSE;
+    }
+    if (result == AMG_OK && wire.length >= sizeof(label->wire_name))
+        result = AMG_ERR_LIMIT;
+    if (result == AMG_OK) result = amg_buffer_terminate(&wire);
+    if (result == AMG_OK)
+        result = amg_modified_utf7_decode((const char *)wire.data, &decoded);
+    if (result == AMG_OK && decoded.length >= sizeof(label->name_utf8))
+        result = AMG_ERR_LIMIT;
+    if (result == AMG_OK) result = amg_buffer_terminate(&decoded);
+    if (result != AMG_OK) {
+        amg_buffer_free(&wire); amg_buffer_free(&decoded); return result;
+    }
+    snprintf(label->wire_name,sizeof(label->wire_name),"%s",(const char*)wire.data);
     snprintf(label->name_utf8,sizeof(label->name_utf8),"%s",(const char*)decoded.data);
-    if (!strcmp(label->wire_name,"INBOX")) label->special_use|=AMG_LABEL_INBOX;
+    if (ascii_ci_equal(label->wire_name,"INBOX")) label->special_use|=AMG_LABEL_INBOX;
     label->special_use |= special_flag_from_name(label->name_utf8,
                                                  label->delimiter);
     label->special_use = apply_configured_special_use(
@@ -984,7 +1047,7 @@ static int parse_list_line(const char *line, const AmgImapSession *session,
 int amg_imap_list_labels(AmgImapSession *session, AmgImapLabel *labels,
                          size_t capacity, size_t *count, AmgError *error)
 {
-    AmgBuffer response; char *cursor; size_t found=0; int result;
+    AmgBuffer response; size_t position=0U, found=0U; int result;
     if (!session || !labels || !count) return AMG_ERR_ARGUMENT;
     amg_buffer_init(&response);
     /* Standardserver zuerst nach RFC-6154-Sonderordnern fragen, wenn die
@@ -997,17 +1060,50 @@ int amg_imap_list_labels(AmgImapSession *session, AmgImapLabel *labels,
         result=imap_command(session,"LIST \"\" \"*\"",&response,error);
     if(result!=AMG_OK && session->capability_special_use){response.length=0;result=imap_command(session,"LIST \"\" \"*\"",&response,error);}
     if(result!=AMG_OK){response.length=0;result=imap_command(session,"XLIST \"\" \"*\"",&response,error);}
-    if(result==AMG_OK){amg_buffer_terminate(&response);cursor=(char*)response.data;
-        while(*cursor&&found<capacity){char *next=strstr(cursor,"\r\n");if(!next)break;*next=0;if(parse_list_line(cursor,session,&labels[found])){remember_special_mailboxes(session,&labels[found]);++found;}cursor=next+2;}}
+    if (result == AMG_OK) result = amg_buffer_terminate(&response);
+    while (result == AMG_OK && position < response.length && found < capacity) {
+        size_t start = position, end, next, literal_length = 0U;
+        const unsigned char *literal = NULL;
+        int has_literal, parsed;
+        unsigned char saved;
+        while (position < response.length && response.data[position] != '\n') ++position;
+        if (position == response.length) { result = AMG_ERR_PARSE; break; }
+        next = position + 1U; end = position;
+        if (end > start && response.data[end - 1U] == '\r') --end;
+        has_literal = amg_imap_parse_literal_length(response.data + start,
+                                                   next - start, &literal_length);
+        if (has_literal < 0 || literal_length > response.length - next) {
+            result = AMG_ERR_PARSE; break;
+        }
+        if (has_literal) literal = response.data + next;
+        position = next + literal_length;
+        saved = response.data[end]; response.data[end] = 0;
+        parsed = parse_list_line((const char *)response.data + start, session,
+                                 &labels[found], literal, literal_length);
+        response.data[end] = saved;
+        if (parsed < 0) result = parsed;
+        else if (parsed) { remember_special_mailboxes(session, &labels[found]); ++found; }
+    }
+    if (result != AMG_OK && (!error || error->code == AMG_OK))
+        set_parser_error(error, result, NULL);
     amg_buffer_free(&response);*count=found;return result;
 }
 
 static int quote_mailbox(const char *utf8, AmgBuffer *output)
 {
     AmgBuffer wire; size_t i; int result;
-    amg_buffer_init(&wire);result=amg_modified_utf7_encode(utf8,&wire);if(result!=AMG_OK){amg_buffer_free(&wire);return result;}
-    amg_buffer_append_char(output,'"');for(i=0;i<wire.length;++i){if(wire.data[i]=='"'||wire.data[i]=='\\')amg_buffer_append_char(output,'\\');amg_buffer_append_char(output,wire.data[i]);}
-    result=amg_buffer_append_char(output,'"');amg_buffer_free(&wire);return result;
+    if (!utf8 || !output || strchr(utf8, '\r') || strchr(utf8, '\n'))
+        return AMG_ERR_ARGUMENT;
+    amg_buffer_init(&wire);
+    result = amg_modified_utf7_encode(utf8, &wire);
+    if (result == AMG_OK) result = amg_buffer_append_char(output, '"');
+    for (i = 0U; result == AMG_OK && i < wire.length; ++i) {
+        if (wire.data[i] == '"' || wire.data[i] == '\\')
+            result = amg_buffer_append_char(output, '\\');
+        if (result == AMG_OK) result = amg_buffer_append_char(output, wire.data[i]);
+    }
+    if (result == AMG_OK) result = amg_buffer_append_char(output, '"');
+    amg_buffer_free(&wire); return result;
 }
 
 int amg_imap_select(AmgImapSession *session, const char *mailbox_utf8, AmgError *error)

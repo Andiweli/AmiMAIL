@@ -311,14 +311,23 @@ static int line_find_number(const unsigned char *line, size_t length,
                             const char *token, unsigned long *number)
 {
     size_t position, token_length = strlen(token);
+    int quoted = 0, escaped = 0, bracket = 0;
     for (position = 0; position < length; ++position) {
         size_t cursor;
+        unsigned char c = line[position];
+        if (escaped) { escaped = 0; continue; }
+        if (quoted && c == '\\') { escaped = 1; continue; }
+        if (c == '"') { quoted = !quoted; continue; }
+        if (quoted) continue;
+        if (c == '[') { ++bracket; continue; }
+        if (c == ']') { if (bracket) --bracket; continue; }
+        if (bracket || (position && line[position - 1U] == '\\')) continue;
         if (!line_token_at(line, length, position, token)) continue;
         cursor = position + token_length;
         while (cursor < length &&
                (line[cursor] == ' ' || line[cursor] == '\t'))
             ++cursor;
-        return parse_ulong_token(line, length, &cursor, number);
+        if (parse_ulong_token(line, length, &cursor, number)) return 1;
     }
     return 0;
 }
@@ -329,6 +338,13 @@ static int line_contains_text(const unsigned char *line, size_t length,
     size_t position, i, text_length = strlen(text);
     if (text_length > length) return 0;
     for (position = 0; position + text_length <= length; ++position) {
+        size_t end = position + text_length;
+        if (position && line[position - 1U] != ' ' &&
+            line[position - 1U] != '\t' && line[position - 1U] != '(')
+            continue;
+        if (end < length && line[end] != ' ' && line[end] != '\t' &&
+            line[end] != ')' && line[end] != '\r' && line[end] != '\n')
+            continue;
         for (i = 0; i < text_length; ++i) {
             if (tolower((unsigned char)line[position + i]) !=
                 tolower((unsigned char)text[i]))
@@ -349,6 +365,7 @@ int amg_imap_fetch_record_next(const unsigned char *data, size_t length,
     cursor = *position;
     while (cursor < length) {
         size_t line_start = cursor, line_end, next_line, prefix_position;
+        size_t trailer_start, trailer_end;
         size_t literal_length = 0;
         unsigned long sequence = 0, uid = 0, size = 0;
         int literal_status;
@@ -368,16 +385,30 @@ int amg_imap_fetch_record_next(const unsigned char *data, size_t length,
 
         literal_status = amg_imap_parse_literal_length(
             data + line_start, next_line - line_start, &literal_length);
-        if (literal_status <= 0 ||
-            !line_find_number(data + line_start, line_end - line_start,
-                              "UID", &uid))
-            continue;
+        if (literal_status < 0) return AMG_ERR_PARSE;
+        if (literal_status == 0) continue;
         if (literal_length > length - cursor) {
             *position = length;
             return AMG_ERR_PARSE;
         }
+        trailer_start = cursor + literal_length;
+        trailer_end = trailer_start;
+        while (trailer_end < length && data[trailer_end] != '\n') ++trailer_end;
+        if (!line_find_number(data + line_start, line_end - line_start,
+                              "UID", &uid))
+            (void)line_find_number(data + trailer_start,
+                                   trailer_end - trailer_start, "UID", &uid);
+        if (!uid) {
+            /* Even an unsolicited/invalid record owns its literal. Never
+             * scan message text as though it were another FETCH envelope. */
+            cursor = trailer_end < length ? trailer_end + 1U : trailer_end;
+            continue;
+        }
         (void)line_find_number(data + line_start, line_end - line_start,
                                "RFC822.SIZE", &size);
+        if (!size)
+            (void)line_find_number(data + trailer_start,
+                trailer_end - trailer_start, "RFC822.SIZE", &size);
         memset(record, 0, sizeof(*record));
         record->uid = uid;
         record->rfc822_size = size;
@@ -397,9 +428,6 @@ int amg_imap_fetch_record_next(const unsigned char *data, size_t length,
          * between the literal and the terminating CRLF. Merge flags from that
          * trailer as well instead of assuming FLAGS always precedes BODY[]. */
         if (cursor < length) {
-            size_t trailer_end = cursor;
-            while (trailer_end < length && data[trailer_end] != '\n')
-                ++trailer_end;
             if (!record->seen)
                 record->seen = line_contains_text(
                     data + cursor, trailer_end - cursor, "\\Seen");

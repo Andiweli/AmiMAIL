@@ -156,6 +156,24 @@ contacts-recovery-test: build/contacts-recovery-tests
 
 review-test: contacts-recovery-test
 
+.PHONY: smtp-recipients-test
+build/smtp-recipient-tests: tests/test_smtp_recipients.c tests/transfer_tls_double.h src/smtp.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_smtp_recipients.c $(filter-out src/smtp.c,$(HOST_SOURCES)) -o $@
+
+smtp-recipients-test: build/smtp-recipient-tests
+	./build/smtp-recipient-tests
+
+review-test: smtp-recipients-test
+
+.PHONY: imap-compat-test
+build/imap-compat-tests: tests/test_imap_compat.c tests/transfer_tls_double.h src/imap.c $(HOST_SOURCES) $(HOST_HEADERS) | build
+	$(HOST_CC) $(HOST_TEST_FLAGS) -Iinclude tests/test_imap_compat.c $(HOST_SOURCES) -o $@
+
+imap-compat-test: build/imap-compat-tests
+	./build/imap-compat-tests
+
+review-test: imap-compat-test
+
 check-env:
 
 	@command -v $(CC) >/dev/null || { echo "FEHLT: $(CC)"; exit 1; }
