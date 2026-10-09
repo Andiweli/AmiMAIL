@@ -351,3 +351,12 @@ compose-close-test:
 	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_compose_close.py
 
 review-test: compose-close-test
+
+.PHONY: contact-sort-test contacts-native-syntax-test
+contact-sort-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/test_contact_sort_icons.py
+
+contacts-native-syntax-test:
+	HOST_CC="$(HOST_CC)" $(PYTHON) tests/check_contacts_native_syntax.py
+
+review-test: contact-sort-test contacts-native-syntax-test

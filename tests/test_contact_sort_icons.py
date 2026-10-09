@@ -417,7 +417,8 @@ static void paint_and_check(ContactListView *v)
     struct Gadget *g=v->gadget;struct RastPort *rp=v->window->RPort;
     unsigned x,y,count=0;
     LONG left=g->right[v->sort_column]-8L;
-    LONG top=g->TopEdge+1L+((LONG)draw_font_height-4L)/2L;
+    /* Native heading inset: one border pixel and one padding pixel. */
+    LONG top=g->TopEdge+2L+((LONG)draw_font_height-4L)/2L;
     const UBYTE *mask=v->sort_direction==LBMSORT_FORWARD?sort_down_rows:sort_up_rows;
     RefreshGList(g,v->window,NULL,1);
     for(y=(unsigned)g->TopEdge;y<(unsigned)g->TopEdge+draw_font_height+4U;++y){
