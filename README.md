@@ -11,7 +11,7 @@
 [![Support via PayPal](https://img.shields.io/badge/Support%20via-PayPal-0070BA?logo=paypal&logoColor=white)](https://paypal.me/andiweli)
 
 > [!IMPORTANT]
-> Starting with version 3.0, AmiMAIL will be available [exclusively on itch.io](https://andiweli.itch.io/amimail) as a paid product.  
+> Starting with version 3.0, AmiMAIL will be available [exclusively on itch.io](https://andiweli.itch.io/amimail) as a paid product. You can already pre-order it for a discounted price!  
 > A great deal of time and effort has gone into this project, and in return, you get a product that has become highly refined. The program will continue to be free available on Aminet and GitHub, but in the existing version 2.3.0 without any further updates, which is more than sufficient for basic needs. However, if you would like to support my work and future development, you can purchase this paid version on [itch.io](https://andiweli.itch.io/amimail) where you will receive future updates.
 
 Thank you so much for your support!
