@@ -156,8 +156,8 @@ Thank you for your support!
 
 ## 📧 Legal
 
-AmiMAIL is licensed under the **AmiMAIL/AmiGmail Non-Commercial Source License 1.0**. Free use, modification and non-commercial redistribution are permitted. Commercial distribution requires prior written permission from the copyright holder. See `LICENSE` for the complete terms.
+Copyright © 2026 Andreas 'Andiweli' Stürmer. All rights reserved.
 
-AmiMAIL is an independent, non-commercial hobby project. **Amiga** and **AmigaOS** are trademarks of their respective owners. AmiSSL and other third-party components remain subject to their respective licenses.
+The source code of AmiMAIL is not published. The program may only be used and redistributed as permitted by the license that comes with it. Earlier releases remain subject to the license they were originally distributed with.
 
-Copyright © Andreas 'Andiweli' Stürmer.
+**Amiga** and **AmigaOS** are trademarks of their respective owners. AmiSSL and other third-party components remain subject to their own licenses.
