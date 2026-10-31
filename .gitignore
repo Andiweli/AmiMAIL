@@ -1,0 +1,8 @@
+/build/
+/bin/
+/dist/
+include/oauth_client_config.local.h
+*.bak
+
+__pycache__/
+*.pyc
